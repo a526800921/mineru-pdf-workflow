@@ -1,6 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- JSON mode infrastructure ---
+json_mode="${PDF_AUTO_JSON:-0}"
+
+# Temp file for rerun segment name tracking (cleanup added to existing traps in Task 2)
+_rerun_names_file="$(mktemp)"
+
+# Human-readable log: stderr in JSON mode, stdout otherwise
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
+# Emit final JSON to stdout
+emit_json() {
+  local status="$1"
+  local exit_code="$2"
+  local merged_path="${3:-}"
+  local review_path="${4:-}"
+  local validate_tmp="${5:-}"
+
+  python3 - "$status" "$exit_code" "$merged_path" "$review_path" "$validate_tmp" "$_rerun_names_file" <<'PY'
+import json, sys
+
+status = sys.argv[1]
+exit_code = int(sys.argv[2])
+merged = sys.argv[3] if sys.argv[3] else None
+review = sys.argv[4] if sys.argv[4] else None
+
+# Read rerun names
+rerun_names = set()
+rerun_names_file = sys.argv[6]
+if rerun_names_file:
+    try:
+        with open(rerun_names_file) as f:
+            rerun_names = {line.strip() for line in f if line.strip()}
+    except Exception:
+        pass
+
+# Read validation JSON to get rerun segment statuses
+rerun_segments = []
+validate_tmp = sys.argv[5]
+if validate_tmp and rerun_names:
+    try:
+        with open(validate_tmp) as f:
+            report = json.load(f)
+        for seg in report.get("segments", []):
+            if seg["name"] in rerun_names:
+                rerun_segments.append({"name": seg["name"], "status": seg["status"]})
+    except Exception:
+        pass
+
+output = {
+    "status": status,
+    "exit_code": exit_code,
+    "merged_markdown": merged,
+    "review_markdown": review,
+    "rerun_segments": rerun_segments,
+}
+json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+sys.stdout.write("\n")
+PY
+}
+# --- end JSON mode infrastructure ---
+
 usage() {
   cat <<'EOF'
 用法:
@@ -14,6 +81,7 @@ usage() {
   PDF_VALIDATE_THRESHOLD=0.82    覆盖率阈值
   MINERU_RERUN_EFFORT=high       重跑精度
   PDF_AUTO_MERGE_OUTPUT           合并输出路径（默认自动推导）
+  PDF_AUTO_JSON=1                输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
 }
 
