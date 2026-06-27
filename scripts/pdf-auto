@@ -99,11 +99,17 @@ pdf="$1"
 segments_dir="$2"
 
 if [[ ! -f "$pdf" ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 "" "" ""
+  fi
   echo "错误：找不到 PDF 文件：$pdf" >&2
   exit 1
 fi
 
 if [[ ! -d "$segments_dir" ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 "" "" ""
+  fi
   echo "错误：找不到分段目录：$segments_dir" >&2
   exit 1
 fi
@@ -114,21 +120,21 @@ segments_dir="$(cd "$segments_dir" && pwd)"
 threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
 rerun_effort="${MINERU_RERUN_EFFORT:-high}"
 
-echo "pdf-auto: $pdf_path"
-echo "分段目录: $segments_dir"
-echo "阈值: $threshold"
-echo "重跑精度: $rerun_effort"
+log "pdf-auto: $pdf_path"
+log "分段目录: $segments_dir"
+log "阈值: $threshold"
+log "重跑精度: $rerun_effort"
 
 # 提取 PDF 文件名（无扩展名） 用于自动推导合并输出
 pdf_stem="$(basename "$pdf_path" .pdf)"
 
 # --- 第一次验证 ---
-echo
-echo "=== 第一次验证 ==="
+log
+log "=== 第一次验证 ==="
 
 # 临时文件保存 pdf-validate 的 JSON 输出
 validate_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp"' EXIT
+trap 'rm -f "$validate_tmp" "$_rerun_names_file"' EXIT
 
 # JSON 模式：stdout=JSON, stderr=人可读
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
@@ -164,21 +170,29 @@ else:
         print(f"  需重跑: {s['name']} (覆盖率 {s.get('coverage', 'N/A')})", file=sys.stderr)
     print("rerun")
 PY
-)"
+)" || {
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 "" "" ""
+  fi
+  exit 1
+}
 
 if [[ "$action" == "merge" ]]; then
   merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-merged.md}"
-  echo "全部通过，开始合并..."
-  echo "合并输出: $merge_output"
+  log "全部通过，开始合并..."
+  log "合并输出: $merge_output"
   PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir"
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "all_passed" 0 "$merge_output" "" "$validate_tmp"
+  fi
   exit 0
 fi
 
-echo "需要重跑可疑段，继续执行..."
+log "需要重跑可疑段，继续执行..."
 
 if [[ "$action" == "rerun" ]]; then
-  echo
-  echo "=== 重跑可疑段（effort=${rerun_effort}） ==="
+  log
+  log "=== 重跑可疑段（effort=${rerun_effort}） ==="
 
   # Extract suspicious segment names from JSON
   rerun_names="$(cat "$validate_tmp" | python3 -c "
@@ -214,12 +228,12 @@ for s in report['segments']:
 
     # Clean existing rerun dir for idempotent rerun
     if [[ -d "$rerun_dir" ]]; then
-      echo "清理已有重跑目录: $rerun_dir"
+      log "清理已有重跑目录: $rerun_dir"
       rm -rf "$rerun_dir"
     fi
 
-    echo
-    echo "重跑分段: $name (页 $start_page-$end_page) → $rerun_dir"
+    log
+    log "重跑分段: $name (页 $start_page-$end_page) → $rerun_dir"
 
     if mineru \
       -p "$pdf_path" \
@@ -230,25 +244,27 @@ for s in report['segments']:
       -l "$lang" \
       -s "$start_page" \
       -e "$end_page" 2>&1; then
-      echo "重跑完成: $name"
+      log "重跑完成: $name"
+      echo "$name" >> "$_rerun_names_file"
     else
-      echo "重跑失败: $name (mineru 退出非0)" >&2
+      log "重跑失败: $name (mineru 退出非0)"
       rerun_failures="$rerun_failures $name"
+      echo "$name" >> "$_rerun_names_file"
     fi
   done <<< "$rerun_names"
 
   if [[ -n "$rerun_failures" ]]; then
-    echo
-    echo "以下分段重跑失败（将使用原始结果继续）：$rerun_failures" >&2
+    log
+    log "以下分段重跑失败（将使用原始结果继续）：$rerun_failures"
   fi
 fi
 
 # --- 第二次验证 ---
-echo
-echo "=== 第二次验证 ==="
+log
+log "=== 第二次验证 ==="
 
 validate2_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$validate2_tmp"' EXIT
+trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"' EXIT
 
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
 
@@ -280,12 +296,17 @@ else:
         print(f"ISSUE:{s['name']}:{s['status']}:{reason}:{cov}")
     print("has_issues")
 PY
-)"
+)" || {
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 "" "" ""
+  fi
+  exit 1
+}
 
 # --- 准备合并 ---
 # Copy rerun .md over original .md for segments that have a successful rerun
-echo
-echo "=== 准备合并 ==="
+log
+log "=== 准备合并 ==="
 
 for rerun_dir in "$segments_dir"/*-rerun/; do
   [[ -d "$rerun_dir" ]] || continue
@@ -297,7 +318,7 @@ for rerun_dir in "$segments_dir"/*-rerun/; do
   if [[ -n "$rerun_md" && -f "$rerun_md" ]]; then
     original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
     if [[ -n "$original_md" ]]; then
-      echo "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+      log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
       cp "$rerun_md" "$original_md"
     fi
   fi
@@ -306,17 +327,17 @@ done
 # --- 合并 ---
 merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-merged.md}"
 
-echo
-echo "=== 合并 ==="
+log
+log "=== 合并 ==="
 PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir"
-echo "合并完成: $merge_output"
+log "合并完成: $merge_output"
 
 # --- 人工兜底清单 ---
 if echo "$decision" | grep -q "^has_issues$"; then
   review_output="$(dirname "$segments_dir")/${pdf_stem}-review.md"
 
-  echo
-  echo "=== 人工兜底清单 ==="
+  log
+  log "=== 人工兜底清单 ==="
 
   python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate2_tmp" "$rerun_failures" <<'PY'
 import json, sys
@@ -371,15 +392,21 @@ for seg in issues:
 
 lines.append("")
 Path(review_path).write_text("\n".join(lines), encoding="utf-8")
-print(f"人工兜底清单已生成: {review_path}")
+print(f"人工兜底清单已生成: {review_path}", file=sys.stderr)
 PY
 
-  echo "需要人工复核的分段："
+  log "需要人工复核的分段："
   for seg in $(echo "$decision" | grep "^ISSUE:"); do
-    echo "  $seg"
+    log "  $seg"
   done
 
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "merged_with_issues" 2 "$merge_output" "$review_output" "$validate2_tmp"
+  fi
   exit 2
 fi
 
+if [[ "$json_mode" == "1" ]]; then
+  emit_json "all_passed" 0 "$merge_output" "" "$validate2_tmp"
+fi
 exit 0
