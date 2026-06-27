@@ -103,3 +103,70 @@ if [[ "$action" == "merge" ]]; then
 fi
 
 echo "需要重跑可疑段，继续执行..."
+
+if [[ "$action" == "rerun" ]]; then
+  echo
+  echo "=== 重跑可疑段（effort=$rerun_effort） ==="
+
+  # Extract suspicious segment names from JSON
+  rerun_names="$(cat "$validate_tmp" | python3 -c "
+import json, sys
+report = json.loads(sys.stdin.read())
+for s in report['segments']:
+    if s['status'] == 'suspicious':
+        print(s['name'])
+")"
+
+  backend="${MINERU_BACKEND:-hybrid-engine}"
+  method="${MINERU_METHOD:-auto}"
+  lang="${MINERU_LANG:-ch}"
+
+  export MINERU_DEVICE_MODE="${MINERU_DEVICE_MODE:-mps}"
+  export MINERU_PDF_RENDER_THREADS="${MINERU_PDF_RENDER_THREADS:-2}"
+  export MINERU_API_MAX_CONCURRENT_REQUESTS="${MINERU_API_MAX_CONCURRENT_REQUESTS:-1}"
+  export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-8}"
+
+  rerun_failures=""
+
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+
+    rerun_dir="$segments_dir/${name}-rerun"
+
+    # Extract start/end page from segment name p0000-0019
+    start_page="${name#p}"
+    start_page="${start_page%-*}"
+    start_page=$((10#${start_page}))
+    end_page="${name##*-}"
+    end_page=$((10#${end_page}))
+
+    # Clean existing rerun dir for idempotent rerun
+    if [[ -d "$rerun_dir" ]]; then
+      echo "清理已有重跑目录: $rerun_dir"
+      rm -rf "$rerun_dir"
+    fi
+
+    echo
+    echo "重跑分段: $name (页 $start_page-$end_page) → $rerun_dir"
+
+    if mineru \
+      -p "$pdf_path" \
+      -o "$rerun_dir" \
+      -b "$backend" \
+      -m "$method" \
+      --effort "$rerun_effort" \
+      -l "$lang" \
+      -s "$start_page" \
+      -e "$end_page" 2>&1; then
+      echo "重跑完成: $name"
+    else
+      echo "重跑失败: $name (mineru 退出非0)" >&2
+      rerun_failures="$rerun_failures $name"
+    fi
+  done <<< "$rerun_names"
+
+  if [[ -n "$rerun_failures" ]]; then
+    echo
+    echo "以下分段重跑失败（将使用原始结果继续）：$rerun_failures" >&2
+  fi
+fi
