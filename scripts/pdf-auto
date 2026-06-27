@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-auto 原始.pdf xxx-mineru-segments
+
+说明:
+  自动验证分段覆盖率、对可疑段高精度重跑、再验证、合并。
+  如果全部通过则直接合并；如果仍有未通过段则合并后输出人工兜底清单。
+
+可选环境变量:
+  PDF_VALIDATE_THRESHOLD=0.82    覆盖率阈值
+  MINERU_RERUN_EFFORT=high       重跑精度
+  PDF_AUTO_MERGE_OUTPUT           合并输出路径（默认自动推导）
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ $# -ne 2 ]]; then
+  usage
+  exit 1
+fi
+
+pdf="$1"
+segments_dir="$2"
+
+if [[ ! -f "$pdf" ]]; then
+  echo "错误：找不到 PDF 文件：$pdf" >&2
+  exit 1
+fi
+
+if [[ ! -d "$segments_dir" ]]; then
+  echo "错误：找不到分段目录：$segments_dir" >&2
+  exit 1
+fi
+
+pdf_path="$(cd "$(dirname "$pdf")" && pwd)/$(basename "$pdf")"
+segments_dir="$(cd "$segments_dir" && pwd)"
+
+threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
+rerun_effort="${MINERU_RERUN_EFFORT:-high}"
+
+echo "pdf-auto: $pdf_path"
+echo "分段目录: $segments_dir"
+echo "阈值: $threshold"
+echo "重跑精度: $rerun_effort"
