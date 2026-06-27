@@ -86,12 +86,21 @@ EOF
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+  else
+    usage
+  fi
   exit 0
 fi
 
 if [[ $# -ne 2 ]]; then
-  usage
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 "" "" ""
+    usage >&2
+  else
+    usage
+  fi
   exit 1
 fi
 
