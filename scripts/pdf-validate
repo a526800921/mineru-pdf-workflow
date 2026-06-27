@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-validate 原始.pdf xxx-mineru-segments
+
+说明:
+  自动验证 MinerU 分段输出的文本覆盖情况。
+  它会从原 PDF 文本层提取文字，并和每个分段 Markdown 对比，找出覆盖率低或缺失词较多的页段。
+
+可选环境变量:
+  PDF_VALIDATE_THRESHOLD=0.82
+  PDF_VALIDATE_JSON=1           输出机器可读 JSON（stdout），人类可读信息改到 stderr
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ $# -ne 2 ]]; then
+  usage
+  exit 2
+fi
+
+pdf="$1"
+segments_dir="$2"
+
+if [[ ! -f "$pdf" ]]; then
+  echo "错误：找不到 PDF 文件：$pdf" >&2
+  exit 1
+fi
+
+if [[ ! -d "$segments_dir" ]]; then
+  echo "错误：找不到分段目录：$segments_dir" >&2
+  exit 1
+fi
+
+threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
+json_mode="${PDF_VALIDATE_JSON:-0}"
+
+python - "$pdf" "$segments_dir" "$threshold" "$json_mode" <<'PY'
+import json
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+
+try:
+    import fitz
+except Exception as exc:
+    raise SystemExit(f"无法导入 PyMuPDF/fitz：{exc}")
+
+pdf_path = Path(sys.argv[1])
+segments_dir = Path(sys.argv[2])
+threshold = float(sys.argv[3])
+json_mode = sys.argv[4] == "1"
+
+segment_re = re.compile(r"^p(\d{4,})-(\d{4,})$")
+
+def log(*args, **kwargs):
+    """人类可读日志：JSON 模式写 stderr，否则写 stdout。"""
+    if json_mode:
+        print(*args, **kwargs, file=sys.stderr)
+    else:
+        print(*args, **kwargs)
+
+def normalize(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[·•.。．,，:：;；!！?？\-_—~～()（）\[\]【】<>《》/\\|]", "", text)
+    return text
+
+def tokens(text: str) -> list[str]:
+    normalized = normalize(text)
+    # 连续英文数字作为词；中文按单字统计，适合发现 LCD 这类缺失。
+    return re.findall(r"[a-z0-9]+|[一-鿿]", normalized)
+
+def segment_markdown(segment: Path) -> Path | None:
+    mds = sorted(segment.rglob("*.md"))
+    return mds[0] if mds else None
+
+doc = fitz.open(pdf_path)
+
+segments = []
+for child in segments_dir.iterdir():
+    if not child.is_dir():
+        continue
+    match = segment_re.match(child.name)
+    if not match:
+        continue
+    start, end = int(match.group(1)), int(match.group(2))
+    segments.append((start, end, child))
+
+if not segments:
+    raise SystemExit(f"没有找到分段目录：{segments_dir}/p0000-0019")
+
+segments.sort(key=lambda item: item[0])
+
+log(f"PDF: {pdf_path}")
+log(f"分段目录: {segments_dir}")
+log(f"阈值: {threshold:.2f}")
+log()
+
+results = []
+failed = []
+
+for start, end, segment in segments:
+    md_path = segment_markdown(segment)
+    if md_path is None:
+        log(f"[失败] {segment.name}: 缺少 Markdown")
+        failed.append(segment.name)
+        results.append({
+            "name": segment.name,
+            "start_page": start,
+            "end_page": end,
+            "coverage": None,
+            "status": "failed",
+            "reason": "missing_markdown",
+            "missing_tokens": [],
+            "markdown_path": None,
+        })
+        continue
+
+    original_parts = []
+    for page_idx in range(start, min(end + 1, doc.page_count)):
+        original_parts.append(doc[page_idx].get_text())
+
+    original_text = "\n".join(original_parts)
+    markdown_text = md_path.read_text(encoding="utf-8", errors="replace")
+
+    original_tokens = tokens(original_text)
+    markdown_tokens = tokens(markdown_text)
+
+    if not original_tokens:
+        log(f"[跳过] {segment.name}: 原 PDF 文本层为空")
+        results.append({
+            "name": segment.name,
+            "start_page": start,
+            "end_page": end,
+            "coverage": None,
+            "status": "skipped",
+            "reason": "no_text_layer",
+            "missing_tokens": [],
+            "markdown_path": str(md_path),
+        })
+        continue
+
+    original_counter = Counter(original_tokens)
+    markdown_counter = Counter(markdown_tokens)
+
+    matched = 0
+    for token, count in original_counter.items():
+        matched += min(count, markdown_counter.get(token, 0))
+
+    coverage = matched / sum(original_counter.values())
+
+    missing = original_counter - markdown_counter
+    missing_common = [
+        (token, count)
+        for token, count in missing.most_common(20)
+        if token.strip()
+    ]
+
+    status = "通过" if coverage >= threshold else "可疑"
+    log(f"[{status}] {segment.name}: 覆盖率 {coverage:.1%}, 原始token {sum(original_counter.values())}, Markdown token {sum(markdown_counter.values())}")
+
+    if coverage < threshold:
+        failed.append(segment.name)
+        log("  缺失较多:", ", ".join(f"{token}({count})" for token, count in missing_common[:12]))
+
+    results.append({
+        "name": segment.name,
+        "start_page": start,
+        "end_page": end,
+        "coverage": round(coverage, 4),
+        "status": "suspicious" if coverage < threshold else "passed",
+        "missing_tokens": [[t, c] for t, c in missing_common[:20]],
+        "markdown_path": str(md_path),
+    })
+
+log()
+all_passed = len(failed) == 0
+
+if json_mode:
+    output = {
+        "passed": all_passed,
+        "threshold": threshold,
+        "segments": results,
+    }
+    json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+else:
+    if failed:
+        print("需要人工或模型重点复核的分段：")
+        for name in failed:
+            print(f"- {name}")
+    else:
+        print("文本覆盖率初筛通过。仍建议抽查图片、表格和复杂图文页。")
+
+if not all_passed:
+    raise SystemExit(1)
+PY

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf xxx.pdf
+  pdf /完整路径/xxx.pdf
+
+说明:
+  输出目录会自动放在 PDF 所在目录：
+  <PDF文件名>-mineru-output/
+
+可选环境变量:
+  MINERU_BACKEND=hybrid-engine|vlm-engine|pipeline
+  MINERU_EFFORT=medium|high
+  MINERU_METHOD=auto|txt|ocr
+  MINERU_START=0
+  MINERU_END=4
+  MINERU_PDF_RENDER_THREADS=1
+  MINERU_PROCESSING_WINDOW_SIZE=4
+  PYTORCH_MPS_LOW_WATERMARK_RATIO=0.50
+  PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.65
+EOF
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+input="$1"
+
+if [[ "$input" == "-h" || "$input" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ ! -f "$input" ]]; then
+  echo "错误：找不到 PDF 文件：$input" >&2
+  exit 1
+fi
+
+case "$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')" in
+  *.pdf) ;;
+  *)
+    echo "错误：输入文件不是 PDF：$input" >&2
+    exit 1
+    ;;
+esac
+
+pdf_path="$(cd "$(dirname "$input")" && pwd)/$(basename "$input")"
+pdf_dir="$(dirname "$pdf_path")"
+pdf_name="$(basename "$pdf_path")"
+pdf_stem="${pdf_name%.*}"
+
+output_dir="$pdf_dir/${pdf_stem}-mineru-output"
+
+backend="${MINERU_BACKEND:-hybrid-engine}"
+effort="${MINERU_EFFORT:-medium}"
+method="${MINERU_METHOD:-auto}"
+lang="${MINERU_LANG:-ch}"
+
+export MINERU_DEVICE_MODE="${MINERU_DEVICE_MODE:-mps}"
+export MINERU_PDF_RENDER_THREADS="${MINERU_PDF_RENDER_THREADS:-1}"
+export MINERU_API_MAX_CONCURRENT_REQUESTS="${MINERU_API_MAX_CONCURRENT_REQUESTS:-1}"
+export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-4}"
+export PYTORCH_MPS_LOW_WATERMARK_RATIO="${PYTORCH_MPS_LOW_WATERMARK_RATIO:-0.50}"
+export PYTORCH_MPS_HIGH_WATERMARK_RATIO="${PYTORCH_MPS_HIGH_WATERMARK_RATIO:-0.65}"
+
+cmd=(
+  mineru
+  -p "$pdf_path"
+  -o "$output_dir"
+  -b "$backend"
+  -m "$method"
+  --effort "$effort"
+  -l "$lang"
+)
+
+if [[ -n "${MINERU_START:-}" ]]; then
+  cmd+=(-s "$MINERU_START")
+fi
+
+if [[ -n "${MINERU_END:-}" ]]; then
+  cmd+=(-e "$MINERU_END")
+fi
+
+echo "PDF: $pdf_path"
+echo "输出目录: $output_dir"
+echo "后端: $backend, method: $method, effort: $effort, lang: $lang"
+echo "内存保守参数: render_threads=$MINERU_PDF_RENDER_THREADS, max_requests=$MINERU_API_MAX_CONCURRENT_REQUESTS, window=$MINERU_PROCESSING_WINDOW_SIZE, mps_low_watermark=$PYTORCH_MPS_LOW_WATERMARK_RATIO, mps_high_watermark=$PYTORCH_MPS_HIGH_WATERMARK_RATIO"
+echo
+echo "开始解析..."
+
+{
+  printf 'PDF: %s\n' "$pdf_path"
+  printf '输出目录: %s\n' "$output_dir"
+  printf '后端: %s, method: %s, effort: %s, lang: %s\n\n' "$backend" "$method" "$effort" "$lang"
+  printf '内存保守参数: render_threads=%s, max_requests=%s, window=%s, mps_low_watermark=%s, mps_high_watermark=%s\n\n' "$MINERU_PDF_RENDER_THREADS" "$MINERU_API_MAX_CONCURRENT_REQUESTS" "$MINERU_PROCESSING_WINDOW_SIZE" "$PYTORCH_MPS_LOW_WATERMARK_RATIO" "$PYTORCH_MPS_HIGH_WATERMARK_RATIO"
+  "${cmd[@]}"
+} 2>&1
+
+echo
+echo "完成。输出目录：$output_dir"

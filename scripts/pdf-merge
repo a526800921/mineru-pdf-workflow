@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-merge xxx-mineru-segments
+
+说明:
+  合并 pdf-seg 生成的分段 Markdown。
+  输出文件默认放在分段目录同级：
+  <原文件名>-merged.md
+
+可选环境变量:
+  PDF_MERGE_OUTPUT=/path/to/output.md
+EOF
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+segments_dir="$1"
+
+if [[ "$segments_dir" == "-h" || "$segments_dir" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ ! -d "$segments_dir" ]]; then
+  echo "错误：找不到分段目录：$segments_dir" >&2
+  exit 1
+fi
+
+segments_dir="$(cd "$segments_dir" && pwd)"
+base_name="$(basename "$segments_dir")"
+stem="${base_name%-mineru-segments}"
+output="${PDF_MERGE_OUTPUT:-$(dirname "$segments_dir")/${stem}-merged.md}"
+
+python - "$segments_dir" "$output" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+segments_dir = Path(sys.argv[1])
+output = Path(sys.argv[2])
+
+segment_re = re.compile(r"^p(\d{4,})-(\d{4,})$")
+
+segments = []
+for child in segments_dir.iterdir():
+    if not child.is_dir():
+        continue
+    match = segment_re.match(child.name)
+    if not match:
+        continue
+    start = int(match.group(1))
+    end = int(match.group(2))
+    md_files = sorted(child.rglob("*.md"))
+    if not md_files:
+        segments.append((start, end, child.name, None))
+        continue
+    segments.append((start, end, child.name, md_files[0]))
+
+if not segments:
+    raise SystemExit(f"没有找到分段目录：{segments_dir}/p0000-0019")
+
+segments.sort(key=lambda item: item[0])
+
+missing = [name for _, _, name, md in segments if md is None]
+if missing:
+    raise SystemExit("以下分段缺少 Markdown：\n" + "\n".join(missing))
+
+pieces = []
+for index, (start, end, name, md_path) in enumerate(segments):
+    text = md_path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise SystemExit(f"分段 Markdown 为空：{md_path}")
+
+    if index:
+        pieces.append("\n\n---\n\n")
+    pieces.append(f"<!-- pages {start + 1}-{end + 1}, segment {name} -->\n\n")
+    pieces.append(text)
+    pieces.append("\n")
+
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text("".join(pieces), encoding="utf-8")
+
+print(f"已合并分段数: {len(segments)}")
+print(f"输出文件: {output}")
+for start, end, name, md_path in segments:
+    print(f"- {name}: pages {start + 1}-{end + 1}, {md_path}")
+PY

@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# MinerU outputs
+*-mineru-output/
+*-mineru-segments/
+*-merged.md
+*-review.md
+
+# IDE
+.vscode/
+.idea/

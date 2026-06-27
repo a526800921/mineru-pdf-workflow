@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-seg xxx.pdf
+  pdf-seg /完整路径/xxx.pdf
+
+说明:
+  分段解析 PDF，默认每 20 页一段。
+  每段输出到 PDF 所在目录：
+  <PDF文件名>-mineru-segments/p0000-0019/
+
+可选环境变量:
+  MINERU_SEGMENT_SIZE=20
+  MINERU_BACKEND=hybrid-engine|vlm-engine|pipeline
+  MINERU_EFFORT=medium|high
+  MINERU_METHOD=auto|txt|ocr
+  MINERU_LANG=ch
+  MINERU_PDF_RENDER_THREADS=2
+  MINERU_PROCESSING_WINDOW_SIZE=8
+EOF
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+input="$1"
+
+if [[ "$input" == "-h" || "$input" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ ! -f "$input" ]]; then
+  echo "错误：找不到 PDF 文件：$input" >&2
+  exit 1
+fi
+
+case "$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')" in
+  *.pdf) ;;
+  *)
+    echo "错误：输入文件不是 PDF：$input" >&2
+    exit 1
+    ;;
+esac
+
+pdf_path="$(cd "$(dirname "$input")" && pwd)/$(basename "$input")"
+pdf_dir="$(dirname "$pdf_path")"
+pdf_name="$(basename "$pdf_path")"
+pdf_stem="${pdf_name%.*}"
+
+segment_size="${MINERU_SEGMENT_SIZE:-20}"
+backend="${MINERU_BACKEND:-hybrid-engine}"
+effort="${MINERU_EFFORT:-medium}"
+method="${MINERU_METHOD:-auto}"
+lang="${MINERU_LANG:-ch}"
+
+export MINERU_DEVICE_MODE="${MINERU_DEVICE_MODE:-mps}"
+export MINERU_PDF_RENDER_THREADS="${MINERU_PDF_RENDER_THREADS:-2}"
+export MINERU_API_MAX_CONCURRENT_REQUESTS="${MINERU_API_MAX_CONCURRENT_REQUESTS:-1}"
+export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-8}"
+
+if ! [[ "$segment_size" =~ ^[0-9]+$ ]] || [[ "$segment_size" -lt 1 ]]; then
+  echo "错误：MINERU_SEGMENT_SIZE 必须是正整数，当前是：$segment_size" >&2
+  exit 1
+fi
+
+pages="$(
+  python - "$pdf_path" <<'PY'
+import sys
+try:
+    import fitz
+except Exception as exc:
+    raise SystemExit(f"无法导入 PyMuPDF/fitz：{exc}")
+
+doc = fitz.open(sys.argv[1])
+print(doc.page_count)
+PY
+)"
+
+if ! [[ "$pages" =~ ^[0-9]+$ ]] || [[ "$pages" -lt 1 ]]; then
+  echo "错误：无法读取 PDF 页数：$pdf_path" >&2
+  exit 1
+fi
+
+root_output_dir="$pdf_dir/${pdf_stem}-mineru-segments"
+mkdir -p "$root_output_dir"
+
+echo "PDF: $pdf_path"
+echo "总页数: $pages"
+echo "每段页数: $segment_size"
+echo "输出根目录: $root_output_dir"
+echo "后端: $backend, method: $method, effort: $effort, lang: $lang"
+echo "并发参数: render_threads=$MINERU_PDF_RENDER_THREADS, max_requests=$MINERU_API_MAX_CONCURRENT_REQUESTS, window=$MINERU_PROCESSING_WINDOW_SIZE"
+echo
+
+start=0
+while [[ "$start" -lt "$pages" ]]; do
+  end=$((start + segment_size - 1))
+  if [[ "$end" -ge "$pages" ]]; then
+    end=$((pages - 1))
+  fi
+
+  segment_name="$(printf 'p%04d-%04d' "$start" "$end")"
+  segment_output_dir="$root_output_dir/$segment_name"
+
+  echo
+  echo "开始分段: $segment_name"
+  echo "输出目录: $segment_output_dir"
+
+  {
+    printf '\n===== %s =====\n' "$segment_name"
+    printf '页码范围: %s-%s\n' "$start" "$end"
+    printf '输出目录: %s\n\n' "$segment_output_dir"
+    mineru \
+      -p "$pdf_path" \
+      -o "$segment_output_dir" \
+      -b "$backend" \
+      -m "$method" \
+      --effort "$effort" \
+      -l "$lang" \
+      -s "$start" \
+      -e "$end"
+  } 2>&1
+
+  start=$((end + 1))
+done
+
+echo
+echo "全部分段完成。输出根目录：$root_output_dir"
