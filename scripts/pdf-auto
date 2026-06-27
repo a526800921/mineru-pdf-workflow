@@ -170,3 +170,67 @@ for s in report['segments']:
     echo "以下分段重跑失败（将使用原始结果继续）：$rerun_failures" >&2
   fi
 fi
+
+# --- 第二次验证 ---
+echo
+echo "=== 第二次验证 ==="
+
+validate2_tmp="$(mktemp)"
+trap 'rm -f "$validate_tmp" "$validate2_tmp"' EXIT
+
+PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
+
+# 判定是否全部通过，保存到 decision 变量供 Task 5 使用
+decision="$(python3 - "$threshold" "$validate2_tmp" <<'PY'
+import json, sys
+with open(sys.argv[2]) as f:
+    report = json.load(f)
+threshold = float(sys.argv[1])
+
+segments = report["segments"]
+all_ok = all(s["status"] == "passed" for s in segments)
+issues = [s for s in segments if s["status"] in ("suspicious", "failed", "skipped")]
+
+for s in segments:
+    label = "通过" if s["status"] == "passed" else f"可疑(覆盖率 {s.get('coverage', 'N/A')})"
+    print(f"  [{s['status']}] {s['name']}: {label}", file=sys.stderr)
+
+if all_ok:
+    print("all_passed")
+else:
+    for s in issues:
+        reason = s.get("reason", "")
+        cov = s.get("coverage", "N/A")
+        print(f"ISSUE:{s['name']}:{s['status']}:{reason}:{cov}")
+    print("has_issues")
+PY
+)"
+
+# --- 准备合并 ---
+# Copy rerun .md over original .md for segments that have a successful rerun
+echo
+echo "=== 准备合并 ==="
+
+for rerun_dir in "$segments_dir"/*-rerun/; do
+  [[ -d "$rerun_dir" ]] || continue
+  name="$(basename "$rerun_dir")"
+  name="${name%-rerun}"
+  original_dir="$segments_dir/$name"
+
+  rerun_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
+  if [[ -n "$rerun_md" && -f "$rerun_md" ]]; then
+    original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
+    if [[ -n "$original_md" ]]; then
+      echo "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+      cp "$rerun_md" "$original_md"
+    fi
+  fi
+done
+
+# --- 合并 ---
+merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-merged.md}"
+
+echo
+echo "=== 合并 ==="
+PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir"
+echo "合并完成: $merge_output"
