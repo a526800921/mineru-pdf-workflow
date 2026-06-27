@@ -234,3 +234,71 @@ echo
 echo "=== 合并 ==="
 PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir"
 echo "合并完成: $merge_output"
+
+# --- 人工兜底清单 ---
+if echo "$decision" | grep -q "^has_issues$"; then
+  review_output="$(dirname "$segments_dir")/${pdf_stem}-review.md"
+
+  echo
+  echo "=== 人工兜底清单 ==="
+
+  python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate2_tmp" <<'PY'
+import json, sys
+from datetime import datetime
+from pathlib import Path
+
+threshold = float(sys.argv[1])
+pdf_path = sys.argv[2]
+segments_dir = sys.argv[3]
+review_path = sys.argv[4]
+
+with open(sys.argv[5]) as f:
+    report = json.load(f)
+
+issues = [s for s in report["segments"] if s["status"] in ("suspicious", "failed", "skipped")]
+
+lines = []
+lines.append("# 人工兜底清单")
+lines.append("")
+lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+lines.append(f"原始 PDF: {pdf_path}")
+lines.append(f"分段目录: {segments_dir}")
+lines.append(f"阈值: {threshold}")
+lines.append("")
+lines.append("## 可疑分段（需人工核对）")
+lines.append("")
+lines.append("| 分段 | 页码范围 | 覆盖率 | 备注 |")
+lines.append("|------|----------|--------|------|")
+
+for seg in issues:
+    pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    cov = f"{seg['coverage']:.2f}" if seg.get("coverage") is not None else "-"
+
+    status = seg["status"]
+    reason = seg.get("reason", "")
+
+    if status == "suspicious":
+        note = f"high 重跑后仍未通过阈值 {threshold}"
+    elif status == "failed" and reason == "missing_markdown":
+        note = "重跑失败（mineru 退出非0），使用原始 medium 结果"
+    elif status == "skipped" and reason == "no_text_layer":
+        note = "原 PDF 文本层为空，无法验证"
+    else:
+        note = f"{status}: {reason}" if reason else status
+
+    lines.append(f"| {seg['name']} | {pages} | {cov} | {note} |")
+
+lines.append("")
+Path(review_path).write_text("\n".join(lines), encoding="utf-8")
+print(f"人工兜底清单已生成: {review_path}")
+PY
+
+  echo "需要人工复核的分段："
+  for seg in $(echo "$decision" | grep "^ISSUE:"); do
+    echo "  $seg"
+  done
+
+  exit 2
+fi
+
+exit 0
