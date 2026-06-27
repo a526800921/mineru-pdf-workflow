@@ -106,7 +106,7 @@ echo "需要重跑可疑段，继续执行..."
 
 if [[ "$action" == "rerun" ]]; then
   echo
-  echo "=== 重跑可疑段（effort=$rerun_effort） ==="
+  echo "=== 重跑可疑段（effort=${rerun_effort}） ==="
 
   # Extract suspicious segment names from JSON
   rerun_names="$(cat "$validate_tmp" | python3 -c "
