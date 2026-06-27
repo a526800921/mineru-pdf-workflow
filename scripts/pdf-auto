@@ -74,7 +74,11 @@ threshold = float(sys.argv[1])
 report_path = sys.argv[2]
 
 with open(report_path) as f:
-    report = json.load(f)
+    content = f.read()
+if not content or not content.strip().startswith('{'):
+    print(f"pdf-validate 输出异常（非 JSON）：\n{content}", file=sys.stderr)
+    sys.exit(1)
+report = json.loads(content)
 
 segments = report["segments"]
 ok_count = sum(1 for s in segments if s["status"] == "passed")
@@ -184,7 +188,11 @@ PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate
 decision="$(python3 - "$threshold" "$validate2_tmp" <<'PY'
 import json, sys
 with open(sys.argv[2]) as f:
-    report = json.load(f)
+    content = f.read()
+if not content or not content.strip().startswith('{'):
+    print(f"pdf-validate 输出异常（非 JSON）：\n{content}", file=sys.stderr)
+    sys.exit(1)
+report = json.loads(content)
 threshold = float(sys.argv[1])
 
 segments = report["segments"]
@@ -242,7 +250,7 @@ if echo "$decision" | grep -q "^has_issues$"; then
   echo
   echo "=== 人工兜底清单 ==="
 
-  python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate2_tmp" <<'PY'
+  python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate2_tmp" "$rerun_failures" <<'PY'
 import json, sys
 from datetime import datetime
 from pathlib import Path
@@ -254,6 +262,9 @@ review_path = sys.argv[4]
 
 with open(sys.argv[5]) as f:
     report = json.load(f)
+
+rerun_failures_str = sys.argv[6] if len(sys.argv) > 6 else ""
+rerun_failures = set(rerun_failures_str.split()) if rerun_failures_str.strip() else set()
 
 issues = [s for s in report["segments"] if s["status"] in ("suspicious", "failed", "skipped")]
 
@@ -277,7 +288,9 @@ for seg in issues:
     status = seg["status"]
     reason = seg.get("reason", "")
 
-    if status == "suspicious":
+    if seg['name'] in rerun_failures:
+        note = "重跑失败（mineru 退出非0），使用原始 medium 结果"
+    elif status == "suspicious":
         note = f"high 重跑后仍未通过阈值 {threshold}"
     elif status == "failed" and reason == "missing_markdown":
         note = "重跑失败（mineru 退出非0），使用原始 medium 结果"
