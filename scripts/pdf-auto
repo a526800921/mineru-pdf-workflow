@@ -50,3 +50,56 @@ echo "pdf-auto: $pdf_path"
 echo "分段目录: $segments_dir"
 echo "阈值: $threshold"
 echo "重跑精度: $rerun_effort"
+
+# 提取 PDF 文件名（无扩展名） 用于自动推导合并输出
+pdf_stem="$(basename "$pdf_path" .pdf)"
+
+# --- 第一次验证 ---
+echo
+echo "=== 第一次验证 ==="
+
+# 临时文件保存 pdf-validate 的 JSON 输出
+validate_tmp="$(mktemp)"
+trap 'rm -f "$validate_tmp"' EXIT
+
+# JSON 模式：stdout=JSON, stderr=人可读
+PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
+
+# Python 解析 JSON，输出 "merge" 或 "rerun" 到 stdout，日志到 stderr
+action="$(python3 - "$threshold" "$validate_tmp" <<'PY'
+import json
+import sys
+
+threshold = float(sys.argv[1])
+report_path = sys.argv[2]
+
+with open(report_path) as f:
+    report = json.load(f)
+
+segments = report["segments"]
+ok_count = sum(1 for s in segments if s["status"] == "passed")
+suspicious = [s for s in segments if s["status"] == "suspicious"]
+
+print(f"通过: {ok_count} 段", file=sys.stderr)
+print(f"可疑: {len(suspicious)} 段", file=sys.stderr)
+
+if not suspicious:
+    for s in segments:
+        print(f"  [{s['status']}] {s['name']}: 覆盖率 {s.get('coverage', 'N/A')}", file=sys.stderr)
+    print("merge")
+else:
+    for s in suspicious:
+        print(f"  需重跑: {s['name']} (覆盖率 {s.get('coverage', 'N/A')})", file=sys.stderr)
+    print("rerun")
+PY
+)"
+
+if [[ "$action" == "merge" ]]; then
+  merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-merged.md}"
+  echo "全部通过，开始合并..."
+  echo "合并输出: $merge_output"
+  PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir"
+  exit 0
+fi
+
+echo "需要重跑可疑段，继续执行..."
