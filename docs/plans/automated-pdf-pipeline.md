@@ -110,7 +110,7 @@ run_pdf_auto(pdf_path, segments_dir, threshold?, rerun_effort?, merge_output?)
 
 暂不在第一版拆分 `parse_pdf_segmented`、`validate_segments`、`rerun_segments`、`merge_segments`、`create_review_report`。这些工具保留为后续扩展。
 
-推荐先补 `pdf-auto` 的 JSON summary 模式：
+已实施 `pdf-auto` 的 JSON summary 模式（`PDF_AUTO_JSON=1`）：
 
 ```bash
 PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
@@ -124,7 +124,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 |---|---|---|---|
 | 无文本层 PDF 如何验证 | 后续增加 OCR/VLM 对照验证策略 | 否 | 已延后 |
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
-| `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 是 | 待实施 |
+| `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 是 | 已完成 |
 
 ## 风险和回滚
 
