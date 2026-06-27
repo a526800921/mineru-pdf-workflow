@@ -1,5 +1,7 @@
 # pdf-auto Implementation Plan
 
+> 归档说明：superpowers 进度 3 已完成，并已合并到正式治理计划 [自动化 PDF 解析流水线](../../plans/automated-pdf-pipeline.md)。后续事实来源以 [PLAN_MAP](../../PLAN_MAP.md) 和正式计划文档为准；本文件保留为实施记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement `scripts/pdf-auto` that automates the validate→rerun→revalidate→merge loop for suspicious segments.

@@ -11,7 +11,89 @@
 1. 先让 CLI 输出稳定的机器可读 JSON。
 2. 再实现 MCP server，把 JSON 作为工具返回值。
 
-## 工具契约草案
+## 第一版工具契约
+
+第一版只暴露一个高层工具，包装当前已经稳定的 `scripts/pdf-auto` 闭环。拆分式工具保留为后续扩展，避免 MCP 第一版重复实现 CLI 编排逻辑。
+
+### `run_pdf_auto`
+
+输入：
+
+```json
+{
+  "pdf_path": "/abs/path/manual.pdf",
+  "segments_dir": "/abs/path/manual-mineru-segments",
+  "threshold": 0.82,
+  "rerun_effort": "high",
+  "merge_output": "/abs/path/manual-merged.md"
+}
+```
+
+字段说明：
+
+- `pdf_path`：必填，绝对路径，必须指向存在的 `.pdf` 文件。
+- `segments_dir`：必填，绝对路径，必须指向已存在的分段目录。
+- `threshold`：可选，映射到 `PDF_VALIDATE_THRESHOLD`。
+- `rerun_effort`：可选，映射到 `MINERU_RERUN_EFFORT`。
+- `merge_output`：可选，映射到 `PDF_AUTO_MERGE_OUTPUT`。
+
+输出：
+
+```json
+{
+  "status": "passed",
+  "exit_code": 0,
+  "merged_markdown": "/abs/path/manual-merged.md",
+  "review_markdown": null,
+  "stdout": "...",
+  "stderr": "..."
+}
+```
+
+`status` 取值：
+
+- `passed`：`pdf-auto` 退出码为 0，合并完成且无人工兜底项。
+- `needs_review`：`pdf-auto` 退出码为 2，合并完成但生成人工兜底清单。
+- `failed`：`pdf-auto` 退出码为 1 或调用前校验失败。
+
+失败模式：
+
+- PDF 不存在或不是 `.pdf` 文件。
+- 分段目录不存在，或缺少 `pXXXX-YYYY` 分段目录。
+- `scripts/pdf-auto` 返回脚本错误。
+- `scripts/pdf-auto` 输出无法映射到预期合并文件或 review 文件。
+
+## CLI JSON 决策
+
+当前 `scripts/pdf-auto` 已有稳定退出码和输出文件约定，但没有机器可读 summary。MCP 可以先通过退出码和路径推导结果，但这会让 server 解析中文日志或重复推导默认路径。
+
+推荐在实现 MCP server 前，先给 `scripts/pdf-auto` 增加可选 JSON summary：
+
+```bash
+PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
+```
+
+推荐输出：
+
+```json
+{
+  "status": "passed",
+  "exit_code": 0,
+  "merged_markdown": "/abs/path/manual-merged.md",
+  "review_markdown": null,
+  "rerun_segments": ["p0000-0019"]
+}
+```
+
+JSON 模式应保留现有退出码语义：
+
+- `0`：全部通过，合并完成。
+- `1`：脚本自身错误。
+- `2`：合并完成，但有段需要人工兜底。
+
+## 后续扩展工具草案
+
+以下工具暂不作为第一版 MCP 范围。后续如果需要细粒度编排，再从 `run_pdf_auto` 拆分。
 
 ### `parse_pdf_segmented`
 
@@ -196,14 +278,17 @@ status 取值：
 
 ## 实现前置条件
 
-- `scripts/pdf-validate` 支持 JSON 输出。
-- `scripts/pdf-seg` 支持只生成计划，不执行，方便 MCP 预览任务。
-- `scripts/pdf-merge` 输出合并文件路径的 JSON。
+- `scripts/pdf-validate` 已支持 JSON 输出。
+- `scripts/pdf-auto` 增加 JSON summary，或 MCP server 明确使用退出码和文件路径推导结果。
+- `scripts/pdf-seg` 的只生成计划能力不属于第一版范围。
+- `scripts/pdf-merge` JSON 输出不属于第一版范围。
 
 ## 安全边界
 
 - MCP server 只允许访问用户显式传入的本地 PDF 和对应输出目录。
+- 第一版只调用仓库内固定脚本：`scripts/pdf-auto`。
+- 只接受绝对路径。
+- 只允许设置白名单环境变量：`PDF_VALIDATE_THRESHOLD`、`MINERU_RERUN_EFFORT`、`PDF_AUTO_MERGE_OUTPUT`。
 - 不删除原始 PDF。
 - 重跑只覆盖对应分段输出，不改其他分段。
 - 任何人工修订文件应输出为新文件，不覆盖 MinerU 原始结果。
-
