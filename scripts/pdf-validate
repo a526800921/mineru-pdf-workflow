@@ -84,6 +84,39 @@ def segment_markdown(segment: Path) -> Path | None:
     return mds[0] if mds else None
 
 
+def _strip_html(text: str) -> str:
+    """去除 HTML 标签，保留文本内容。"""
+    t = re.sub(r'<(style|script)[^>]*>.*?</\1>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    t = re.sub(r'</?(?:br|td|th|tr|p|div|li|h\d)[^>]*>', ' ', t, flags=re.IGNORECASE)
+    t = re.sub(r'<[^>]+>', '', t)
+    t = t.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"').replace('&#39;', "'").replace('&nbsp;', ' ')
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def _extract_texts(obj):
+    """递归提取嵌套结构中的所有文本内容，含 HTML 标签内文本。"""
+    texts = []
+    if isinstance(obj, dict):
+        if "type" in obj and obj.get("type") == "text" and "content" in obj:
+            c = obj["content"]
+            if isinstance(c, str):
+                texts.append(c)
+        # content_list_v2.json 中 table 元素的 html 字段是原始 HTML 字符串
+        if "html" in obj:
+            html_str = obj["html"]
+            if isinstance(html_str, str):
+                cleaned = _strip_html(html_str)
+                if cleaned.strip():
+                    texts.append(cleaned)
+        for v in obj.values():
+            texts.extend(_extract_texts(v))
+    elif isinstance(obj, list):
+        for item in obj:
+            texts.extend(_extract_texts(item))
+    return texts
+
+
 # --- 页面类型检测（阶段 3） ---
 def list_content_types(content_list_page: list) -> set[str]:
     """提取 content_list_v2.json 单页中所有元素的 type 集合。"""
@@ -190,7 +223,9 @@ for start, end, segment in segments:
         original_parts.append(doc[page_idx].get_text())
 
     original_text = "\n".join(original_parts)
-    markdown_text = md_path.read_text(encoding="utf-8", errors="replace")
+    markdown_raw = md_path.read_text(encoding="utf-8", errors="replace")
+    # 段级覆盖率计算前去除 HTML 标签，避免标签碎片变成垃圾 token
+    markdown_text = _strip_html(markdown_raw) if _strip_html(markdown_raw).strip() else markdown_raw
 
     original_tokens = tokens(original_text)
     markdown_tokens = tokens(markdown_text)
@@ -237,21 +272,6 @@ for start, end, segment in segments:
         log("  缺失较多:", ", ".join(f"{token}({count})" for token, count in missing_common[:12]))
 
     # --- 逐页覆盖率 ---
-    def _extract_texts(obj):
-        """递归提取嵌套结构中的所有文本内容。"""
-        texts = []
-        if isinstance(obj, dict):
-            if "type" in obj and obj.get("type") == "text" and "content" in obj:
-                c = obj["content"]
-                if isinstance(c, str):
-                    texts.append(c)
-            for v in obj.values():
-                texts.extend(_extract_texts(v))
-        elif isinstance(obj, list):
-            for item in obj:
-                texts.extend(_extract_texts(item))
-        return texts
-
     pages_data = []
     cl_path = md_path.parent / f"{md_path.stem}_content_list_v2.json"
     cl_data = None
@@ -305,11 +325,21 @@ for start, end, segment in segments:
             page_decision = "skip"
             page_reason = "no_text_layer"
             page_rerunnable = False
-        elif page_type in ("toc", "image_or_sparse", "table"):
-            # 目录页、图片稀疏页、表格页 → 人工复核，不触发 high 重跑
+        elif page_type in ("toc", "image_or_sparse"):
+            # 目录页、图片稀疏页 → 覆盖率不可靠，不触发 high 重跑
             page_decision = "review_only"
             page_reason = f"{page_type}_page"
             page_rerunnable = False
+        elif page_type == "table":
+            # 表格页：覆盖率达标则通过，不达标进入人工复核（不重跑）
+            if page_cov is not None and page_cov >= threshold:
+                page_decision = "pass"
+                page_reason = "table_coverage_ok"
+                page_rerunnable = False
+            else:
+                page_decision = "review_only"
+                page_reason = "table_low_coverage"
+                page_rerunnable = False
         elif page_cov is None:
             page_decision = "skip"
             page_reason = "pdf_page_empty"
