@@ -217,7 +217,7 @@ PY
 }
 
 if [[ "$action" == "merge" ]]; then
-  merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/merged.md}"
+  merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
   log "全部通过，开始合并..."
 
   # --- TOC 段修复：用 PDF 文本层重生成目录页 Markdown ---
@@ -652,7 +652,7 @@ PY
   exit 1
 }
 
-merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/merged.md}"
+merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
 
 # --- 全部通过：直接合并 ---
 if echo "$decision" | grep -q "^all_passed$"; then
