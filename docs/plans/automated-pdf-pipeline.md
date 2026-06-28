@@ -64,11 +64,12 @@
 | 阶段 1 | 固化基础 CLI 脚本 | MinerU CLI 可用 | 脚本语法和帮助命令通过 | 已完成 |
 | 阶段 2 | 验证报告机器化 | `pdf-validate` 人类输出已验证有效 | JSON 输出可被程序消费 | 已完成 |
 | 阶段 3 | 自动闭环 | JSON 报告可用 | 可疑段 high 重跑、再验证、合并并按需生成 review 文件 | 已完成 |
-| 阶段 4 | MCP 接入准备 | CLI 契约稳定 | MCP 工具契约和脚本输出对齐 | 设计中 |
+| 阶段 4 | MCP 接入准备 | CLI 契约稳定 | MCP 工具契约和脚本输出对齐 | 已完成 |
+| 阶段 5 | MCP server 最小实现 | `PDF_AUTO_JSON=1` 可用且工具边界已固定 | `run_pdf_auto` 返回结构化结果 | 待实施 |
 
 ## 当前阶段
 
-阶段 3 已完成，superpowers 中的 `pdf-auto` 进度 3 已合并到本计划。下一阶段为阶段 4（MCP 接入准备）。
+阶段 4 已完成，superpowers 中的 `pdf-auto` 进度 3 已合并到本计划。下一阶段为阶段 5（MCP server 最小实现）。
 
 ### 阶段 3 完成证据
 
@@ -80,27 +81,33 @@
 - 计划治理检查通过。
 - superpowers 实施计划归档为执行记录，正式事实来源以本文档和 [PLAN_MAP](../PLAN_MAP.md) 为准。
 
-### 阶段 4 实施计划
+### 阶段 4 完成证据
 
-目标：把现有 `pdf-auto` CLI 自动闭环整理成 MCP 可以稳定包装的最小契约。
+- `scripts/pdf-auto --help` 可运行，已声明 `PDF_VALIDATE_THRESHOLD`、`MINERU_RERUN_EFFORT`、`PDF_AUTO_MERGE_OUTPUT`、`PDF_AUTO_JSON=1`。
+- `scripts/pdf-validate --help` 可运行，已支持 `PDF_VALIDATE_JSON=1`。
+- `scripts/pdf-merge --help` 可运行，已支持 `PDF_MERGE_OUTPUT`。
+- 191 页说明书样本的 `pdf-validate` JSON 摘要已固定：10 个分段，9 个 `passed`，1 个 `suspicious`，阈值 0.82。
+- `mcp/README.md` 已将 MCP 第一版边界固定为 `run_pdf_auto`，拆分式工具保留为后续扩展。
+
+### 阶段 5 实施计划
+
+目标：实现只包装 `scripts/pdf-auto` 的最小 MCP server。
 
 实施任务：
 
-1. 固定 Step 0 证据：记录 `pdf-auto`、`pdf-validate`、`pdf-merge` 的帮助输出、治理检查结果，以及 191 页样本的 `pdf-validate` JSON 摘要。
-2. 定义 MCP 第一版边界：只暴露 `run_pdf_auto(pdf_path, segments_dir, threshold?, rerun_effort?, merge_output?)`。
-3. 决策 CLI JSON summary：推荐新增 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`，让 MCP 不解析中文日志。
-4. 更新 [MCP 接入设计](../../mcp/README.md)：把拆分工具降级为后续扩展，第一版以 `run_pdf_auto` 为准。
-5. 运行计划治理检查。
+1. 选择 MCP server 技术栈和本地启动方式。
+2. 暴露 `run_pdf_auto(pdf_path, segments_dir, threshold?, rerun_effort?, merge_output?)`。
+3. 调用 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`，把 stdout JSON 映射为工具返回值。
+4. 保留 stderr 作为诊断信息，不让 MCP 解析中文日志决定状态。
+5. 增加最小本地验证命令，并更新 [MCP 接入设计](../../mcp/README.md)。
 
-### 阶段 4 Step 0 证据
+### 阶段 5 Step 0 证据
 
-- `scripts/pdf-auto --help` 可运行，当前支持 `PDF_VALIDATE_THRESHOLD`、`MINERU_RERUN_EFFORT`、`PDF_AUTO_MERGE_OUTPUT`。
-- `scripts/pdf-validate --help` 可运行，当前支持 `PDF_VALIDATE_JSON=1`。
-- `scripts/pdf-merge --help` 可运行，当前支持 `PDF_MERGE_OUTPUT`。
-- `python3 scripts/check_plan_governance.py .` 通过。
-- 191 页说明书样本的 `pdf-validate` JSON 摘要：10 个分段，9 个 `passed`，1 个 `suspicious`，阈值 0.82。
+- `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>` 已输出 `status`、`exit_code`、`merged_markdown`、`review_markdown`、`rerun_segments`。
+- 当前仓库还没有 MCP server 实现，第一版不拆分 `parse_pdf_segmented`、`validate_segments`、`rerun_segments`、`merge_segments`。
+- MCP 调用前校验必须覆盖 PDF 路径、分段目录和可选参数类型。
 
-### 阶段 4 契约决策
+### 阶段 5 契约决策
 
 第一版 MCP 工具只包装 `scripts/pdf-auto`：
 
@@ -116,7 +123,7 @@ run_pdf_auto(pdf_path, segments_dir, threshold?, rerun_effort?, merge_output?)
 PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 ```
 
-目标输出包含 `status`、`exit_code`、`merged_markdown`、`review_markdown`、`rerun_segments`，并保留现有退出码语义。
+当前输出包含 `status`、`exit_code`、`merged_markdown`、`review_markdown`、`rerun_segments`，并保留现有退出码语义。CLI `status` 当前使用 `all_passed`、`merged_with_issues`、`error`；MCP server 可以再映射为对外工具状态。
 
 ## 未决问题
 
@@ -124,7 +131,8 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 |---|---|---|---|
 | 无文本层 PDF 如何验证 | 后续增加 OCR/VLM 对照验证策略 | 否 | 已延后 |
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
-| `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 是 | 已完成 |
+| `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 否 | 已完成 |
+| MCP server 尚未实现 | 阶段 5 只实现 `run_pdf_auto` 包装 | 否 | 待实施 |
 
 ## 风险和回滚
 

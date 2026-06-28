@@ -26,6 +26,7 @@
 - `pdf-seg`
 - `pdf-validate`
 - `pdf-merge`
+- `pdf-auto`
 
 后续 MCP 只包装这些稳定 CLI 或复用其内部逻辑。
 
@@ -40,11 +41,19 @@
 代价：
 
 - 早期自动化还不是一个完整 MCP 服务。
-- `pdf-validate` 需要增加 JSON 输出后，MCP 才能更稳地调度重跑。
+- MCP 第一版需要等待 CLI JSON 契约稳定后再封装。
 
 ## MCP 工具边界
 
-MCP 服务不直接解释 PDF 内容，只负责流程编排和报告返回：
+MCP 服务不直接解释 PDF 内容，只负责流程编排和报告返回。
+
+第一版只暴露一个高层工具，包装已经稳定的 `scripts/pdf-auto`：
+
+```text
+run_pdf_auto(pdf_path, segments_dir, threshold?, rerun_effort?, merge_output?)
+```
+
+以下拆分式工具保留为后续扩展：
 
 ```text
 parse_pdf_segmented(pdf_path, segment_size, backend, effort)
@@ -54,4 +63,3 @@ merge_segments(segments_dir)
 ```
 
 人工语义判断仍交给 Claude Code 或用户。
-

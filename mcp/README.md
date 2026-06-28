@@ -65,19 +65,17 @@
 
 ## CLI JSON 决策
 
-当前 `scripts/pdf-auto` 已有稳定退出码和输出文件约定，但没有机器可读 summary。MCP 可以先通过退出码和路径推导结果，但这会让 server 解析中文日志或重复推导默认路径。
-
-推荐在实现 MCP server 前，先给 `scripts/pdf-auto` 增加可选 JSON summary：
+`scripts/pdf-auto` 已实现可选 JSON summary：
 
 ```bash
 PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 ```
 
-推荐输出：
+CLI JSON 输出结构：
 
 ```json
 {
-  "status": "passed",
+  "status": "all_passed",
   "exit_code": 0,
   "merged_markdown": "/abs/path/manual-merged.md",
   "review_markdown": null,
@@ -90,6 +88,14 @@ JSON 模式应保留现有退出码语义：
 - `0`：全部通过，合并完成。
 - `1`：脚本自身错误。
 - `2`：合并完成，但有段需要人工兜底。
+
+CLI `status` 当前取值：
+
+- `all_passed`：`pdf-auto` 退出码为 0，合并完成且无人工兜底项。
+- `merged_with_issues`：`pdf-auto` 退出码为 2，合并完成但生成人工兜底清单。
+- `error`：`pdf-auto` 退出码为 1，或调用前校验失败。
+
+MCP server 第一版必须读取 stdout JSON 判断状态；stderr 只作为诊断日志返回或记录，不能依赖中文日志解析决定工具状态。MCP 对外返回可以把 CLI 状态映射为 `passed`、`needs_review`、`failed`。
 
 ## 后续扩展工具草案
 
