@@ -38,13 +38,18 @@ pkg_dir="$(dirname "$segments_dir")"
 pkg_name="$(basename "$pkg_dir")"
 output="${PDF_MERGE_OUTPUT:-$pkg_dir/${pkg_name}.md}"
 
-python - "$segments_dir" "$output" <<'PY'
+pkg_images_dir="$pkg_dir/images"
+mkdir -p "$pkg_images_dir"
+
+python - "$segments_dir" "$output" "$pkg_images_dir" <<'PY'
 import re
+import shutil
 import sys
 from pathlib import Path
 
 segments_dir = Path(sys.argv[1])
 output = Path(sys.argv[2])
+pkg_images = Path(sys.argv[3])
 
 segment_re = re.compile(r"^p(\d{4,})-(\d{4,})$")
 
@@ -64,7 +69,7 @@ for child in segments_dir.iterdir():
     segments.append((start, end, child.name, md_files[0]))
 
 if not segments:
-    raise SystemExit(f"没有找到分段目录：{segments_dir}/p0000-0019")
+    raise SystemExit(f"没有找到分段目录：{segments_dir}/p0001-0020")
 
 segments.sort(key=lambda item: item[0])
 
@@ -80,7 +85,7 @@ for index, (start, end, name, md_path) in enumerate(segments):
 
     if index:
         pieces.append("\n\n---\n\n")
-    pieces.append(f"<!-- pages {start + 1}-{end + 1}, segment {name} -->\n\n")
+    pieces.append(f"<!-- pages {start}-{end} -->\n\n")
     pieces.append(text)
     pieces.append("\n")
 
@@ -90,5 +95,22 @@ output.write_text("".join(pieces), encoding="utf-8")
 print(f"已合并分段数: {len(segments)}")
 print(f"输出文件: {output}")
 for start, end, name, md_path in segments:
-    print(f"- {name}: pages {start + 1}-{end + 1}, {md_path}")
+    print(f"- {name}: pages {start}-{end}, {md_path}")
+
+# --- 收集图片到输出包 images/ ---
+image_count = 0
+pkg_images.mkdir(parents=True, exist_ok=True)
+for _, _, _, md_path in segments:
+    # MinerU 图片在 md_path 同级的 images/ 目录
+    seg_images = md_path.parent / "images"
+    if not seg_images.is_dir():
+        continue
+    for img in seg_images.iterdir():
+        if img.is_file():
+            dest = pkg_images / img.name
+            if not dest.exists():
+                shutil.copy2(img, dest)
+                image_count += 1
+if image_count:
+    print(f"收集图片: {image_count} 张 -> {pkg_images}")
 PY

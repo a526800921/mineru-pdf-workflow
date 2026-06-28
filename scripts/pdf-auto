@@ -296,7 +296,7 @@ for seg in toc_segs:
 
     # 从 PDF 文本层提取条目
     pdf_lines = []
-    for p in range(seg["start_page"], min(seg["end_page"] + 1, doc.page_count)):
+    for p in range(seg["start_page"] - 1, min(seg["end_page"], doc.page_count)):
         pdf_lines.append(doc[p].get_text())
     pdf_text = "\n".join(pdf_lines)
 
@@ -364,7 +364,7 @@ if fixed_count:
 
         # 从 PDF 再提取条目，计算召回率
         pdf_lines = []
-        for p in range(seg["start_page"], min(seg["end_page"] + 1, doc2.page_count)):
+        for p in range(seg["start_page"] - 1, min(seg["end_page"], doc2.page_count)):
             pdf_lines.append(doc2[p].get_text())
         pdf_text2 = "\n".join(pdf_lines)
         lines = [l.strip() for l in pdf_text2.strip().split('\n') if l.strip()]
@@ -464,7 +464,7 @@ lines.append("| 分段 | 页码范围 | 覆盖率 | 处理建议 | 原因 |")
 lines.append("|------|----------|--------|----------|------|")
 
 for seg in issues:
-    pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    pages = f"{seg['start_page']}-{seg['end_page']}"
     cov = f"{seg['coverage']:.2f}" if seg.get("coverage") is not None else "-"
     decision = seg.get("decision", seg["status"])
     reason = seg.get("reason", "")
@@ -498,7 +498,7 @@ for seg in issues:
     if not pages_data:
         continue
 
-    seg_pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    seg_pages = f"{seg['start_page']}-{seg['end_page']}"
     lines.append(f"## {seg['name']} 逐页详情（PDF 第 {seg_pages} 页）")
     lines.append("")
     lines.append("| PDF 页码 | 覆盖率 | 页面类型 | 处理决策 | PDF token | MD token | 缺失较多的词 |")
@@ -569,12 +569,15 @@ for s in report['segments']:
 
     rerun_dir="$segments_dir/${name}-rerun"
 
-    # Extract start/end page from segment name p0000-0019
+    # Extract start/end page from segment name p0001-0020 (1-based, align PDF page)
     start_page="${name#p}"
     start_page="${start_page%-*}"
     start_page=$((10#${start_page}))
     end_page="${name##*-}"
     end_page=$((10#${end_page}))
+    # mineru uses 0-based page indices
+    start_page=$((start_page - 1))
+    end_page=$((end_page - 1))
 
     # Clean existing rerun dir for idempotent rerun
     if [[ -d "$rerun_dir" ]]; then
@@ -741,7 +744,7 @@ for seg in toc_segs:
         continue
     md_path = md_files[0]
     pdf_lines = []
-    for p in range(seg["start_page"], min(seg["end_page"] + 1, doc.page_count)):
+    for p in range(seg["start_page"] - 1, min(seg["end_page"], doc.page_count)):
         pdf_lines.append(doc[p].get_text())
     pdf_text = "\n".join(pdf_lines)
     lines = [l.strip() for l in pdf_text.strip().split('\n') if l.strip()]
@@ -827,7 +830,7 @@ lines.append("| 分段 | 页码范围 | 覆盖率 | 处理建议 | 原因 |")
 lines.append("|------|----------|--------|----------|------|")
 
 for seg in issues:
-    pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    pages = f"{seg['start_page']}-{seg['end_page']}"
     cov = f"{seg['coverage']:.2f}" if seg.get("coverage") is not None else "-"
 
     decision = seg.get("decision", seg["status"])
@@ -869,7 +872,7 @@ for seg in issues:
     if not low_pages:
         continue
 
-    seg_pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    seg_pages = f"{seg['start_page']}-{seg['end_page']}"
     lines.append(f"## {seg['name']} 逐页详情（PDF 第 {seg_pages} 页）")
     lines.append("")
     lines.append("| PDF 页码 | 覆盖率 | PDF token | MD token | 缺失较多的词 |")

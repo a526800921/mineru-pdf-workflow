@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-rerun <pdf> <segments_dir> <页码|分段名>...
+
+说明:
+  对指定页高精度重跑 MinerU 解析，替换原分段结果，完成后自动合并。
+  支持混合传入 PDF 页码（1-based）和分段名（p0000-0000）。
+
+示例:
+  pdf-rerun pdf/demo60/demo60.pdf pdf/demo60/segments 27 29 30
+  pdf-rerun pdf/demo60/demo60.pdf pdf/demo60/segments p0026-0026 28
+
+可选环境变量:
+  MINERU_BACKEND=hybrid-engine
+  MINERU_EFFORT=high        重跑精度默认 high
+  MINERU_METHOD=auto
+  MINERU_LANG=ch
+  PDF_MERGE_OUTPUT           合并输出路径（默认自动推导）
+EOF
+}
+
+if [[ $# -lt 3 ]]; then
+  usage
+  exit 2
+fi
+
+pdf="$1"
+shift
+segments_dir="$1"
+shift
+
+if [[ "$pdf" == "-h" || "$pdf" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ ! -f "$pdf" ]]; then
+  echo "错误：找不到 PDF 文件：$pdf" >&2
+  exit 1
+fi
+
+if [[ ! -d "$segments_dir" ]]; then
+  echo "错误：找不到分段目录：$segments_dir" >&2
+  exit 1
+fi
+
+pdf_path="$(cd "$(dirname "$pdf")" && pwd)/$(basename "$pdf")"
+segments_dir="$(cd "$segments_dir" && pwd)"
+pdf_stem="$(basename "$pdf_path" .pdf)"
+
+backend="${MINERU_BACKEND:-hybrid-engine}"
+effort="${MINERU_EFFORT:-high}"
+method="${MINERU_METHOD:-auto}"
+lang="${MINERU_LANG:-ch}"
+
+export MINERU_DEVICE_MODE="${MINERU_DEVICE_MODE:-mps}"
+export MINERU_PDF_RENDER_THREADS="${MINERU_PDF_RENDER_THREADS:-2}"
+export MINERU_API_MAX_CONCURRENT_REQUESTS="${MINERU_API_MAX_CONCURRENT_REQUESTS:-1}"
+export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-8}"
+
+# 自动检测 API 端口
+api_base="${MINERU_API_BASE_PORT:-9000}"
+api_url=""
+for ((_p=0; _p<3; _p++)); do
+  _port=$((api_base + _p))
+  if lsof -i ":$_port" -sTCP:LISTEN >/dev/null 2>&1; then
+    api_url="http://127.0.0.1:$_port"
+    break
+  fi
+done
+
+echo "PDF: $pdf_path"
+echo "分段目录: $segments_dir"
+echo "精度: $effort, 后端: $backend"
+[[ -n "$api_url" ]] && echo "API: $api_url"
+
+rerun_count=0
+
+for target in "$@"; do
+  if [[ "$target" =~ ^p[0-9]{4,}-[0-9]{4,}$ ]]; then
+    # 分段名：p0001-0020（1-based，对齐 PDF 页码）
+    seg_name="$target"
+    seg_dir="$segments_dir/$seg_name"
+    if [[ ! -d "$seg_dir" ]]; then
+      echo "  ✗ 分段不存在：$seg_name，跳过" >&2
+      continue
+    fi
+    start_page="${seg_name#p}"
+    start_page="${start_page%-*}"
+    start_page=$((10#${start_page}))
+    end_page="${seg_name##*-}"
+    end_page=$((10#${end_page}))
+  elif [[ "$target" =~ ^[0-9]+$ ]]; then
+    # 页码（1-based）→ 找到对应分段（分段名已 1-based）
+    seg_dir=""
+    for d in "$segments_dir"/p*-*; do
+      [[ -d "$d" ]] || continue
+      name="$(basename "$d")"
+      s="${name#p}"; s="${s%-*}"; s=$((10#${s}))
+      e="${name##*-}"; e=$((10#${e}))
+      if [[ $target -ge $s && $target -le $e ]]; then
+        seg_dir="$d"
+        seg_name="$name"
+        start_page=$s
+        end_page=$e
+        break
+      fi
+    done
+    if [[ -z "$seg_dir" ]]; then
+      echo "  ✗ 页码 ${target} 无对应分段，跳过" >&2
+      continue
+    fi
+  else
+    echo "  ✗ 无法识别：$target（需要页码或 p0000-0000 分段名），跳过" >&2
+    continue
+  fi
+
+  echo
+  echo "重跑: $seg_name (PDF 第 ${start_page} 页)"
+  rm -rf "$seg_dir"
+  mkdir -p "$seg_dir"
+
+  _api_arg=()
+  [[ -n "$api_url" ]] && _api_arg=(--api-url "$api_url")
+
+  # mineru uses 0-based page indices
+  if mineru \
+    -p "$pdf_path" \
+    -o "$seg_dir" \
+    -b "$backend" \
+    -m "$method" \
+    --effort "$effort" \
+    -l "$lang" \
+    -s "$((start_page - 1))" \
+    -e "$((end_page - 1))" \
+    "${_api_arg[@]}" >/dev/null 2>&1; then
+    # 检查生成了 md 文件
+    find_md="$(find "$seg_dir" -name "*.md" -type f | head -1)"
+    if [[ -n "$find_md" && -f "$find_md" ]]; then
+      cp "$find_md" "$seg_dir/${pdf_stem}.md"
+      echo "  ✓ 完成"
+      rerun_count=$((rerun_count + 1))
+    else
+      echo "  ✗ 完成但无 Markdown 输出" >&2
+    fi
+  else
+    echo "  ✗ 失败" >&2
+  fi
+done
+
+echo
+echo "重跑完成: $rerun_count 段"
+
+# 自动合并
+echo
+echo "=== 合并 ==="
+scripts/pdf-merge "$segments_dir"

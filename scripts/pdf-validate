@@ -79,6 +79,25 @@ def tokens(text: str) -> list[str]:
     # 连续英文数字作为词；中文按单字统计，适合发现 LCD 这类缺失。
     return re.findall(r"[a-z0-9]+|[一-鿿]", normalized)
 
+
+def dedup_lines(text: str) -> str:
+    """去掉 PDF 文本层中连续重复的行，避免重复行拉低覆盖率。
+
+    PDF 文本提取在某些文档中会出现标题/段落重复的现象（同一行出现两次），
+    导致分母虚高。这里只去连续相同行，保留非连续出现的相同行。
+    """
+    if not text:
+        return text
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return text
+    deduped = [lines[0]]
+    for i in range(1, len(lines)):
+        if lines[i] != lines[i - 1]:
+            deduped.append(lines[i])
+    return "\n".join(deduped)
+
+
 def segment_markdown(segment: Path) -> Path | None:
     mds = sorted(segment.rglob("*.md"))
     return mds[0] if mds else None
@@ -219,8 +238,8 @@ for start, end, segment in segments:
         continue
 
     original_parts = []
-    for page_idx in range(start, min(end + 1, doc.page_count)):
-        original_parts.append(doc[page_idx].get_text())
+    for page_idx in range(start - 1, min(end, doc.page_count)):
+        original_parts.append(dedup_lines(doc[page_idx].get_text()))
 
     original_text = "\n".join(original_parts)
     markdown_raw = md_path.read_text(encoding="utf-8", errors="replace")
@@ -281,14 +300,14 @@ for start, end, segment in segments:
         except Exception:
             cl_data = None
 
-    for page_idx in range(start, min(end + 1, doc.page_count)):
-        pdf_page_text = doc[page_idx].get_text()
+    for page_idx in range(start - 1, min(end, doc.page_count)):
+        pdf_page_text = dedup_lines(doc[page_idx].get_text())
         pdf_page_tokens = tokens(pdf_page_text)
 
         # 从 content_list_v2.json 提取该页的 Markdown 文本
         md_page_text = ""
         if cl_data is not None:
-            array_idx = page_idx - start
+            array_idx = page_idx - (start - 1)
             if array_idx < len(cl_data):
                 for item in cl_data[array_idx]:
                     texts = _extract_texts(item)
