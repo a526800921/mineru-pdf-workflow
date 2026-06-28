@@ -163,6 +163,74 @@ PDF_VALIDATE_JSON=1 scripts/pdf-validate \
 - 分段: `/Users/jafish/output/51a20d1c-8cd7-4e7b-9be1-7761b66a5208/uploads/demo20-output/segments/`
 - before JSON: `/tmp/validate-before.json`
 
+**目录页补充样例（用户反馈，2026-06-28）：**
+
+```text
+# PDF 文本层 (p0001, 第2页, 目录首页)
+后制动手柄 .................................................................................................................. 34
+左手把开关（根据配置） ............................................................................................. 35
+
+# MinerU Markdown
+.......34
+
+左手把开关（根据配置） ... .......35
+```
+
+p0001 页约 18 个目录条目，2 条完全丢失（"前言"→只剩 `.... 8`；"后制动手柄"→整行消失），其余条目保留但点线格式破损。该样例显示目录页不仅存在 PDF 文本层 token 计数膨胀，也可能存在目录条目标题真实丢失：`后制动手柄` 缺失，但页码 `34` 保留在上一行；`左手把开关（根据配置）` 保留但与点线和页码重排。后续目录页增强应优先验证目录条目标题是否存在，而不是关心点线或页码格式。
+
+## 后续增强候选
+
+### toc_entries JSON 扩展
+
+目录页应在 pdf-validate 输出中增加条目级验证字段，让 review.md 能逐条目报告缺失而非仅报"整页覆盖率低"。
+
+**候选页面级字段：**
+
+```json
+{
+  "page": 1,
+  "page_type": "toc",
+  "coverage": 0.46,
+  "toc_entries": [
+    {"title": "前言", "page_ref": 8, "found": false, "match_text": null},
+    {"title": "重要的注意事项", "page_ref": 10, "found": true, "match_text": "重要的注意事项 ....10"},
+    {"title": "后制动手柄", "page_ref": 34, "found": false, "match_text": null}
+  ],
+  "toc_stats": {"total": 18, "found": 16, "missing": 2, "partial": 0}
+}
+```
+
+**字段语义：**
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `toc_entries[].title` | string | 从 PDF 文本层抽取的目录条目标题 |
+| `toc_entries[].page_ref` | int | 目录条目指向的页码 |
+| `toc_entries[].found` | bool | 标题是否在 MinerU 输出中找到 |
+| `toc_entries[].match_text` | string\|null | 匹配到的文本片段，未找到时为 null |
+| `toc_stats.total` | int | 总条目数 |
+| `toc_stats.found` | int | 找到的条目数 |
+| `toc_stats.missing` | int | 完全丢失的条目数 |
+| `toc_stats.partial` | int | 部分匹配的条目数（仅页码或仅标题） |
+
+**TOC 条目抽取正则（候选）：**
+
+PDF 文本层中每行 TOC 条目通常匹配模式 `标题 + 连续点线 + 页码`：
+
+```python
+TOC_ENTRY_RE = re.compile(r"(.+?)\s*[.]{4,}\s*(\d+)")
+```
+
+该模式对单行条目有效；跨行条目（标题与点线/页码分两行）需额外合并逻辑。p0001 实测中约 80% 条目匹配此模式。
+
+**设计决策（待定）：**
+
+| 决策 | 选项 | 推荐 |
+|------|------|------|
+| 条目级验证是否改变页面决策 | 仅用于 review.md 展示 / 影响 review_only vs rerun | 初期仅展示 |
+| 修复策略 | 替换模式（PDF 文本全覆盖）/ 补全模式（仅补丢失条目） | 补全模式更安全 |
+| 跨行 TOC | 合并相邻行后匹配 / 单行匹配 | 先单行，再合并 |
+
 ### 实施步骤
 
 1. 对 `scripts/pdf-validate` 和 `scripts/pdf-auto` 执行 GitNexus 影响分析，报告直接调用方、受影响流程和风险级别。
@@ -183,6 +251,39 @@ PDF_VALIDATE_JSON=1 scripts/pdf-validate \
 | `image_or_sparse` | PDF 文本层 token 很少，content_list 图片元素占比高 | `review_only` |
 | `no_text_layer` | PDF 文本层为空 | `skip` |
 | `unknown` | 无法可靠分类 | 保持现有覆盖率判定 |
+
+## 目录页后续增强方案
+
+当前阶段已将目录页归为 `review_only`，避免无效 high 重跑。后续可以在此基础上增加条目级验证：
+
+1. 从 PDF 文本层抽取目录条目候选，识别“标题 + 页码”。
+2. 忽略点线、重复点号、断行和页码权重。
+3. 在 Markdown 或 content_list 文本中检查标题是否存在。
+4. 在 `review.md` 中列出缺失条目，而不是只提示整页覆盖率低。
+
+候选 JSON 扩展：
+
+```json
+{
+  "toc_entries": [
+    {
+      "title": "后制动手柄",
+      "page_ref": "34",
+      "present_in_markdown": false,
+      "decision": "review_only",
+      "reason": "toc_entry_title_missing"
+    },
+    {
+      "title": "左手把开关（根据配置）",
+      "page_ref": "35",
+      "present_in_markdown": true,
+      "decision": "pass"
+    }
+  ]
+}
+```
+
+如果目录页条目缺失频繁，可以进一步评估目录页后处理修复：从 PDF 文本层重建规范目录 Markdown，例如 `- 后制动手柄 34`。该修复会改变最终内容产物，必须作为单独阶段验证多级目录、跨行目录和多列目录。
 
 ## 验证方式
 
@@ -286,6 +387,8 @@ $ python3 scripts/check_plan_governance.py .
 |---|---|---|---|
 | content_list 表格字段是否稳定 | 先用真实样本固定字段，再写提取逻辑 | 是 | 待证据 |
 | 表格页默认 `review_only` 还是低阈值通过 | 初期 `review_only`，避免误放行 | 否 | 候选 |
+| 目录页是否需要条目级验证 | 建议后续增加标题级检查，忽略点线和页码权重 | 否 | 候选 |
+| 是否从 PDF 文本层重建目录页 Markdown | 仅在条目缺失频繁时作为单独增强实施 | 否 | 候选 |
 | 是否需要旧判定兼容开关 | 实施阶段评估，倾向保留短期环境变量 | 否 | 候选 |
 | review_only 是否允许合并 | 保持人工兜底清单语义，合并策略与现有 `pdf-auto` 一致 | 否 | 待确认 |
 
