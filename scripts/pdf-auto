@@ -219,6 +219,99 @@ PY
 if [[ "$action" == "merge" ]]; then
   merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/merged.md}"
   log "全部通过，开始合并..."
+
+  # --- TOC 段修复：用 PDF 文本层重生成目录页 Markdown ---
+  log "检查 TOC 页..."
+  python3 - "$pdf_path" "$segments_dir" "$validate_tmp" <<'PY'
+import json, re, sys
+from collections import OrderedDict
+from pathlib import Path
+
+try:
+    import fitz
+except Exception:
+    print("TOC 修复跳过：PyMuPDF 不可用", file=sys.stderr)
+    sys.exit(0)
+
+pdf_path = Path(sys.argv[1])
+segments_dir = Path(sys.argv[2])
+validate_tmp = sys.argv[3]
+
+with open(validate_tmp) as f:
+    report = json.load(f)
+
+# 找到所有 TOC 段
+toc_segs = []
+for seg in report["segments"]:
+    summary = seg.get("page_type_summary", {})
+    if summary.get("toc", 0) > 0:
+        toc_segs.append(seg)
+
+if not toc_segs:
+    sys.exit(0)
+
+doc = fitz.open(pdf_path)
+
+TITLE_DOTS = re.compile(r'^(\S.+?)\s*[.]{3,}\s*$')
+DOTS_NUM = re.compile(r'^\s*[.]{3,}\s*(\d+)\s*$')
+
+fixed_count = 0
+for seg in toc_segs:
+    seg_dir = segments_dir / seg["name"]
+    md_files = sorted(seg_dir.rglob("*.md"))
+    if not md_files:
+        continue
+    md_path = md_files[0]
+
+    # 从 PDF 文本层提取条目
+    pdf_lines = []
+    for p in range(seg["start_page"], min(seg["end_page"] + 1, doc.page_count)):
+        pdf_lines.append(doc[p].get_text())
+    pdf_text = "\n".join(pdf_lines)
+
+    lines = [l.strip() for l in pdf_text.strip().split('\n') if l.strip()]
+    entries = OrderedDict()
+
+    for i in range(len(lines) - 1):
+        title_m = TITLE_DOTS.match(lines[i])
+        num_m = DOTS_NUM.match(lines[i + 1])
+        if title_m and num_m:
+            title = title_m.group(1).strip()
+            page_ref = num_m.group(1)
+            if len(title) >= 2 and not title.isdigit():
+                entries[title] = int(page_ref)
+
+    if not entries:
+        continue
+
+    # 检查 MinerU 输出中缺失的条目
+    md_text = md_path.read_text(encoding="utf-8", errors="replace")
+    missing = [(t, p) for t, p in entries.items() if t not in md_text]
+
+    if missing:
+        print(f"  {seg['name']}: {len(missing)}/{len(entries)} 条目缺失，从 PDF 重建", file=sys.stderr)
+
+        # 生成干净 Markdown
+        new_md = [f"## 目录\n"]
+        current_first_char = None
+        for title, page_ref in entries.items():
+            # 按首字分组加空行（中文按拼音粗略分组）
+            first = title[0]
+            if current_first_char and first != current_first_char:
+                new_md.append("")
+            new_md.append(f"- {title} {page_ref}")
+            current_first_char = first
+
+        md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
+        fixed_count += 1
+    else:
+        print(f"  {seg['name']}: {len(entries)} 条目完整，跳过", file=sys.stderr)
+
+doc.close()
+if fixed_count:
+    print(f"TOC 修复: {fixed_count} 个段已从 PDF 重建", file=sys.stderr)
+PY
+
   log "合并输出: $merge_output"
   PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
 
@@ -510,6 +603,70 @@ if echo "$decision" | grep -q "^all_passed$"; then
 
   log
   log "=== 合并 ==="
+
+  # --- TOC 段修复 ---
+  python3 - "$pdf_path" "$segments_dir" "$validate2_tmp" <<'PY'
+import json, re, sys
+from collections import OrderedDict
+from pathlib import Path
+try:
+    import fitz
+except Exception:
+    sys.exit(0)
+pdf_path = Path(sys.argv[1])
+segments_dir = Path(sys.argv[2])
+with open(sys.argv[3]) as f:
+    report = json.load(f)
+toc_segs = [s for s in report["segments"] if s.get("page_type_summary", {}).get("toc", 0) > 0]
+if not toc_segs:
+    sys.exit(0)
+doc = fitz.open(pdf_path)
+TITLE_DOTS = re.compile(r'^(\S.+?)\s*[.]{3,}\s*$')
+DOTS_NUM = re.compile(r'^\s*[.]{3,}\s*(\d+)\s*$')
+fixed = 0
+for seg in toc_segs:
+    seg_dir = segments_dir / seg["name"]
+    md_files = sorted(seg_dir.rglob("*.md"))
+    if not md_files:
+        continue
+    md_path = md_files[0]
+    pdf_lines = []
+    for p in range(seg["start_page"], min(seg["end_page"] + 1, doc.page_count)):
+        pdf_lines.append(doc[p].get_text())
+    pdf_text = "\n".join(pdf_lines)
+    lines = [l.strip() for l in pdf_text.strip().split('\n') if l.strip()]
+    entries = OrderedDict()
+    for i in range(len(lines) - 1):
+        title_m = TITLE_DOTS.match(lines[i])
+        num_m = DOTS_NUM.match(lines[i + 1])
+        if title_m and num_m:
+            title = title_m.group(1).strip()
+            page_ref = num_m.group(1)
+            if len(title) >= 2 and not title.isdigit():
+                entries[title] = int(page_ref)
+    if not entries:
+        continue
+    md_text = md_path.read_text(encoding="utf-8", errors="replace")
+    missing = [(t, p) for t, p in entries.items() if t not in md_text]
+    if missing:
+        print(f"  {seg['name']}: {len(missing)}/{len(entries)} 条目缺失，从 PDF 重建", file=sys.stderr)
+        new_md = ["## 目录\n"]
+        cf = None
+        for title, page_ref in entries.items():
+            first = title[0]
+            if cf and first != cf:
+                new_md.append("")
+            new_md.append(f"- {title} {page_ref}")
+            cf = first
+        md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
+        fixed += 1
+    else:
+        print(f"  {seg['name']}: {len(entries)} 条目完整，跳过", file=sys.stderr)
+doc.close()
+if fixed:
+    print(f"TOC 修复: {fixed} 个段已从 PDF 重建", file=sys.stderr)
+PY
+
   PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
   log "合并完成: $merge_output"
 
