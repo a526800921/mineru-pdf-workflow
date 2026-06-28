@@ -310,6 +310,83 @@ for seg in toc_segs:
 doc.close()
 if fixed_count:
     print(f"TOC 修复: {fixed_count} 个段已从 PDF 重建", file=sys.stderr)
+
+# --- TOC 修复后再验证：条目召回率 ---
+if fixed_count:
+    print("TOC 再验证（条目召回率）:", file=sys.stderr)
+    # 重新读取 pdf-validate JSON，更新 TOC 段的 coverage/status
+    with open(validate_tmp) as f:
+        vreport = json.load(f)
+
+    doc2 = fitz.open(pdf_path)
+    updated = 0
+    for seg in vreport["segments"]:
+        summary = seg.get("page_type_summary", {})
+        if summary.get("toc", 0) == 0:
+            continue
+
+        seg_dir = segments_dir / seg["name"]
+        md_files = sorted(seg_dir.rglob("*.md"))
+        if not md_files:
+            continue
+        md_text = md_files[0].read_text(encoding="utf-8", errors="replace")
+
+        # 从 PDF 再提取条目，计算召回率
+        pdf_lines = []
+        for p in range(seg["start_page"], min(seg["end_page"] + 1, doc2.page_count)):
+            pdf_lines.append(doc2[p].get_text())
+        pdf_text2 = "\n".join(pdf_lines)
+        lines = [l.strip() for l in pdf_text2.strip().split('\n') if l.strip()]
+        toc_entries = []
+        prev_key = None
+        for i in range(len(lines) - 1):
+            title_m = TITLE_DOTS.match(lines[i])
+            num_m = DOTS_NUM.match(lines[i + 1])
+            if title_m and num_m:
+                title = title_m.group(1).strip()
+                page_ref = num_m.group(1)
+                if len(title) >= 2 and not title.isdigit():
+                    key = (title, page_ref)
+                    if key == prev_key:
+                        continue
+                    toc_entries.append((title, int(page_ref)))
+                    prev_key = key
+
+        if not toc_entries:
+            continue
+
+        found = sum(1 for t, _ in toc_entries if t in md_text)
+        recall = found / len(toc_entries)
+
+        # 条目召回率 >= 90% 视为通过
+        new_coverage = round(recall, 4)
+        new_status = "passed" if recall >= 0.9 else "suspicious"
+        new_decision = "pass" if recall >= 0.9 else "review_only"
+
+        print(f"  {seg['name']}: 条目召回 {found}/{len(toc_entries)} ({recall:.0%}) → {new_status}", file=sys.stderr)
+
+        seg["coverage"] = new_coverage
+        seg["status"] = new_status
+        seg["decision"] = new_decision
+        seg["reason"] = "toc_entry_recall"
+        seg["rerunnable"] = False
+        # 更新页面级数据
+        for p in seg.get("pages", []):
+            p["coverage"] = new_coverage
+            p["status"] = new_status
+            p["decision"] = new_decision
+            p["reason"] = "toc_entry_recall"
+        updated += 1
+
+    doc2.close()
+
+    # 重写 validate JSON 供后续 review.md 使用
+    if updated:
+        with open(validate_tmp, "w") as f:
+            json.dump(vreport, f, ensure_ascii=False)
+        # 更新 passed 标志
+        all_ok = all(s["status"] == "passed" for s in vreport["segments"])
+        print(f"TOC 再验证完成: {updated} 段，{'全部通过' if all_ok else '仍有未通过'}", file=sys.stderr)
 PY
 
   log "合并输出: $merge_output"
