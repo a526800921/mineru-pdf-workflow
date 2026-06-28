@@ -189,17 +189,23 @@ report = json.loads(content)
 
 segments = report["segments"]
 ok_count = sum(1 for s in segments if s["status"] == "passed")
-suspicious = [s for s in segments if s["status"] == "suspicious"]
+rerunnable = [s for s in segments if s.get("rerunnable", False)]
+review_only = [s for s in segments if s.get("decision") == "review_only"]
 
 print(f"通过: {ok_count} 段", file=sys.stderr)
-print(f"可疑: {len(suspicious)} 段", file=sys.stderr)
+print(f"需重跑: {len(rerunnable)} 段", file=sys.stderr)
+if review_only:
+    print(f"需人工复核: {len(review_only)} 段", file=sys.stderr)
 
-if not suspicious:
+if not rerunnable:
     for s in segments:
-        print(f"  [{s['status']}] {s['name']}: 覆盖率 {s.get('coverage', 'N/A')}", file=sys.stderr)
+        decision = s.get("decision", s.get("status", "?"))
+        reason = s.get("reason", "")
+        note = f" ({reason})" if reason else ""
+        print(f"  [{decision}] {s['name']}: 覆盖率 {s.get('coverage', 'N/A')}{note}", file=sys.stderr)
     print("merge")
 else:
-    for s in suspicious:
+    for s in rerunnable:
         print(f"  需重跑: {s['name']} (覆盖率 {s.get('coverage', 'N/A')})", file=sys.stderr)
     print("rerun")
 PY
@@ -215,8 +221,117 @@ if [[ "$action" == "merge" ]]; then
   log "全部通过，开始合并..."
   log "合并输出: $merge_output"
   PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
+
+  # 检查是否有 review_only 段，生成人工复核清单
+  review_count="$(python3 -c "
+import json
+with open('$validate_tmp') as f:
+    report = json.load(f)
+review_only = [s for s in report['segments'] if s.get('decision') == 'review_only']
+print(len(review_only))
+")"
+  review_output=""
+  if [[ "$review_count" -gt 0 ]]; then
+    review_output="$(dirname "$segments_dir")/review.md"
+    log "存在 ${review_count} 个需人工复核段，生成: $review_output"
+    python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate_tmp" "" <<'PY'
+import json, sys
+from datetime import datetime
+from pathlib import Path
+
+threshold = float(sys.argv[1])
+pdf_path = sys.argv[2]
+segments_dir = sys.argv[3]
+review_path = sys.argv[4]
+
+with open(sys.argv[5]) as f:
+    report = json.load(f)
+
+issues = [s for s in report["segments"] if s.get("decision") in ("review_only", "rerun") or s["status"] in ("failed", "skipped")]
+
+lines = []
+lines.append("# 人工兜底清单")
+lines.append("")
+lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+lines.append(f"原始 PDF: {pdf_path}")
+lines.append(f"分段目录: {segments_dir}")
+lines.append(f"阈值: {threshold}")
+lines.append("")
+lines.append("## 需人工复核分段")
+lines.append("")
+lines.append("| 分段 | 页码范围 | 覆盖率 | 处理建议 | 原因 |")
+lines.append("|------|----------|--------|----------|------|")
+
+for seg in issues:
+    pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    cov = f"{seg['coverage']:.2f}" if seg.get("coverage") is not None else "-"
+    decision = seg.get("decision", seg["status"])
+    reason = seg.get("reason", "")
+    status = seg["status"]
+
+    if decision == "review_only":
+        page_type_summary = seg.get("page_type_summary", {})
+        type_desc = ", ".join(f"{t}({c})" for t, c in page_type_summary.items() if c > 0)
+        action = "人工复核（不重跑）"
+        note = f"页面类型: {type_desc}" if type_desc else reason
+    elif decision == "rerun":
+        action = "需重跑"
+        note = f"high 重跑后仍未通过阈值 {threshold}"
+    elif status == "failed" and reason == "missing_markdown":
+        action = "需检查"
+        note = "mineru 运行成功但未生成 Markdown 文件"
+    elif status == "skipped" and reason == "no_text_layer":
+        action = "已跳过"
+        note = "原 PDF 文本层为空，无法验证"
+    else:
+        action = "需复核"
+        note = f"{decision}: {reason}" if reason else decision
+
+    lines.append(f"| {seg['name']} | {pages} | {cov} | {action} | {note} |")
+
+lines.append("")
+
+# 逐页详情
+for seg in issues:
+    pages_data = seg.get("pages", [])
+    if not pages_data:
+        continue
+
+    seg_pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    lines.append(f"## {seg['name']} 逐页详情（PDF 第 {seg_pages} 页）")
+    lines.append("")
+    lines.append("| PDF 页码 | 覆盖率 | 页面类型 | 处理决策 | PDF token | MD token | 缺失较多的词 |")
+    lines.append("|----------|--------|----------|----------|-----------|----------|-------------|")
+
+    for p in pages_data:
+        cov = p.get("coverage")
+        if cov is None:
+            continue
+
+        pdf_page_num = p["page"] + 1
+        cov_str = f"{cov:.2f}"
+        flag = " ⚠️" if cov < threshold else ""
+        page_type = p.get("page_type", "?")
+        page_decision = p.get("decision", "?")
+        missing = ", ".join(
+            f"{t}({c})" for t, c in p.get("missing_tokens", [])[:5]
+        )
+        if not missing:
+            missing = "—"
+
+        lines.append(
+            f"| {pdf_page_num}{flag} | {cov_str} | {page_type} | {page_decision} | {p['pdf_tokens']} | {p['md_tokens']} | {missing} |"
+        )
+
+    lines.append("")
+
+Path(review_path).write_text("\n".join(lines), encoding="utf-8")
+print(f"人工兜底清单已生成: {review_path}", file=sys.stderr)
+PY
+  fi
+
   if [[ "$json_mode" == "1" ]]; then
-    emit_json "all_passed" 0 "$merge_output" "" "$validate_tmp"
+    emit_json "all_passed" 0 "$merge_output" "$review_output" "$validate_tmp"
   fi
   exit 0
 fi
@@ -227,12 +342,12 @@ if [[ "$action" == "rerun" ]]; then
   log
   log "=== 重跑可疑段（effort=${rerun_effort}） ==="
 
-  # Extract suspicious segment names from JSON
+  # Extract rerunnable segment names from JSON (阶段 4：只重跑 rerunnable==true 的段)
   rerun_names="$(cat "$validate_tmp" | python3 -c "
 import json, sys
 report = json.loads(sys.stdin.read())
 for s in report['segments']:
-    if s['status'] == 'suspicious':
+    if s.get('rerunnable', False):
         print(s['name'])
 ")"
 
@@ -333,12 +448,23 @@ report = json.loads(content)
 threshold = float(sys.argv[1])
 
 segments = report["segments"]
-all_ok = all(s["status"] == "passed" for s in segments)
-issues = [s for s in segments if s["status"] in ("suspicious", "failed", "skipped")]
+rerunnable_remaining = [s for s in segments if s.get("rerunnable", False)]
+issues = [s for s in segments if s.get("decision") in ("rerun", "review_only")]
+all_ok = len(rerunnable_remaining) == 0
 
 for s in segments:
-    label = "通过" if s["status"] == "passed" else f"可疑(覆盖率 {s.get('coverage', 'N/A')})"
-    print(f"  [{s['status']}] {s['name']}: {label}", file=sys.stderr)
+    decision = s.get("decision", s["status"])
+    reason = s.get("reason", "")
+    cov = s.get('coverage', 'N/A')
+    note = f" ({reason})" if reason else ""
+    label_map = {
+        "pass": "通过",
+        "rerun": "需重跑",
+        "review_only": "需人工复核",
+        "skip": "已跳过",
+    }
+    label = label_map.get(decision, decision)
+    print(f"  [{decision}] {s['name']}: {label} — 覆盖率 {cov}{note}", file=sys.stderr)
 
 if all_ok:
     print("all_passed")
@@ -346,7 +472,7 @@ else:
     for s in issues:
         reason = s.get("reason", "")
         cov = s.get("coverage", "N/A")
-        print(f"ISSUE:{s['name']}:{s['status']}:{reason}:{cov}")
+        print(f"ISSUE:{s['name']}:{s.get('decision', s['status'])}:{reason}:{cov}")
     print("has_issues")
 PY
 )" || {
@@ -416,7 +542,8 @@ with open(sys.argv[5]) as f:
 rerun_failures_str = sys.argv[6] if len(sys.argv) > 6 else ""
 rerun_failures = set(rerun_failures_str.split()) if rerun_failures_str.strip() else set()
 
-issues = [s for s in report["segments"] if s["status"] in ("suspicious", "failed", "skipped")]
+# 收集需人工复核的段（review_only、rerun 失败、failed、skipped）
+issues = [s for s in report["segments"] if s.get("decision") in ("review_only", "rerun") or s["status"] in ("failed", "skipped")]
 
 lines = []
 lines.append("# 人工兜底清单")
@@ -426,30 +553,41 @@ lines.append(f"原始 PDF: {pdf_path}")
 lines.append(f"分段目录: {segments_dir}")
 lines.append(f"阈值: {threshold}")
 lines.append("")
-lines.append("## 可疑分段（需人工核对）")
+lines.append("## 需复核分段")
 lines.append("")
-lines.append("| 分段 | 页码范围 | 覆盖率 | 备注 |")
-lines.append("|------|----------|--------|------|")
+lines.append("| 分段 | 页码范围 | 覆盖率 | 处理建议 | 原因 |")
+lines.append("|------|----------|--------|----------|------|")
 
 for seg in issues:
     pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
     cov = f"{seg['coverage']:.2f}" if seg.get("coverage") is not None else "-"
 
-    status = seg["status"]
+    decision = seg.get("decision", seg["status"])
     reason = seg.get("reason", "")
+    status = seg["status"]
 
     if seg['name'] in rerun_failures:
-        note = "重跑失败（mineru 退出非0），使用原始 medium 结果"
-    elif status == "suspicious":
+        action = "重跑失败，使用原始结果"
+        note = "mineru 退出非0"
+    elif decision == "review_only":
+        page_type_summary = seg.get("page_type_summary", {})
+        type_desc = ", ".join(f"{t}({c})" for t, c in page_type_summary.items() if c > 0)
+        action = "人工复核（不重跑）"
+        note = f"页面类型: {type_desc}" if type_desc else reason
+    elif decision == "rerun":
+        action = "需重跑"
         note = f"high 重跑后仍未通过阈值 {threshold}"
     elif status == "failed" and reason == "missing_markdown":
+        action = "需检查"
         note = "mineru 运行成功但未生成 Markdown 文件"
     elif status == "skipped" and reason == "no_text_layer":
+        action = "已跳过"
         note = "原 PDF 文本层为空，无法验证"
     else:
-        note = f"{status}: {reason}" if reason else status
+        action = "需复核"
+        note = f"{decision}: {reason}" if reason else decision
 
-    lines.append(f"| {seg['name']} | {pages} | {cov} | {note} |")
+    lines.append(f"| {seg['name']} | {pages} | {cov} | {action} | {note} |")
 
 lines.append("")
 

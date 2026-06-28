@@ -83,6 +83,62 @@ def segment_markdown(segment: Path) -> Path | None:
     mds = sorted(segment.rglob("*.md"))
     return mds[0] if mds else None
 
+
+# --- 页面类型检测（阶段 3） ---
+def list_content_types(content_list_page: list) -> set[str]:
+    """提取 content_list_v2.json 单页中所有元素的 type 集合。"""
+    types = set()
+    for item in (content_list_page or []):
+        if isinstance(item, dict):
+            types.add(item.get("type", "unknown"))
+    return types
+
+
+# TOC 特征：PDF 文本中包含大量点线 + 页码组合的短行
+_TOC_PATTERN = re.compile(r"[.]{4,}\s*\d+")
+# 表格特征：Markdown 表格行
+_TABLE_PATTERN = re.compile(r"^\|.+\|$", re.MULTILINE)
+
+
+def detect_page_type(
+    pdf_page_text: str,
+    cl_page: list | None,
+    md_text: str,
+    pdf_token_count: int,
+) -> str:
+    """根据 PDF 文本特征和 content_list 元素类型判断页面类型。
+
+    优先级：no_text_layer > toc > image_or_sparse > table > text > unknown
+    """
+    # 1. 无文本层
+    if not pdf_page_text.strip() or pdf_token_count == 0:
+        return "no_text_layer"
+
+    # 2. 目录页检测：PDF 文本包含大量点线+页码模式，或标题含"目录"且元素很少
+    cl_types = list_content_types(cl_page[0] if cl_page and isinstance(cl_page, list) and len(cl_page) > 0 else None)
+    cl_elem_count = len(cl_page[0]) if cl_page and isinstance(cl_page, list) and len(cl_page) > 0 else 0
+    toc_lines = len(_TOC_PATTERN.findall(pdf_page_text))
+    has_toc_title = "目录" in pdf_page_text or "目錄" in pdf_page_text
+
+    if toc_lines >= 3 or (has_toc_title and cl_elem_count <= 5 and pdf_token_count > 50):
+        return "toc"
+
+    # 3. 图片/稀疏页检测：content_list 含 image 元素，或 PDF token 极少
+    if "image" in cl_types or pdf_token_count < 15:
+        return "image_or_sparse"
+
+    # 4. 表格页检测：content_list 含 table 元素，或 Markdown 含表格语法
+    if "table" in cl_types or bool(_TABLE_PATTERN.search(md_text)):
+        return "table"
+
+    # 5. 纯文字页：PDF token 足够多
+    if pdf_token_count >= 30:
+        return "text"
+
+    # 6. 兜底
+    return "unknown"
+
+
 doc = fitz.open(pdf_path)
 
 segments = []
@@ -119,7 +175,10 @@ for start, end, segment in segments:
             "end_page": end,
             "coverage": None,
             "status": "failed",
+            "decision": "review_only",
+            "rerunnable": False,
             "reason": "missing_markdown",
+            "page_type_summary": {"text": 0, "toc": 0, "table": 0, "image_or_sparse": 0, "no_text_layer": 0, "unknown": 0},
             "missing_tokens": [],
             "markdown_path": None,
             "pages": [],
@@ -144,7 +203,10 @@ for start, end, segment in segments:
             "end_page": end,
             "coverage": None,
             "status": "skipped",
+            "decision": "skip",
+            "rerunnable": False,
             "reason": "no_text_layer",
+            "page_type_summary": {"text": 0, "toc": 0, "table": 0, "image_or_sparse": 0, "no_text_layer": 1, "unknown": 0},
             "missing_tokens": [],
             "markdown_path": str(md_path),
             "pages": [],
@@ -230,21 +292,89 @@ for start, end, segment in segments:
             page_cov = None
             page_missing = []
 
+        # --- 页面类型检测与处理决策（阶段 3） ---
+        cl_page = cl_data[array_idx] if (cl_data is not None and array_idx < len(cl_data)) else None
+        page_type = detect_page_type(pdf_page_text, cl_data[array_idx:array_idx+1] if cl_data else None, md_page_text, len(pdf_page_tokens))
+
+        # 基于页面类型和覆盖率确定处理决策
+        if cl_data is None:
+            page_decision = "pass"
+            page_reason = "no_content_list"
+            page_rerunnable = False
+        elif page_type == "no_text_layer":
+            page_decision = "skip"
+            page_reason = "no_text_layer"
+            page_rerunnable = False
+        elif page_type in ("toc", "image_or_sparse", "table"):
+            # 目录页、图片稀疏页、表格页 → 人工复核，不触发 high 重跑
+            page_decision = "review_only"
+            page_reason = f"{page_type}_page"
+            page_rerunnable = False
+        elif page_cov is None:
+            page_decision = "skip"
+            page_reason = "pdf_page_empty"
+            page_rerunnable = False
+        elif page_cov >= threshold:
+            page_decision = "pass"
+            page_reason = "coverage_ok"
+            page_rerunnable = False
+        else:
+            # 纯文字页或未知页 → 低覆盖率时仍可重跑
+            page_decision = "rerun"
+            page_reason = "low_text_coverage"
+            page_rerunnable = True
+
         pages_data.append({
             "page": page_idx,
             "coverage": round(page_cov, 4) if page_cov is not None else None,
             "status": "suspicious" if (page_cov is not None and page_cov < threshold) else "passed",
+            "page_type": page_type,
+            "decision": page_decision,
+            "reason": page_reason,
+            "rerunnable": page_rerunnable,
             "pdf_tokens": len(pdf_page_tokens),
             "md_tokens": len(md_page_tokens),
             "missing_tokens": [[t, c] for t, c in page_missing[:10]],
         })
+
+    # --- 段级汇总：基于页面类型更新决策（阶段 3） ---
+    seg_status = "suspicious" if coverage < threshold else "passed"
+    seg_rerunnable = any(p.get("rerunnable", False) for p in pages_data)
+    any_review_only = any(p.get("decision") == "review_only" for p in pages_data)
+
+    # 段级决策：仅当有 rerunnable 页面时才触发重跑
+    if seg_rerunnable:
+        seg_decision = "rerun"
+        seg_reason = "low_text_coverage"
+    elif any_review_only and coverage < threshold:
+        seg_decision = "review_only"
+        seg_reason = "review_only_pages"
+    elif coverage < threshold:
+        seg_decision = "review_only"
+        seg_reason = "non_rerunnable_low_coverage"
+    else:
+        seg_decision = "pass"
+        seg_reason = "coverage_ok"
+
+    # 页面类型计数
+    page_type_summary = {"text": 0, "toc": 0, "table": 0, "image_or_sparse": 0, "no_text_layer": 0, "unknown": 0}
+    for p in pages_data:
+        pt = p.get("page_type", "unknown")
+        if pt in page_type_summary:
+            page_type_summary[pt] += 1
+        else:
+            page_type_summary["unknown"] += 1
 
     results.append({
         "name": segment.name,
         "start_page": start,
         "end_page": end,
         "coverage": round(coverage, 4),
-        "status": "suspicious" if coverage < threshold else "passed",
+        "status": seg_status,
+        "decision": seg_decision,
+        "rerunnable": seg_rerunnable,
+        "reason": seg_reason,
+        "page_type_summary": page_type_summary,
         "missing_tokens": [[t, c] for t, c in missing_common[:20]],
         "markdown_path": str(md_path),
         "pages": pages_data,

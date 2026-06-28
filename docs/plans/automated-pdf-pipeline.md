@@ -43,6 +43,7 @@
 - `scripts/pdf-merge`
 - `scripts/pdf-validate`
 - `docs/PLAN_MAP.md`
+- `docs/plans/coverage-validation-optimization.md`
 - `docs/plans/minimal-automation-runbook.md`
 - `mcp/README.md`
 - `docs/adr/0001-cli-first-mcp-ready.md`
@@ -73,10 +74,15 @@
 | 阶段 4 | MCP 接入准备 | CLI 契约稳定 | MCP 工具契约和脚本输出对齐 | 已完成 |
 | 阶段 5 | MCP server 最小实现 | `PDF_AUTO_JSON=1` 可用且工具边界已固定 | `run_pdf_auto` 返回结构化结果 | 已完成 |
 | 阶段 6 | MCP 端到端验收与运行手册固化 | 阶段 5 已完成 | Claude Code 通过 MCP 跑通真实样本并覆盖主要返回路径 | 已完成 |
+| 阶段 7 | 覆盖率验证口径优化 | 阶段 6 已完成，存在无效 high 重跑样本 | 区分可重跑问题和仅需人工复核问题 | 已完成 |
 
 ## 当前阶段
 
-阶段 6 已完成。阶段 7 候选事项已整理，尚未排入路线图。
+阶段 7 已完成（2026-06-28）。专项计划为 [覆盖率验证口径优化](coverage-validation-optimization.md)。主要成果：
+- `pdf-validate` 新增 `page_type`、`decision`、`rerunnable`、`reason`、`page_type_summary` 字段
+- `pdf-auto` 改为只重跑 `rerunnable == true` 的段
+- demo20 样本无效 high 重跑从 9 降为 0
+- 验收证据见 [覆盖率验证口径优化验收记录](coverage-validation-optimization.md#验收记录2026-06-28)
 
 ### 阶段 3 完成证据
 
@@ -123,6 +129,17 @@
 - 阶段 7 候选事项已整理（拆分式工具、无文本层 PDF、OCR/VLM、批量处理）。
 - 计划治理检查通过。
 
+### 阶段 7 设计入口
+
+阶段 7 聚焦覆盖率验证口径，不改变 MCP 第一版工具边界。事实源见 [覆盖率验证口径优化计划](coverage-validation-optimization.md)。
+
+阶段 7 的核心方向：
+
+- 将低覆盖问题区分为 `rerun` 和 `review_only`。
+- 只对可能被 high 重跑修复的文本页低覆盖触发重跑。
+- 目录页、图片稀疏页和初期表格页优先进入人工复核清单。
+- 保持 `PDF_VALIDATE_JSON=1` 与 `PDF_AUTO_JSON=1` 向后兼容。
+
 
 
 ## 未决问题
@@ -130,6 +147,7 @@
 | 问题 | 推荐方案 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|
 | 无文本层 PDF 如何验证 | 后续增加 OCR/VLM 对照验证策略 | 否 | 已延后 |
+| 覆盖率低页面触发无效 high 重跑 | 阶段 7 区分 `rerun` 与 `review_only`，只重跑可修复段 | 否 | 设计中 |
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
 | `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 否 | 已完成 |
 | MCP server 尚未实现 | 阶段 5 已实现，`mcp/server/` 项目已就绪 | 否 | 已解决 |
@@ -142,6 +160,7 @@
 - `high` 不一定修复所有单字符错误。
 - MinerU 中间输出结构可能随版本变化。
 - 分段合并可能在跨页表格、跨页段落处产生断裂。
+- 页面类型分类如果过于激进，可能把真实解析缺失误归为人工复核问题。
 
 回滚：
 
@@ -149,10 +168,12 @@
 - 每段输出独立保存，可以删除单个分段后重跑。
 - 合并文件可重新生成，不作为唯一源数据。
 - JSON 输出开关必须不影响默认人类可读输出。
+- 阶段 7 必须保留旧 JSON 字段语义，新增字段采用向后兼容方式。
 
 ## 关联 ADR、迁移、spec 或 issue
 
 - [ADR 0001：先 CLI 固化，再 MCP 接入](../adr/0001-cli-first-mcp-ready.md)
+- [覆盖率验证口径优化计划](coverage-validation-optimization.md)
 - [MCP 接入设计](../../mcp/README.md)
 - [superpowers pdf-auto 实施记录](../superpowers/plans/2026-06-27-pdf-auto-plan.md)
 - [superpowers pdf-auto JSON 模式实施记录](../superpowers/plans/2026-06-28-pdf-auto-json-mode-plan.md)

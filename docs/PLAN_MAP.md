@@ -16,7 +16,8 @@
 
 | 计划 | 状态 | 当前阶段 | 依赖 | 证据 |
 |---|---|---|---|---|
-| [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 待实施 | 阶段 7（候选） | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [完成证据](plans/automated-pdf-pipeline.md#阶段-6-完成证据) |
+| [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 待实施 | 阶段 7：覆盖率验证口径优化 | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [完成证据](plans/automated-pdf-pipeline.md#阶段-6-完成证据) |
+| [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
@@ -24,7 +25,8 @@
 ## 推荐顺序
 
 1. `automated-pdf-pipeline`
-2. `minimal-automation-runbook`
+2. `coverage-validation-optimization`
+3. `minimal-automation-runbook`
 
 ## 依赖关系
 
@@ -32,6 +34,8 @@
 |---|---|---|
 | automated-pdf-pipeline | MinerU CLI | 实际解析由 MinerU 执行 |
 | automated-pdf-pipeline | PDF 文本层 | 当前验证策略依赖原 PDF 文本抽取 |
+| coverage-validation-optimization | automated-pdf-pipeline | 作为自动化流水线阶段 7，优化验证和重跑策略 |
+| coverage-validation-optimization | `content_list_v2.json` | 页面类型识别和结构化文本提取依赖 MinerU 中间结构 |
 | minimal-automation-runbook | automated-pdf-pipeline | 执行手册描述流水线当前可用子集 |
 
 ## 替代、合并和废弃
@@ -48,10 +52,12 @@
 | `pdf-validate` 暂未输出 JSON | 已实现 `PDF_VALIDATE_JSON=1` | MCP 自动调度重跑前需要机器可读报告 | 否 | 已解决 |
 | MCP server 尚未实现 | 已实现 `mcp/server/`，运行手册和排障清单已就绪 | Claude Code 现已可通过 MCP 调用 PDF 流水线 | 否 | 已解决 |
 | 阶段 6 验收未执行 | 已完成三类路径验证和手册固化 | 运行手册可被后续会话按步骤复现 | 否 | 已解决 |
+| 覆盖率低页面触发无效 high 重跑 | 已实现：区分 `rerun` 与 `review_only`，只重跑可修复段 | `pdf-validate`、`pdf-auto`、MCP 诊断输出 | 否 | 已解决 |
 
 ## 完成证据
 
 | 计划 | 阶段 | 证据 |
 |---|---|---|
 | automated-pdf-pipeline | 阶段 1-6 | 详见 [自动化 PDF 解析流水线计划](plans/automated-pdf-pipeline.md#阶段-6-完成证据) |
+| coverage-validation-optimization | 阶段 0-5 | 详见 [覆盖率验证口径优化计划](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |
