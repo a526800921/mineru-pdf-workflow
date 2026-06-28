@@ -272,6 +272,8 @@ for seg in toc_segs:
     lines = [l.strip() for l in pdf_text.strip().split('\n') if l.strip()]
     entries = OrderedDict()
 
+    entries = []  # list of (title, page_ref)
+    prev_key = None
     for i in range(len(lines) - 1):
         title_m = TITLE_DOTS.match(lines[i])
         num_m = DOTS_NUM.match(lines[i + 1])
@@ -279,33 +281,31 @@ for seg in toc_segs:
             title = title_m.group(1).strip()
             page_ref = num_m.group(1)
             if len(title) >= 2 and not title.isdigit():
-                entries[title] = int(page_ref)
+                # 去相邻完全重复（PDF 排版导致同一行出现两次），
+                # 同名但不同页码的条目保留（如"左手把开关 35"和"左手把开关 36"）
+                key = (title, page_ref)
+                if key == prev_key:
+                    continue
+                entries.append((title, int(page_ref)))
+                prev_key = key
 
     if not entries:
         continue
 
-    # 检查 MinerU 输出中缺失的条目
-    md_text = md_path.read_text(encoding="utf-8", errors="replace")
-    missing = [(t, p) for t, p in entries.items() if t not in md_text]
+    print(f"  {seg['name']}: {len(entries)} 条目，从 PDF 重建", file=sys.stderr)
 
-    if missing:
-        print(f"  {seg['name']}: {len(missing)}/{len(entries)} 条目缺失，从 PDF 重建", file=sys.stderr)
+    # 生成干净 Markdown
+    new_md = [f"## 目录\n"]
+    current_first_char = None
+    for title, page_ref in entries:
+        first = title[0]
+        if current_first_char and first != current_first_char:
+            new_md.append("")
+        new_md.append(f"- {title} {page_ref}")
+        current_first_char = first
 
-        # 生成干净 Markdown
-        new_md = [f"## 目录\n"]
-        current_first_char = None
-        for title, page_ref in entries.items():
-            # 按首字分组加空行（中文按拼音粗略分组）
-            first = title[0]
-            if current_first_char and first != current_first_char:
-                new_md.append("")
-            new_md.append(f"- {title} {page_ref}")
-            current_first_char = first
-
-        md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
-        fixed_count += 1
-    else:
-        print(f"  {seg['name']}: {len(entries)} 条目完整，跳过", file=sys.stderr)
+    md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
+    fixed_count += 1
 
 doc.close()
 if fixed_count:
@@ -635,7 +635,8 @@ for seg in toc_segs:
         pdf_lines.append(doc[p].get_text())
     pdf_text = "\n".join(pdf_lines)
     lines = [l.strip() for l in pdf_text.strip().split('\n') if l.strip()]
-    entries = OrderedDict()
+    entries = []  # list of (title, page_ref)
+    prev_key = None
     for i in range(len(lines) - 1):
         title_m = TITLE_DOTS.match(lines[i])
         num_m = DOTS_NUM.match(lines[i + 1])
@@ -643,25 +644,24 @@ for seg in toc_segs:
             title = title_m.group(1).strip()
             page_ref = num_m.group(1)
             if len(title) >= 2 and not title.isdigit():
-                entries[title] = int(page_ref)
+                key = (title, page_ref)
+                if key == prev_key:
+                    continue
+                entries.append((title, int(page_ref)))
+                prev_key = key
     if not entries:
         continue
-    md_text = md_path.read_text(encoding="utf-8", errors="replace")
-    missing = [(t, p) for t, p in entries.items() if t not in md_text]
-    if missing:
-        print(f"  {seg['name']}: {len(missing)}/{len(entries)} 条目缺失，从 PDF 重建", file=sys.stderr)
-        new_md = ["## 目录\n"]
-        cf = None
-        for title, page_ref in entries.items():
-            first = title[0]
-            if cf and first != cf:
-                new_md.append("")
-            new_md.append(f"- {title} {page_ref}")
-            cf = first
-        md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
-        fixed += 1
-    else:
-        print(f"  {seg['name']}: {len(entries)} 条目完整，跳过", file=sys.stderr)
+    print(f"  {seg['name']}: {len(entries)} 条目，从 PDF 重建", file=sys.stderr)
+    new_md = ["## 目录\n"]
+    cf = None
+    for title, page_ref in entries:
+        first = title[0]
+        if cf and first != cf:
+            new_md.append("")
+        new_md.append(f"- {title} {page_ref}")
+        cf = first
+    md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
+    fixed += 1
 doc.close()
 if fixed:
     print(f"TOC 修复: {fixed} 个段已从 PDF 重建", file=sys.stderr)
