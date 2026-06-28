@@ -200,24 +200,28 @@ echo "  manifest: $manifest_path"
 # --- 重启 mineru-api 释放 VLM 累积内存 ---
 _restart="${MINERU_API_RESTART:-1}"
 if [[ "$_restart" == "1" ]]; then
+  set +e
   _api_pid="$(lsof -i ":${MINERU_API_BASE_PORT:-9000}" -sTCP:LISTEN -t 2>/dev/null | head -1)"
   if [[ -n "$_api_pid" ]]; then
-    _api_cmd="$(ps -o args= -p "$_api_pid" 2>/dev/null)"
+    _api_port="${MINERU_API_BASE_PORT:-9000}"
     echo
     echo "=== 重启 mineru-api（释放内存） ==="
     kill "$_api_pid" 2>/dev/null
-    # 等待端口释放
     for _i in $(seq 1 30); do
-      if ! lsof -i ":${MINERU_API_BASE_PORT:-9000}" -sTCP:LISTEN >/dev/null 2>&1; then
+      if ! lsof -i ":$_api_port" -sTCP:LISTEN >/dev/null 2>&1; then
         break
       fi
       sleep 0.5
     done
     sleep 1
-    # 重启
-    if [[ -n "$_api_cmd" ]]; then
-      nohup $_api_cmd >/dev/null 2>&1 &
-      echo "mineru-api 已重启 (PID $!)"
-    fi
+    echo "mineru-api 已停，请在终端输入 pdf 重启服务"
   fi
+  # 清理 mineru-api 临时产物
+  _script_dir="$(cd "$(dirname "$0")" && pwd)"
+  _project_root="$(dirname "$_script_dir")"
+  if [[ -d "$_project_root/output" ]]; then
+    rm -rf "$_project_root/output"
+    echo "已清理 mineru-api 临时目录"
+  fi
+  set -e
 fi

@@ -155,6 +155,14 @@ done
 echo
 echo "重跑完成: $rerun_count 段"
 
+# 清理 mineru-api 临时产物
+_script_dir="$(cd "$(dirname "$0")" && pwd)"
+_project_root="$(dirname "$_script_dir")"
+if [[ -d "$_project_root/output" ]]; then
+  rm -rf "$_project_root/output"
+  echo "已清理 mineru-api 临时目录"
+fi
+
 # 自动合并
 echo
 echo "=== 合并 ==="

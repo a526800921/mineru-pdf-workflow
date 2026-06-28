@@ -197,7 +197,7 @@ log "=== 第一次验证 ==="
 
 # 临时文件保存 pdf-validate 的 JSON 输出
 validate_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$_rerun_names_file"' EXIT
+trap 'rm -f "$validate_tmp" "$_rerun_names_file"; _d="$(cd "$(dirname "$0")" && pwd)"; rm -rf "$(dirname "$_d")/output"' EXIT
 
 # JSON 模式：stdout=JSON, stderr=人可读
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
@@ -637,7 +637,7 @@ log
 log "=== 第二次验证 ==="
 
 validate2_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"' EXIT
+trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"; _d="$(cd "$(dirname "$0")" && pwd)"; rm -rf "$(dirname "$_d")/output"' EXIT
 
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
 
