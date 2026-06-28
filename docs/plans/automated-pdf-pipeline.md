@@ -6,6 +6,12 @@
 
 用户还需要减少人工逐页验证成本，因此需要建立“分段解析、自动验证、问题段重跑、再验证、人工兜底”的闭环，并为后续 Claude Code/MCP 接入保留清晰工具边界。
 
+## 事实源职责
+
+本文档是 `automated-pdf-pipeline` 的实施细节事实源，记录目标、范围、公共契约、阶段路线图、Step 0/完成证据、验证方式、风险、回滚和未决问题。
+
+计划状态、依赖、替代/合并/废弃关系、推荐顺序、当前阻塞项和证据索引以 [PLAN_MAP](../PLAN_MAP.md) 为准。历史 superpowers 计划和规格只作为归档实施记录，不作为当前字段级方案或完成定义事实源。
+
 ## 目标
 
 建立一条可重复执行的 PDF 解析流水线：
@@ -149,3 +155,4 @@
 - [ADR 0001：先 CLI 固化，再 MCP 接入](../adr/0001-cli-first-mcp-ready.md)
 - [MCP 接入设计](../../mcp/README.md)
 - [superpowers pdf-auto 实施记录](../superpowers/plans/2026-06-27-pdf-auto-plan.md)
+- [superpowers pdf-auto JSON 模式实施记录](../superpowers/plans/2026-06-28-pdf-auto-json-mode-plan.md)

@@ -1,5 +1,7 @@
 # pdf-auto JSON 模式设计
 
+> 归档说明：本规格描述阶段 4 实施时的设计快照。当前字段方案、完成条件和验证结果以 [自动化 PDF 解析流水线计划](../../plans/automated-pdf-pipeline.md) 为准；状态、依赖、替代/合并/废弃关系和证据索引以 [PLAN_MAP](../../PLAN_MAP.md) 为准。
+
 ## 背景
 
 `scripts/pdf-auto` 是 MinerU PDF 自动处理流水线的编排脚本，串联"验证→重跑→再验证→合并→兜底"闭环。阶段 4 需要把它包装为 MCP tool，但 MCP server 不应解析中文日志。因此需要新增结构化 JSON 输出模式。

@@ -1,5 +1,7 @@
 # pdf-auto JSON 模式实施计划
 
+> 归档说明：本 superpowers 实施计划已合并到正式治理计划 [自动化 PDF 解析流水线](../../plans/automated-pdf-pipeline.md)。当前状态、依赖、证据索引以 [PLAN_MAP](../../PLAN_MAP.md) 为准；字段方案、完成条件和验证结果以正式专项计划为准。本文件只保留为历史实施记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 为 `scripts/pdf-auto` 新增 `PDF_AUTO_JSON=1` 环境变量，使其输出结构化 JSON 到 stdout，供 MCP server 消费。

@@ -1,5 +1,7 @@
 # pdf-auto 设计规格
 
+> 归档说明：本规格描述阶段 3 实施时的设计快照。当前字段方案、完成条件和验证结果以 [自动化 PDF 解析流水线计划](../../plans/automated-pdf-pipeline.md) 为准；状态、依赖、替代/合并/废弃关系和证据索引以 [PLAN_MAP](../../PLAN_MAP.md) 为准。
+
 ## 背景
 
 阶段 2 已完成 `pdf-validate` 的 JSON 机器可读输出。阶段 3 需要在此基础上实现自动重跑闭环：验证 → 可疑段 high 精度重跑 → 再验证 → 合并 → 人工兜底。
@@ -219,7 +221,7 @@ python3 scripts/check_plan_governance.py .
 
 ## 关联文档
 
-- [自动化 PDF 解析流水线计划](../plans/automated-pdf-pipeline.md)
-- [最小自动化执行手册](../plans/minimal-automation-runbook.md)
-- [ADR 0001：先 CLI 固化，再 MCP 接入](../adr/0001-cli-first-mcp-ready.md)
+- [自动化 PDF 解析流水线计划](../../plans/automated-pdf-pipeline.md)
+- [最小自动化执行手册](../../plans/minimal-automation-runbook.md)
+- [ADR 0001：先 CLI 固化，再 MCP 接入](../../adr/0001-cli-first-mcp-ready.md)
 - [MCP 接入设计](../../mcp/README.md)

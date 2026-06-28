@@ -1,8 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -108,18 +107,15 @@ async function validateInputs(
 // Subprocess execution
 // ============================================================
 
-const execFileAsync = promisify(execFile);
-
 async function runPdfAuto(
   pdfPath: string,
   segmentsDir: string,
   threshold: number,
   rerunEffort: string,
   mergeOutput: string | undefined,
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const scriptPath = path.join(PROJECT_ROOT, "scripts", "pdf-auto");
 
-  // Whitelist: only set env vars that pdf-auto expects
   const env: Record<string, string> = {
     ...process.env,
     PDF_AUTO_JSON: "1",
@@ -131,18 +127,29 @@ async function runPdfAuto(
     env.PDF_AUTO_MERGE_OUTPUT = mergeOutput;
   }
 
-  const { stdout, stderr } = await execFileAsync(
-    "bash",
-    [scriptPath, pdfPath, segmentsDir],
-    {
-      cwd: PROJECT_ROOT,
-      env,
-      timeout: 600_000, // 10 minutes
-      maxBuffer: 10 * 1024 * 1024, // 10 MB
-    },
-  );
+  const child = spawn("bash", [scriptPath, pdfPath, segmentsDir], {
+    cwd: PROJECT_ROOT,
+    env,
+    timeout: 600_000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
-  return { stdout, stderr };
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+  child.stderr.on("data", (chunk: Buffer) => {
+    const text = chunk.toString();
+    stderr += text;
+    process.stderr.write(text);  // 实时透传到 Claude Code
+  });
+
+  const exitCode: number = await new Promise((resolve, reject) => {
+    child.on("close", resolve);
+    child.on("error", reject);
+  });
+
+  return { stdout, stderr, exitCode };
 }
 
 // ============================================================
@@ -278,59 +285,24 @@ async function main() {
         return { content: [{ type: "text" as const, text: formatOutput(output) }] };
       }
 
-      // Step 2: Run pdf-auto
-      let stdout = "";
-      let stderr = "";
+      // Step 2: Run pdf-auto (stderr streams in real-time)
+      const result = await runPdfAuto(
+        pdf_path,
+        segments_dir,
+        threshold,
+        rerun_effort,
+        merge_output,
+      );
+      const { stdout, stderr, exitCode } = result;
 
-      try {
-        const result = await runPdfAuto(
-          pdf_path,
-          segments_dir,
-          threshold,
-          rerun_effort,
-          merge_output,
-        );
-        stdout = result.stdout;
-        stderr = result.stderr;
-      } catch (err) {
-        const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
-        stdout = e.stdout ?? "";
-        stderr = e.stderr ?? "";
-
-        // pdf-auto exit code 2 means "needs_review" — not a failure.
-        // Try to parse stdout as valid CLI JSON before treating as error.
-        const maybeParsed = parseCliOutput(stdout);
-        if (maybeParsed.ok) {
-          const mcpStatus = mapStatus(maybeParsed.data.status);
-          console.error(`[mcp] Subprocess exit≠0 but JSON parsed: CLI=${maybeParsed.data.status} → MCP=${mcpStatus}`);
-          const output: MCPToolOutput = {
-            status: mcpStatus,
-            exit_code: maybeParsed.data.exit_code,
-            merged_markdown: maybeParsed.data.merged_markdown,
-            review_markdown: maybeParsed.data.review_markdown,
-            rerun_segments: maybeParsed.data.rerun_segments ?? [],
-            stdout,
-            stderr,
-          };
-          return { content: [{ type: "text" as const, text: formatOutput(output) }] };
-        }
-
-        // Genuine failure: no parseable JSON
-        console.error(`[mcp] Subprocess error: ${e.message}`);
-
-        // Extract a numeric exit code: Node.js ErrnoException.code can be
-        // a string (e.g. "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") or a number.
-        let subExitCode = 1;
-        if (e.code !== undefined) {
-          const numeric = Number(e.code);
-          subExitCode = Number.isNaN(numeric) ? 1 : numeric;
-        }
-
+      // exit code 0 = all_passed, 2 = needs_review — both valid
+      if (exitCode !== 0 && exitCode !== 2) {
+        console.error(`[mcp] pdf-auto exited with code ${exitCode}`);
         const output = buildFailedOutput(
-          subExitCode,
+          exitCode,
           stdout,
           stderr,
-          `Subprocess error: ${e.message}`,
+          `pdf-auto exited with code ${exitCode}`,
         );
         return { content: [{ type: "text" as const, text: formatOutput(output) }] };
       }
