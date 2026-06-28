@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // Types
 // ============================================================
 
-type CLIStatus = "all_passed" | "merged_with_issues" | "error";
+type CLIStatus = "all_passed" | "needs_review" | "error";
 type MCPStatus = "passed" | "needs_review" | "failed";
 
 interface CLISegment {
@@ -55,7 +55,7 @@ function mapStatus(cliStatus: CLIStatus): MCPStatus {
   switch (cliStatus) {
     case "all_passed":
       return "passed";
-    case "merged_with_issues":
+    case "needs_review":
       return "needs_review";
     case "error":
       return "failed";
@@ -184,7 +184,7 @@ function parseCliOutput(
 
   if (
     typeof obj.status !== "string" ||
-    !["all_passed", "merged_with_issues", "error"].includes(obj.status)
+    !["all_passed", "needs_review", "error"].includes(obj.status)
   ) {
     return { ok: false, error: `Unknown or missing CLI status: ${obj.status}` };
   }
@@ -240,7 +240,7 @@ async function main() {
       "将 CLI JSON 输出映射为结构化工具返回值。\n\n" +
       "状态说明：\n" +
       "- passed：全部段通过验证，合并完成\n" +
-      "- needs_review：合并完成但存在需人工复核的段\n" +
+      "- needs_review：存在需人工复核的段，未合并。确认后运行 pdf-merge 手动合并。\n" +
       "- failed：脚本错误或调用失败",
     {
       pdf_path: z
@@ -297,7 +297,7 @@ async function main() {
         stdout = e.stdout ?? "";
         stderr = e.stderr ?? "";
 
-        // pdf-auto exit code 2 means "merged with issues" — not a failure.
+        // pdf-auto exit code 2 means "needs_review" — not a failure.
         // Try to parse stdout as valid CLI JSON before treating as error.
         const maybeParsed = parseCliOutput(stdout);
         if (maybeParsed.ok) {

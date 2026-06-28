@@ -8,12 +8,13 @@ usage() {
   pdf-seg /完整路径/xxx.pdf
 
 说明:
-  分段解析 PDF，默认每 20 页一段。
+  分段解析 PDF，默认每 1 页一段。
   每段输出到 PDF 所在目录：
-  <PDF文件名>-mineru-segments/p0000-0019/
+  <PDF文件名>-output/segments/p0000-0019/
 
 可选环境变量:
-  MINERU_SEGMENT_SIZE=20
+  MINERU_SEGMENT_SIZE=1
+  MINERU_API_BASE_PORT=9000
   MINERU_BACKEND=hybrid-engine|vlm-engine|pipeline
   MINERU_EFFORT=medium|high
   MINERU_METHOD=auto|txt|ocr
@@ -53,11 +54,22 @@ pdf_dir="$(dirname "$pdf_path")"
 pdf_name="$(basename "$pdf_path")"
 pdf_stem="${pdf_name%.*}"
 
-segment_size="${MINERU_SEGMENT_SIZE:-20}"
+segment_size="${MINERU_SEGMENT_SIZE:-1}"
 backend="${MINERU_BACKEND:-hybrid-engine}"
 effort="${MINERU_EFFORT:-medium}"
 method="${MINERU_METHOD:-auto}"
 lang="${MINERU_LANG:-ch}"
+
+# 检测可用 API 服务（从 9000 开始）
+api_base="${MINERU_API_BASE_PORT:-9000}"
+api_url=""
+for ((_p=0; _p<3; _p++)); do
+  _port=$((api_base + _p))
+  if lsof -i ":$_port" -sTCP:LISTEN >/dev/null 2>&1; then
+    api_url="http://127.0.0.1:$_port"
+    break
+  fi
+done
 
 export MINERU_DEVICE_MODE="${MINERU_DEVICE_MODE:-mps}"
 export MINERU_PDF_RENDER_THREADS="${MINERU_PDF_RENDER_THREADS:-2}"
@@ -87,7 +99,7 @@ if ! [[ "$pages" =~ ^[0-9]+$ ]] || [[ "$pages" -lt 1 ]]; then
   exit 1
 fi
 
-root_output_dir="$pdf_dir/${pdf_stem}-mineru-segments"
+root_output_dir="$pdf_dir/${pdf_stem}-output/segments"
 mkdir -p "$root_output_dir"
 
 echo "PDF: $pdf_path"
@@ -95,15 +107,17 @@ echo "总页数: $pages"
 echo "每段页数: $segment_size"
 echo "输出根目录: $root_output_dir"
 echo "后端: $backend, method: $method, effort: $effort, lang: $lang"
-echo "并发参数: render_threads=$MINERU_PDF_RENDER_THREADS, max_requests=$MINERU_API_MAX_CONCURRENT_REQUESTS, window=$MINERU_PROCESSING_WINDOW_SIZE"
+if [[ -n "$api_url" ]]; then
+  echo "API 服务: $api_url"
+else
+  echo "API 服务: 未检测到，将启动临时服务"
+fi
 echo
 
 start=0
 while [[ "$start" -lt "$pages" ]]; do
   end=$((start + segment_size - 1))
-  if [[ "$end" -ge "$pages" ]]; then
-    end=$((pages - 1))
-  fi
+  [[ "$end" -ge "$pages" ]] && end=$((pages - 1))
 
   segment_name="$(printf 'p%04d-%04d' "$start" "$end")"
   segment_output_dir="$root_output_dir/$segment_name"
@@ -116,6 +130,12 @@ while [[ "$start" -lt "$pages" ]]; do
     printf '\n===== %s =====\n' "$segment_name"
     printf '页码范围: %s-%s\n' "$start" "$end"
     printf '输出目录: %s\n\n' "$segment_output_dir"
+
+    _api_arg=()
+    if [[ -n "$api_url" ]]; then
+      _api_arg=(--api-url "$api_url")
+    fi
+
     mineru \
       -p "$pdf_path" \
       -o "$segment_output_dir" \
@@ -124,9 +144,11 @@ while [[ "$start" -lt "$pages" ]]; do
       --effort "$effort" \
       -l "$lang" \
       -s "$start" \
-      -e "$end"
+      -e "$end" \
+      "${_api_arg[@]}"
   } 2>&1
 
+  echo "✓ 分段完成: $segment_name"
   start=$((end + 1))
 done
 

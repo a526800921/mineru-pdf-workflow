@@ -81,13 +81,12 @@ usage() {
   pdf-auto 原始.pdf xxx-mineru-segments
 
 说明:
-  自动验证分段覆盖率、对可疑段高精度重跑、再验证、合并。
-  如果全部通过则直接合并；如果仍有未通过段则合并后输出人工兜底清单。
+  逐页验证覆盖率、对可疑段高精度重跑、再验证。
+  如果全部通过则直接合并；如果仍有未通过段则输出人工兜底清单，不合并。
 
 可选环境变量:
   PDF_VALIDATE_THRESHOLD=0.82    覆盖率阈值
   MINERU_RERUN_EFFORT=high       重跑精度
-  MINERU_RERUN_SEGMENT_SIZE=5    重跑时将可疑段拆分为 N 页子段，每段独立重跑后合并
   PDF_AUTO_MERGE_OUTPUT           合并输出路径（默认自动推导）
   PDF_AUTO_JSON=1                输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
@@ -136,12 +135,28 @@ segments_dir="$(cd "$segments_dir" && pwd)"
 
 threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
 rerun_effort="${MINERU_RERUN_EFFORT:-high}"
-rerun_segment_size="${MINERU_RERUN_SEGMENT_SIZE:-5}"
+# 自动检测可用 API 端口
+api_base="${MINERU_API_BASE_PORT:-9000}"
+api_url=""
+for ((_p=0; _p<3; _p++)); do
+  _port=$((api_base + _p))
+  if lsof -i ":$_port" -sTCP:LISTEN >/dev/null 2>&1; then
+    api_url="http://127.0.0.1:$_port"
+    break
+  fi
+done
 
 log "pdf-auto: $pdf_path"
 log "分段目录: $segments_dir"
 log "阈值: $threshold"
 log "重跑精度: $rerun_effort"
+
+# 清理上次运行可能残留的 rerun 目录
+for _d in "$segments_dir"/*-rerun/; do
+  [[ -d "$_d" ]] || continue
+  log "清理残留重跑目录: $(basename "$_d")"
+  rm -rf "$_d"
+done
 
 # 提取 PDF 文件名（无扩展名） 用于自动推导合并输出
 pdf_stem="$(basename "$pdf_path" .pdf)"
@@ -196,7 +211,7 @@ PY
 }
 
 if [[ "$action" == "merge" ]]; then
-  merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-merged.md}"
+  merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/merged.md}"
   log "全部通过，开始合并..."
   log "合并输出: $merge_output"
   PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
@@ -253,57 +268,33 @@ for s in report['segments']:
 
     segment_pages=$((end_page - start_page + 1))
     log
-    log "重跑分段: $name ($segment_pages 页) → 拆为每 ${rerun_segment_size} 页子段"
+    log "重跑分段: $name ($segment_pages 页)"
 
-    # 标记此段是否全部子段成功
+    # 标记此段是否成功
     segment_ok=true
 
-    # 拆分为子段逐段重跑
-    sub_start=$start_page
-    while [[ $sub_start -le $end_page ]]; do
-      sub_end=$((sub_start + rerun_segment_size - 1))
-      [[ $sub_end -gt $end_page ]] && sub_end=$end_page
-
-      sub_name="$(printf 'p%04d-%04d' "$sub_start" "$sub_end")"
-      sub_dir="$rerun_dir/$sub_name"
-
-      log "  子段: $sub_name (页 $sub_start-$sub_end)"
-
-      if mineru \
-        -p "$pdf_path" \
-        -o "$sub_dir" \
-        -b "$backend" \
-        -m "$method" \
-        --effort "$rerun_effort" \
-        -l "$lang" \
-        -s "$sub_start" \
-        -e "$sub_end" >"$_subprocess_stdout" 2>&1; then
-        log "    ✓ 完成"
-      else
-        log "    ✗ 失败 (mineru 退出非0)"
-        segment_ok=false
+    _api_arg=()
+    if [[ -n "$api_url" ]]; then
+      _api_arg=(--api-url "$api_url")
+    fi
+    if mineru \
+      -p "$pdf_path" \
+      -o "$rerun_dir" \
+      -b "$backend" \
+      -m "$method" \
+      --effort "$rerun_effort" \
+      -l "$lang" \
+      -s "$start_page" \
+      -e "$end_page" \
+      "${_api_arg[@]}" >"$_subprocess_stdout" 2>&1; then
+      log "    ✓ 完成"
+      find_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
+      if [[ -n "$find_md" && -f "$find_md" ]]; then
+        cp "$find_md" "$rerun_dir/$(basename "$pdf_stem").md"
       fi
-
-      sub_start=$((sub_end + 1))
-    done
-
-    # 合并子段 Markdown 为单个 .md（按页码顺序拼接）
-    if $segment_ok; then
-      merged_md="$rerun_dir/$(basename "$pdf_stem").md"
-      sub_start=$start_page
-      while [[ $sub_start -le $end_page ]]; do
-        sub_end=$((sub_start + rerun_segment_size - 1))
-        [[ $sub_end -gt $end_page ]] && sub_end=$end_page
-        sub_name="$(printf 'p%04d-%04d' "$sub_start" "$sub_end")"
-        sub_dir="$rerun_dir/$sub_name"
-        sub_md="$(find "$sub_dir" -name "*.md" -type f | head -1)"
-        if [[ -n "$sub_md" && -f "$sub_md" ]]; then
-          cat "$sub_md" >> "$merged_md"
-          echo "" >> "$merged_md"
-        fi
-        sub_start=$((sub_end + 1))
-      done
-      log "  子段合并完成 → $(basename "$merged_md")"
+    else
+      log "    ✗ 失败 (mineru 退出非0)"
+      segment_ok=false
     fi
 
     if $segment_ok; then
@@ -365,42 +356,46 @@ PY
   exit 1
 }
 
-# --- 准备合并 ---
-# Copy rerun .md over original .md for segments that have a successful rerun
-log
-log "=== 准备合并 ==="
+merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/merged.md}"
 
-for rerun_dir in "$segments_dir"/*-rerun/; do
-  [[ -d "$rerun_dir" ]] || continue
-  name="$(basename "$rerun_dir")"
-  name="${name%-rerun}"
-  original_dir="$segments_dir/$name"
+# --- 全部通过：直接合并 ---
+if echo "$decision" | grep -q "^all_passed$"; then
+  log
+  log "=== 准备合并 ==="
 
-  # 优先找顶层合并后的 .md（子段重跑产物），否则退到深层搜索
-  rerun_md="$(find "$rerun_dir" -maxdepth 1 -name "*.md" -type f | head -1)"
-  if [[ -z "$rerun_md" ]]; then
-    rerun_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
-  fi
-  if [[ -n "$rerun_md" && -f "$rerun_md" ]]; then
-    original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
-    if [[ -n "$original_md" ]]; then
-      log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
-      cp "$rerun_md" "$original_md"
+  for rerun_dir in "$segments_dir"/*-rerun/; do
+    [[ -d "$rerun_dir" ]] || continue
+    name="$(basename "$rerun_dir")"
+    name="${name%-rerun}"
+    original_dir="$segments_dir/$name"
+
+    rerun_md="$(find "$rerun_dir" -maxdepth 1 -name "*.md" -type f | head -1)"
+    if [[ -z "$rerun_md" ]]; then
+      rerun_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
     fi
+    if [[ -n "$rerun_md" && -f "$rerun_md" ]]; then
+      original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
+      if [[ -n "$original_md" ]]; then
+        log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+        cp "$rerun_md" "$original_md"
+      fi
+    fi
+  done
+
+  log
+  log "=== 合并 ==="
+  PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
+  log "合并完成: $merge_output"
+
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "all_passed" 0 "$merge_output" "" "$validate2_tmp"
   fi
-done
+  exit 0
+fi
 
-# --- 合并 ---
-merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-merged.md}"
-
-log
-log "=== 合并 ==="
-PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
-log "合并完成: $merge_output"
-
-# --- 人工兜底清单 ---
+# --- 有未通过段：只出 review，不合并 ---
 if echo "$decision" | grep -q "^has_issues$"; then
-  review_output="$(dirname "$segments_dir")/${pdf_stem}-review.md"
+  review_output="$(dirname "$segments_dir")/review.md"
 
   log
   log "=== 人工兜底清单 ==="
@@ -448,7 +443,7 @@ for seg in issues:
     elif status == "suspicious":
         note = f"high 重跑后仍未通过阈值 {threshold}"
     elif status == "failed" and reason == "missing_markdown":
-        note = "重跑失败（mineru 退出非0），使用原始 medium 结果"
+        note = "mineru 运行成功但未生成 Markdown 文件"
     elif status == "skipped" and reason == "no_text_layer":
         note = "原 PDF 文本层为空，无法验证"
     else:
@@ -457,6 +452,43 @@ for seg in issues:
     lines.append(f"| {seg['name']} | {pages} | {cov} | {note} |")
 
 lines.append("")
+
+# --- 逐页详情 ---
+for seg in issues:
+    pages_data = seg.get("pages", [])
+    if not pages_data:
+        continue
+
+    low_pages = [p for p in pages_data if p.get("coverage") is not None and p["coverage"] < threshold]
+    if not low_pages:
+        continue
+
+    seg_pages = f"{seg['start_page'] + 1}-{seg['end_page'] + 1}"
+    lines.append(f"## {seg['name']} 逐页详情（PDF 第 {seg_pages} 页）")
+    lines.append("")
+    lines.append("| PDF 页码 | 覆盖率 | PDF token | MD token | 缺失较多的词 |")
+    lines.append("|----------|--------|-----------|----------|-------------|")
+
+    for p in pages_data:
+        cov = p.get("coverage")
+        if cov is None:
+            continue
+
+        pdf_page_num = p["page"] + 1
+        cov_str = f"{cov:.2f}"
+        flag = " ⚠️" if cov < threshold else ""
+        missing = ", ".join(
+            f"{t}({c})" for t, c in p.get("missing_tokens", [])[:5]
+        )
+        if not missing:
+            missing = "—"
+
+        lines.append(
+            f"| {pdf_page_num}{flag} | {cov_str} | {p['pdf_tokens']} | {p['md_tokens']} | {missing} |"
+        )
+
+    lines.append("")
+
 Path(review_path).write_text("\n".join(lines), encoding="utf-8")
 print(f"人工兜底清单已生成: {review_path}", file=sys.stderr)
 PY
@@ -467,12 +499,8 @@ PY
   done
 
   if [[ "$json_mode" == "1" ]]; then
-    emit_json "merged_with_issues" 2 "$merge_output" "$review_output" "$validate2_tmp"
+    emit_json "needs_review" 2 "" "$review_output" "$validate2_tmp"
   fi
   exit 2
 fi
 
-if [[ "$json_mode" == "1" ]]; then
-  emit_json "all_passed" 0 "$merge_output" "" "$validate2_tmp"
-fi
-exit 0
