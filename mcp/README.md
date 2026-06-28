@@ -325,15 +325,76 @@ MCP server 已实现，在 Claude Code 中添加：
 }
 ```
 
-## 实现状态（阶段 5 已完成）
+## 运行手册
 
-- `mcp/server/` Node.js / TypeScript 项目已就绪。
-- 只暴露 `run_pdf_auto` 工具，符合第一版边界。
-- 项目根通过源文件位置推导，无需在配置中指定 `cwd`。
-- 子进程使用白名单环境变量，不注入任意 env。
-- MCP 协议验证通过（`initialize`、`tools/list`）。
-- 构建命令：`cd mcp/server && npm install && npm run build`。
-- 本地验证：`npx @modelcontextprotocol/inspector node dist/index.js`。
+### 安装与构建
+
+```bash
+cd mcp/server
+npm install
+npm run build          # 产物在 dist/index.js
+```
+
+开发模式（免构建）：
+
+```bash
+npm run dev            # tsx watch src/index.ts
+```
+
+### Claude Code 配置
+
+项目根 `.mcp.json` 已配置。也可手动添加到 `~/.claude/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "mineru-pdf-workflow": {
+      "command": "node",
+      "args": ["/Users/jafish/Documents/work/mineru-pdf-workflow/mcp/server/dist/index.js"]
+    }
+  }
+}
+```
+
+### 本地验证
+
+```bash
+npx @modelcontextprotocol/inspector node dist/index.js
+```
+
+### 工具调用
+
+在 Claude Code 中直接描述任务即可，模型会自动选择合适的参数。例如：
+
+> 用 run_pdf_auto 处理 /path/to/manual.pdf，分段目录是 /path/to/manual-mineru-segments，阈值 0.82，重跑精度 high
+
+### 返回状态
+
+| MCP status | CLI status | exit_code | 含义 |
+|---|---|---|---|
+| `passed` | `all_passed` | 0 | 全部段验证通过，合并完成 |
+| `needs_review` | `merged_with_issues` | 2 | 合并完成，有段需人工复核 |
+| `failed` | `error` 或调用失败 | 1 | 脚本错误或输入校验失败 |
+
+### 端到端验证证据（阶段 6）
+
+| 路径 | 样本 | 关键结果 |
+|---|---|---|
+| `passed` | demo20.pdf (threshold=0.5) | status=passed, merge → demo20-merged.md (15K/261行) |
+| `needs_review` | demo20.pdf (threshold=0.82) | status=needs_review, coverage 0.77, rerun → 4×5page sub-segments, merge + review.md |
+| `failed` | 不存在 /nonexistent/fake.pdf | status=failed, stderr=`pdf_path does not exist` |
+
+### 排障清单
+
+| 症状 | 可能原因 | 排查步骤 |
+|---|---|---|
+| MCP server 不启动 | Node.js 版本过低 | `node -v`，需要 ≥18 |
+| `tools/list` 不显示 `run_pdf_auto` | SDK 版本不匹配 | `npm ls @modelcontextprotocol/sdk` |
+| 工具返回 `failed`: pdf_path does not exist | 路径不对 | 确认 PDF 路径是绝对路径，文件存在 |
+| 工具返回 `failed`: segments_dir does not exist | 分段目录未生成 | 先运行 `scripts/pdf-seg` |
+| 重跑耗时长 | segment_size 太大 | 设置 `MINERU_RERUN_SEGMENT_SIZE=5`（默认） |
+| 重跑后仍是 needs_review | PDF 本身文本层质量差 | 降低 `threshold` 或人工复核，属正常行为 |
+| `Subprocess error: Command failed` | mineru 不在 PATH | 确认终端能直接运行 `mineru` |
 
 ## 实现前置条件（已满足）
 

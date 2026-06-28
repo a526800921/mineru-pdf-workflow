@@ -8,7 +8,7 @@
 
 | 计划 | 状态 | 当前阶段 | 依赖 | 证据 |
 |---|---|---|---|---|
-| [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 待实施 | 阶段 6：MCP 端到端验收与运行手册固化 | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | 阶段 5 已完成，阶段 6 可实施验收标准已记录 |
+| [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 待实施 | 阶段 7（候选） | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | 阶段 6 已完成，阶段 7 候选事项已整理 |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | 脚本帮助命令和语法检查通过 |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
@@ -37,7 +37,8 @@
 | 问题 | 推荐方案 | 影响范围 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|---|
 | `pdf-validate` 暂未输出 JSON | 已实现 `PDF_VALIDATE_JSON=1` | MCP 自动调度重跑前需要机器可读报告 | 否 | 已解决 |
-| MCP server 尚未实现 | 已实现 `mcp/server/` 项目，暴露 `run_pdf_auto` 工具 | Claude Code 现已可通过 MCP 调用 PDF 流水线 | 否 | 已解决 |
+| MCP server 尚未实现 | 已实现 `mcp/server/`，运行手册和排障清单已就绪 | Claude Code 现已可通过 MCP 调用 PDF 流水线 | 否 | 已解决 |
+| 阶段 6 验收未执行 | 已完成三类路径验证和手册固化 | 运行手册可被后续会话按步骤复现 | 否 | 已解决 |
 
 ## 完成证据
 
@@ -48,4 +49,5 @@
 | automated-pdf-pipeline | 阶段 3：自动重跑 | `scripts/pdf-auto` 实现完整验证→重跑→再验证→合并→兜底流水线，在 191 页摩托车说明书上测试通过，可疑段自动 high 精读重跑，二次验证后合并输出 merged.md |
 | automated-pdf-pipeline | 阶段 4：MCP 接入准备 | `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>` 已实现，`mcp/README.md` 第一版工具契约已固定为 `run_pdf_auto`，拆分式工具降级为后续扩展 |
 | automated-pdf-pipeline | 阶段 5：MCP server 最小实现 | `mcp/server/` Node.js/TypeScript 项目已就绪，`run_pdf_auto` 工具通过 MCP 协议验证（`initialize`/`tools/list`），TypeScript 编译通过 |
+| automated-pdf-pipeline | 阶段 6：端到端验收与运行手册固化 | 三类返回路径全部验证（passed/needs_review/failed），`mcp/README.md` 运行手册和排障清单已就绪，`.mcp.json` 已配置 |
 | minimal-automation-runbook | 最小人工执行版 | 已记录解析、验证、合并、人工兜底流程，并通过计划治理检查 |

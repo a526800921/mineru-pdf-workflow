@@ -66,11 +66,11 @@
 | 阶段 3 | 自动闭环 | JSON 报告可用 | 可疑段 high 重跑、再验证、合并并按需生成 review 文件 | 已完成 |
 | 阶段 4 | MCP 接入准备 | CLI 契约稳定 | MCP 工具契约和脚本输出对齐 | 已完成 |
 | 阶段 5 | MCP server 最小实现 | `PDF_AUTO_JSON=1` 可用且工具边界已固定 | `run_pdf_auto` 返回结构化结果 | 已完成 |
-| 阶段 6 | MCP 端到端验收与运行手册固化 | 阶段 5 已完成 | Claude Code 通过 MCP 跑通真实样本并覆盖主要返回路径 | 待实施 |
+| 阶段 6 | MCP 端到端验收与运行手册固化 | 阶段 5 已完成 | Claude Code 通过 MCP 跑通真实样本并覆盖主要返回路径 | 已完成 |
 
 ## 当前阶段
 
-阶段 5 已完成，下一阶段为阶段 6（MCP 端到端验收与运行手册固化）。
+阶段 6 已完成。阶段 7 候选事项已整理，尚未排入路线图。
 
 ### 阶段 3 完成证据
 
@@ -106,84 +106,18 @@
 
 
 
-### 阶段 6 实施计划
+### 阶段 6 完成证据
 
-目标：在阶段 5 完成最小 MCP server 后，用真实样本验证 `run_pdf_auto` 能稳定完成 PDF 自动解析闭环，并把安装、启动、配置、调用和排障流程固化成可重复执行的手册。
-
-确认状态：不需要额外产品或架构确认。阶段 6 的执行边界、状态覆盖和非目标已固定；真实样本路径、MCP 配置位置和具体运行输出在执行时作为验证证据记录。
-
-实施标准：
-
-- 阶段 6 必须在阶段 5 完成后开始。
-- 以 Claude Code 通过 MCP 调用 `run_pdf_auto` 为验收入口，不直接用 shell 调用替代端到端验收。
-- 至少使用一个真实 PDF 样本完成 `passed` 路径验证。
-- `needs_review` 和 `failed` 可以使用真实样本，也可以使用最小模拟样例，但必须记录输入、返回 JSON 和诊断信息。
-- 验收过程只固化运行手册和排障清单，不新增 MCP 工具。
-- 阶段 6 发现的新能力需求一律进入阶段 7 候选，不在阶段 6 扩大范围。
-
-范围：
-
-- 通过 Claude Code MCP 调用 `run_pdf_auto`。
-- 使用真实 PDF 样本跑完整流程。
-- 验证 `passed`、`needs_review`、`failed` 三类返回路径。
-- 固化 MCP server 使用文档和排障清单。
-- 收集阶段 7 候选问题。
-
-非目标：
-
-- 不新增拆分式 MCP 工具。
-- 不实现批量 PDF 队列。
-- 不引入 OCR/VLM 验证策略。
-- 不改写 `pdf-auto` 的核心调度逻辑，除非阶段 6 验收发现必须修复的缺陷。
-
-进入条件：
-
-- 阶段 5 已完成。
-- `mcp/server/` 中已有 Node.js / TypeScript MCP server。
-- `run_pdf_auto` 已能调用 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`。
-- MCP 对外状态映射已实现：`passed`、`needs_review`、`failed`。
-
-Step 0 证据：
-
-- 一个已知可通过的真实 PDF 样本及其分段目录。
-- 一个可触发 `needs_review` 的样本或最小模拟。
-- 一个可触发 `failed` 的最小失败样例，例如不存在的 PDF 路径或非法分段目录。
-- 当前 Claude Code MCP 配置方式截图或文本记录。
-
-默认决策：
-
-- 真实样本优先复用阶段 3 使用过的 191 页说明书样本。
-- `failed` 路径默认使用不存在的 PDF 路径或不存在的分段目录模拟。
-- `needs_review` 路径优先复用已知低覆盖率分段；如果真实样本不稳定，则使用最小模拟输出验证 MCP 状态映射。
-- 运行手册写入 [MCP 接入设计](../../mcp/README.md)，完成证据写入 [PLAN_MAP](../PLAN_MAP.md) 和本计划。
-
-实施任务：
-
-1. 记录 MCP server 安装、构建、启动命令。
-2. 记录 Claude Code MCP 配置示例。
-3. 用真实 PDF 调用 `run_pdf_auto`，保存返回 JSON 和输出文件路径。
-4. 验证 `passed` 路径：合并文件存在，`review_markdown` 为空。
-5. 验证 `needs_review` 路径：合并文件存在，`review_markdown` 存在。
-6. 验证 `failed` 路径：错误可读，stderr 或诊断信息可定位问题。
-7. 更新 [MCP 接入设计](../../mcp/README.md) 的运行手册和排障表。
-8. 更新 [PLAN_MAP](../PLAN_MAP.md) 和本计划完成证据。
-9. 运行 `python3 scripts/check_plan_governance.py .`。
-
-完成条件：
-
-- Claude Code 能通过 MCP 调用 `run_pdf_auto` 跑通至少一个真实样本。
-- 三类返回状态都有验证证据或最小模拟。
-- MCP 使用手册足够让后续会话按步骤复现。
-- 阶段 7 候选项已整理，不在阶段 6 扩大范围。
+- MCP 三类返回路径全部验证通过：
+  - `passed`：demo20.pdf + threshold=0.5，覆盖率 0.77 > 0.5 → 直接合并 → merged.md (15K/261 行)
+  - `needs_review`：demo20.pdf + threshold=0.82，覆盖率 0.77 < 0.82 → 子段拆分重跑 → 仍可疑 → merged.md + review.md
+  - `failed`：不存在 /nonexistent/fake.pdf → 校验失败 → stderr 提示文件不存在
+- `mcp/README.md` 已更新运行手册：安装/构建/配置/调用/状态说明/排障清单。
+- 项目根 `.mcp.json` 已配置，Claude Code 可自动发现 MCP server。
+- 阶段 7 候选事项已整理（拆分式工具、无文本层 PDF、OCR/VLM、批量处理）。
 - 计划治理检查通过。
 
-阶段 7 候选：
 
-- 拆分式 MCP 工具。
-- 无文本层 PDF 验证策略。
-- OCR/VLM 辅助验收。
-- 批量处理和任务队列。
-- 更结构化的 review 报告。
 
 ## 未决问题
 

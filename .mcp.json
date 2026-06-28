@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mineru-pdf-workflow": {
+      "command": "node",
+      "args": [
+        "/Users/jafish/Documents/work/mineru-pdf-workflow/mcp/server/dist/index.js"
+      ]
+    }
+  }
+}
