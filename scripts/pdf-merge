@@ -4,12 +4,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 用法:
-  pdf-merge xxx-mineru-segments
+  pdf-merge <package>/segments
 
 说明:
   合并 pdf-seg 生成的分段 Markdown。
-  输出文件默认放在分段目录同级：
-  <原文件名>-merged.md
+  输出文件默认放在分段目录的父目录（输出包根目录）：
+  <输出包名>.md
 
 可选环境变量:
   PDF_MERGE_OUTPUT=/path/to/output.md
@@ -34,9 +34,9 @@ if [[ ! -d "$segments_dir" ]]; then
 fi
 
 segments_dir="$(cd "$segments_dir" && pwd)"
-base_name="$(basename "$segments_dir")"
-stem="${base_name%-mineru-segments}"
-output="${PDF_MERGE_OUTPUT:-$(dirname "$segments_dir")/${stem}-merged.md}"
+pkg_dir="$(dirname "$segments_dir")"
+pkg_name="$(basename "$pkg_dir")"
+output="${PDF_MERGE_OUTPUT:-$pkg_dir/${pkg_name}.md}"
 
 python - "$segments_dir" "$output" <<'PY'
 import re

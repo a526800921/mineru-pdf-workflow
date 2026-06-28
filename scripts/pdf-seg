@@ -9,10 +9,11 @@ usage() {
 
 说明:
   分段解析 PDF，默认每 1 页一段。
-  每段输出到 PDF 所在目录：
-  <PDF文件名>-output/segments/p0000-0019/
+  每段输出到 PDF 所在目录的 segments/ 子目录：
+  <PDF所在目录>/segments/p0000-0019/
 
 可选环境变量:
+  MINERU_SEGMENT_DIR=/path/to/segments  自定义分段输出目录（覆盖默认路径）
   MINERU_SEGMENT_SIZE=1
   MINERU_API_BASE_PORT=9000
   MINERU_BACKEND=hybrid-engine|vlm-engine|pipeline
@@ -99,7 +100,7 @@ if ! [[ "$pages" =~ ^[0-9]+$ ]] || [[ "$pages" -lt 1 ]]; then
   exit 1
 fi
 
-root_output_dir="$pdf_dir/${pdf_stem}-output/segments"
+root_output_dir="${MINERU_SEGMENT_DIR:-$pdf_dir/segments}"
 mkdir -p "$root_output_dir"
 
 echo "PDF: $pdf_path"
@@ -152,5 +153,46 @@ while [[ "$start" -lt "$pages" ]]; do
   start=$((end + 1))
 done
 
+# 创建占位目录（为 V2 预留）
+mkdir -p "$pdf_dir/images"
+mkdir -p "$pdf_dir/data"
+
+# 生成 manifest.json
+manifest_path="$pdf_dir/manifest.json"
+sha256="$(shasum -a 256 "$pdf_path" | awk '{print $1}')"
+python3 - "$manifest_path" "$pdf_stem" "$pdf_path" "$pdf_name" "$sha256" <<'PY'
+import json, sys
+manifest_path = sys.argv[1]
+model = sys.argv[2]
+source_pdf = sys.argv[3]
+pdf_name = sys.argv[4]
+sha256 = sys.argv[5]
+
+manifest = {
+    "model": model,
+    "version": None,
+    "source_pdf": source_pdf,
+    "files": {
+        "pdf": pdf_name,
+        "markdown": None,
+        "review": None,
+        "segments": "segments",
+        "images": "images",
+        "data": "data"
+    },
+    "hash": {
+        "sha256": sha256
+    },
+    "parse_status": "segmented"
+}
+with open(manifest_path, "w", encoding="utf-8") as f:
+    json.dump(manifest, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+print(f"manifest: {manifest_path}", file=sys.stderr)
+PY
+
 echo
-echo "全部分段完成。输出根目录：$root_output_dir"
+echo "全部分段完成。"
+echo "输出包根目录: $pdf_dir"
+echo "  segments: $root_output_dir"
+echo "  manifest: $manifest_path"

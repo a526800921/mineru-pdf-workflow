@@ -75,19 +75,49 @@ PY
 }
 # --- end JSON mode infrastructure ---
 
+# Update manifest.json parse_status and file fields
+# Usage: update_manifest <status> [merged_md] [review_md]
+update_manifest() {
+  local status="$1"
+  local merged="${2:-}"
+  local review="${3:-}"
+  local manifest="$(dirname "$segments_dir")/manifest.json"
+  if [[ ! -f "$manifest" ]]; then
+    return 0
+  fi
+  python3 - "$manifest" "$status" "$merged" "$review" <<'PY'
+import json, sys
+manifest_path = sys.argv[1]
+status = sys.argv[2]
+merged = sys.argv[3] if sys.argv[3] else None
+review = sys.argv[4] if sys.argv[4] else None
+with open(manifest_path) as f:
+    m = json.load(f)
+m["parse_status"] = status
+if merged:
+    m["files"]["markdown"] = merged
+if review:
+    m["files"]["review"] = review
+with open(manifest_path, "w", encoding="utf-8") as f:
+    json.dump(m, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PY
+}
+
 usage() {
   cat <<'EOF'
 用法:
-  pdf-auto 原始.pdf xxx-mineru-segments
+  pdf-auto 原始.pdf <package>/segments
 
 说明:
   逐页验证覆盖率、对可疑段高精度重跑、再验证。
   如果全部通过则直接合并；如果仍有未通过段则输出人工兜底清单，不合并。
+  默认合并输出：<package>/<原始PDF文件名>.md
 
 可选环境变量:
   PDF_VALIDATE_THRESHOLD=0.82    覆盖率阈值
   MINERU_RERUN_EFFORT=high       重跑精度
-  PDF_AUTO_MERGE_OUTPUT           合并输出路径（默认自动推导）
+  PDF_AUTO_MERGE_OUTPUT           合并输出路径（覆盖默认路径）
   PDF_AUTO_JSON=1                输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
 }
@@ -213,6 +243,7 @@ PY
   if [[ "$json_mode" == "1" ]]; then
     emit_json "error" 1 "" "" ""
   fi
+  update_manifest "error" "" ""
   exit 1
 }
 
@@ -503,6 +534,7 @@ PY
   if [[ "$json_mode" == "1" ]]; then
     emit_json "all_passed" 0 "$merge_output" "$review_output" "$validate_tmp"
   fi
+  update_manifest "all_passed" "$(basename "$merge_output")" "${review_output:+review.md}"
   exit 0
 fi
 
@@ -649,6 +681,7 @@ PY
   if [[ "$json_mode" == "1" ]]; then
     emit_json "error" 1 "" "" ""
   fi
+  update_manifest "error" "" ""
   exit 1
 }
 
@@ -750,6 +783,7 @@ PY
   if [[ "$json_mode" == "1" ]]; then
     emit_json "all_passed" 0 "$merge_output" "" "$validate2_tmp"
   fi
+  update_manifest "all_passed" "$(basename "$merge_output")" ""
   exit 0
 fi
 
@@ -873,6 +907,7 @@ PY
   if [[ "$json_mode" == "1" ]]; then
     emit_json "needs_review" 2 "" "$review_output" "$validate2_tmp"
   fi
+  update_manifest "needs_review" "" "review.md"
   exit 2
 fi
 

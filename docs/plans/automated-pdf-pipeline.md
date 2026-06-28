@@ -43,6 +43,7 @@
 - `scripts/pdf-merge`
 - `scripts/pdf-validate`
 - `docs/PLAN_MAP.md`
+- `docs/plans/pdf-output-package-layout.md`
 - `docs/plans/coverage-validation-optimization.md`
 - `docs/plans/minimal-automation-runbook.md`
 - `mcp/README.md`
@@ -53,7 +54,7 @@
 当前阶段的 CLI 契约：
 
 - `scripts/pdf <pdf>`：单次解析，输出 `<文件名>-mineru-output/`。
-- `scripts/pdf-seg <pdf>`：分段解析，输出 `<文件名>-mineru-segments/p0000-0019/` 等分段目录。
+- `scripts/pdf-seg <pdf>`：分段解析，默认输出 `<package>/segments/p0000-0000/` 等分段目录，同时生成 `manifest.json` 和 `images/`、`data/` 占位目录。
 - `scripts/pdf-validate <pdf> <segments_dir>`：输出每段覆盖率和可疑段。
 - `scripts/pdf-merge <segments_dir>`：合并分段 Markdown。
 - `scripts/pdf-auto <pdf> <segments_dir>`：自动执行验证、可疑段 high 重跑、再验证、合并和人工兜底清单生成。
@@ -75,10 +76,13 @@
 | 阶段 5 | MCP server 最小实现 | `PDF_AUTO_JSON=1` 可用且工具边界已固定 | `run_pdf_auto` 返回结构化结果 | 已完成 |
 | 阶段 6 | MCP 端到端验收与运行手册固化 | 阶段 5 已完成 | Claude Code 通过 MCP 跑通真实样本并覆盖主要返回路径 | 已完成 |
 | 阶段 7 | 覆盖率验证口径优化 | 阶段 6 已完成，存在无效 high 重跑样本 | 区分可重跑问题和仅需人工复核问题 | 已完成 |
+| 阶段 8 | PDF 输出包目录结构 | 阶段 7 已完成，需要统一后续 V2 和入库草案目录 | 输出包结构、manifest 和默认路径稳定 | 实施中 |
 
 ## 当前阶段
 
-阶段 7 已完成（2026-06-28）。专项计划为 [覆盖率验证口径优化](coverage-validation-optimization.md)。主要成果：
+阶段 7 已完成（2026-06-28）。阶段 8 正在实施中，专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。代码改动已应用于 `scripts/pdf-seg`、`scripts/pdf-merge`、`scripts/pdf-auto`。
+
+阶段 7 专项计划为 [覆盖率验证口径优化](coverage-validation-optimization.md)。主要成果：
 - `pdf-validate` 新增 `page_type`、`decision`、`rerunnable`、`reason`、`page_type_summary` 字段
 - `pdf-auto` 改为只重跑 `rerunnable == true` 的段
 - demo20 样本无效 high 重跑从 9 降为 0
@@ -140,6 +144,23 @@
 - 目录页、图片稀疏页和初期表格页优先进入人工复核清单。
 - 保持 `PDF_VALIDATE_JSON=1` 与 `PDF_AUTO_JSON=1` 向后兼容。
 
+### 阶段 7 完成证据
+
+详见 [覆盖率验证口径优化验收记录](coverage-validation-optimization.md#验收记录2026-06-28)。
+
+### 阶段 8 设计入口
+
+阶段 8 聚焦输出包目录结构，事实源见 [PDF 输出包目录结构计划](pdf-output-package-layout.md)。
+
+阶段 8 的核心方向：
+
+- 默认输出从旧的 `<stem>-output/segments` 收敛到 `<stem>/segments`。
+- 合并 Markdown 默认写入 `<stem>/<stem>.md`，等价于旧 `merged.md`。
+- review 默认写入 `<stem>/review.md`。
+- 输出包保留 `images/`、`data/` 和 `manifest.json`，供后续 V2 图文浏览和入库草案使用。
+
+阶段 8 的拟议契约、Step 0 证据、验证方式和完成条件见 [PDF 输出包目录结构计划](pdf-output-package-layout.md)。
+
 
 
 ## 未决问题
@@ -148,6 +169,7 @@
 |---|---|---|---|
 | 无文本层 PDF 如何验证 | 后续增加 OCR/VLM 对照验证策略 | 否 | 已延后 |
 | 覆盖率低页面触发无效 high 重跑 | 阶段 7 区分 `rerun` 与 `review_only`，只重跑可修复段 | 否 | 设计中 |
+| 输出产物分散在旧目录 | 阶段 8 已实施：统一为 `<package>/` 输出包结构 | 否 | 实施中 |
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
 | `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 否 | 已完成 |
 | MCP server 尚未实现 | 阶段 5 已实现，`mcp/server/` 项目已就绪 | 否 | 已解决 |
@@ -173,6 +195,7 @@
 ## 关联 ADR、迁移、spec 或 issue
 
 - [ADR 0001：先 CLI 固化，再 MCP 接入](../adr/0001-cli-first-mcp-ready.md)
+- [PDF 输出包目录结构计划](pdf-output-package-layout.md)
 - [覆盖率验证口径优化计划](coverage-validation-optimization.md)
 - [MCP 接入设计](../../mcp/README.md)
 - [superpowers pdf-auto 实施记录](../superpowers/plans/2026-06-27-pdf-auto-plan.md)

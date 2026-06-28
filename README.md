@@ -22,7 +22,8 @@ scripts/pdf
 scripts/pdf-seg
 ```
 
-分段解析一个 PDF，默认每 20 页一段，输出到 `<文件名>-mineru-segments/`。
+分段解析一个 PDF，默认每 1 页一段，输出到 `<PDF所在目录>/segments/`。
+分段完成后自动生成 `manifest.json` 和 `images/`、`data/` 占位目录。
 
 ```text
 scripts/pdf-validate
@@ -34,20 +35,28 @@ scripts/pdf-validate
 scripts/pdf-merge
 ```
 
-按 `p0000-0019` 这类分段目录顺序合并 Markdown。
+按 `p0000-0019` 这类分段目录顺序合并 Markdown，默认输出到 `<输出包名>.md`。
 
 ## 推荐流程
 
 ```bash
 cd /Users/jafish/Documents/work/mineru-pdf-workflow
 
-scripts/pdf-seg /path/to/manual.pdf
+# 1. 把 PDF 放入目标车型目录，分段解析
+scripts/pdf-seg pdf/春风\ 150AURA/春风\ 150AURA.pdf
+# 输出: pdf/春风 150AURA/segments/
 
+# 2. 验证覆盖率
 scripts/pdf-validate \
-  /path/to/manual.pdf \
-  /path/to/manual-mineru-segments
+  pdf/春风\ 150AURA/春风\ 150AURA.pdf \
+  pdf/春风\ 150AURA/segments
 
-scripts/pdf-merge /path/to/manual-mineru-segments
+# 3. 合并分段 Markdown
+scripts/pdf-merge pdf/春风\ 150AURA/segments
+# 输出: pdf/春风 150AURA/春风 150AURA.md
+
+# 或一步到位（自动验证→重跑→合并→人工兜底）
+scripts/pdf-auto pdf/春风\ 150AURA/春风\ 150AURA.pdf pdf/春风\ 150AURA/segments
 ```
 
 如果验证发现可疑分段，先针对该分段重跑高精度，再重新验证和合并。
@@ -56,5 +65,5 @@ scripts/pdf-merge /path/to/manual-mineru-segments
 
 - [计划索引](docs/PLAN_MAP.md)
 - [自动化流水线计划](docs/plans/automated-pdf-pipeline.md)
-- [MCP 接入设计](docs/adr/0001-cli-first-mcp-ready.md)
+- [MCP 接入设计](mcp/README.md)
 
