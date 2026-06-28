@@ -7,6 +7,13 @@ json_mode="${PDF_AUTO_JSON:-0}"
 # Temp file for rerun segment name tracking (cleanup added to existing traps in Task 2)
 _rerun_names_file="$(mktemp)"
 
+# In JSON mode, silence subprocess stdout to /dev/null (prevent polluting JSON output)
+if [[ "$json_mode" == "1" ]]; then
+  _subprocess_stdout="/dev/null"
+else
+  _subprocess_stdout="/dev/stdout"
+fi
+
 # Human-readable log: stderr in JSON mode, stdout otherwise
 log() {
   if [[ "$json_mode" == "1" ]]; then
@@ -190,7 +197,7 @@ if [[ "$action" == "merge" ]]; then
   merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-merged.md}"
   log "全部通过，开始合并..."
   log "合并输出: $merge_output"
-  PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir"
+  PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
   if [[ "$json_mode" == "1" ]]; then
     emit_json "all_passed" 0 "$merge_output" "" "$validate_tmp"
   fi
@@ -252,7 +259,7 @@ for s in report['segments']:
       --effort "$rerun_effort" \
       -l "$lang" \
       -s "$start_page" \
-      -e "$end_page" 2>&1; then
+      -e "$end_page" >"$_subprocess_stdout" 2>&1; then
       log "重跑完成: $name"
       echo "$name" >> "$_rerun_names_file"
     else
@@ -338,7 +345,7 @@ merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}-me
 
 log
 log "=== 合并 ==="
-PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir"
+PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
 log "合并完成: $merge_output"
 
 # --- 人工兜底清单 ---
