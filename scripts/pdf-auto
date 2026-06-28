@@ -87,6 +87,7 @@ usage() {
 可选环境变量:
   PDF_VALIDATE_THRESHOLD=0.82    覆盖率阈值
   MINERU_RERUN_EFFORT=high       重跑精度
+  MINERU_RERUN_SEGMENT_SIZE=5    重跑时将可疑段拆分为 N 页子段，每段独立重跑后合并
   PDF_AUTO_MERGE_OUTPUT           合并输出路径（默认自动推导）
   PDF_AUTO_JSON=1                输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
@@ -135,6 +136,7 @@ segments_dir="$(cd "$segments_dir" && pwd)"
 
 threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
 rerun_effort="${MINERU_RERUN_EFFORT:-high}"
+rerun_segment_size="${MINERU_RERUN_SEGMENT_SIZE:-5}"
 
 log "pdf-auto: $pdf_path"
 log "分段目录: $segments_dir"
@@ -247,23 +249,67 @@ for s in report['segments']:
       log "清理已有重跑目录: $rerun_dir"
       rm -rf "$rerun_dir"
     fi
+    mkdir -p "$rerun_dir"
 
+    segment_pages=$((end_page - start_page + 1))
     log
-    log "重跑分段: $name (页 $start_page-$end_page) → $rerun_dir"
+    log "重跑分段: $name ($segment_pages 页) → 拆为每 ${rerun_segment_size} 页子段"
 
-    if mineru \
-      -p "$pdf_path" \
-      -o "$rerun_dir" \
-      -b "$backend" \
-      -m "$method" \
-      --effort "$rerun_effort" \
-      -l "$lang" \
-      -s "$start_page" \
-      -e "$end_page" >"$_subprocess_stdout" 2>&1; then
-      log "重跑完成: $name"
+    # 标记此段是否全部子段成功
+    segment_ok=true
+
+    # 拆分为子段逐段重跑
+    sub_start=$start_page
+    while [[ $sub_start -le $end_page ]]; do
+      sub_end=$((sub_start + rerun_segment_size - 1))
+      [[ $sub_end -gt $end_page ]] && sub_end=$end_page
+
+      sub_name="$(printf 'p%04d-%04d' "$sub_start" "$sub_end")"
+      sub_dir="$rerun_dir/$sub_name"
+
+      log "  子段: $sub_name (页 $sub_start-$sub_end)"
+
+      if mineru \
+        -p "$pdf_path" \
+        -o "$sub_dir" \
+        -b "$backend" \
+        -m "$method" \
+        --effort "$rerun_effort" \
+        -l "$lang" \
+        -s "$sub_start" \
+        -e "$sub_end" >"$_subprocess_stdout" 2>&1; then
+        log "    ✓ 完成"
+      else
+        log "    ✗ 失败 (mineru 退出非0)"
+        segment_ok=false
+      fi
+
+      sub_start=$((sub_end + 1))
+    done
+
+    # 合并子段 Markdown 为单个 .md（按页码顺序拼接）
+    if $segment_ok; then
+      merged_md="$rerun_dir/$(basename "$pdf_stem").md"
+      sub_start=$start_page
+      while [[ $sub_start -le $end_page ]]; do
+        sub_end=$((sub_start + rerun_segment_size - 1))
+        [[ $sub_end -gt $end_page ]] && sub_end=$end_page
+        sub_name="$(printf 'p%04d-%04d' "$sub_start" "$sub_end")"
+        sub_dir="$rerun_dir/$sub_name"
+        sub_md="$(find "$sub_dir" -name "*.md" -type f | head -1)"
+        if [[ -n "$sub_md" && -f "$sub_md" ]]; then
+          cat "$sub_md" >> "$merged_md"
+          echo "" >> "$merged_md"
+        fi
+        sub_start=$((sub_end + 1))
+      done
+      log "  子段合并完成 → $(basename "$merged_md")"
+    fi
+
+    if $segment_ok; then
       echo "$name" >> "$_rerun_names_file"
     else
-      log "重跑失败: $name (mineru 退出非0)"
+      log "重跑部分失败: $name（将使用原始结果继续）"
       rerun_failures="$rerun_failures $name"
       echo "$name" >> "$_rerun_names_file"
     fi
@@ -330,7 +376,11 @@ for rerun_dir in "$segments_dir"/*-rerun/; do
   name="${name%-rerun}"
   original_dir="$segments_dir/$name"
 
-  rerun_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
+  # 优先找顶层合并后的 .md（子段重跑产物），否则退到深层搜索
+  rerun_md="$(find "$rerun_dir" -maxdepth 1 -name "*.md" -type f | head -1)"
+  if [[ -z "$rerun_md" ]]; then
+    rerun_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
+  fi
   if [[ -n "$rerun_md" && -f "$rerun_md" ]]; then
     original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
     if [[ -n "$original_md" ]]; then

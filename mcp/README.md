@@ -15,6 +15,16 @@
 
 第一版只暴露一个高层工具，包装当前已经稳定的 `scripts/pdf-auto` 闭环。拆分式工具保留为后续扩展，避免 MCP 第一版重复实现 CLI 编排逻辑。
 
+## 第一版实现标准
+
+- 技术栈使用 Node.js / TypeScript。
+- 代码放在 `mcp/server/`。
+- 只实现 `run_pdf_auto`，不实现 `parse_pdf_segmented`、`validate_segments`、`rerun_segments`、`merge_segments`、`create_review_report`。
+- 工具内部调用 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`。
+- stdout JSON 是状态判断的唯一事实来源；stderr 只作为诊断日志返回或记录。
+- 不解析中文日志决定状态，不在 MCP 层重新实现验证、重跑、合并调度逻辑。
+- CLI 状态映射为 MCP 对外状态：`all_passed` -> `passed`，`merged_with_issues` -> `needs_review`，`error` 或调用失败 -> `failed`。
+
 ### `run_pdf_auto`
 
 输入：
@@ -96,6 +106,39 @@ CLI `status` 当前取值：
 - `error`：`pdf-auto` 退出码为 1，或调用前校验失败。
 
 MCP server 第一版必须读取 stdout JSON 判断状态；stderr 只作为诊断日志返回或记录，不能依赖中文日志解析决定工具状态。MCP 对外返回可以把 CLI 状态映射为 `passed`、`needs_review`、`failed`。
+
+## 阶段 6 验收与运行手册
+
+阶段 6 在最小 MCP server 完成后执行，目标是用真实样本证明 `run_pdf_auto` 可被 Claude Code 稳定调用，并把运行流程固化为手册。
+
+阶段 6 不需要额外产品或架构确认；真实样本路径、MCP 配置位置和具体运行输出在执行时作为验证证据记录。
+
+验收范围：
+
+- Claude Code 通过 MCP 调用 `run_pdf_auto`。
+- 至少一个真实 PDF 样本跑完整流程。
+- 覆盖 `passed`、`needs_review`、`failed` 三类返回路径。
+- 记录安装、构建、启动、配置、调用和排障流程。
+
+阶段 6 不扩展工具面，不新增拆分式 MCP 工具，不引入 OCR/VLM 验证策略，不在 MCP 层重写 `pdf-auto` 调度逻辑。
+
+默认决策：
+
+- 真实样本优先复用阶段 3 使用过的 191 页说明书样本。
+- `failed` 路径默认使用不存在的 PDF 路径或不存在的分段目录模拟。
+- `needs_review` 路径优先复用已知低覆盖率分段；如果真实样本不稳定，则使用最小模拟输出验证 MCP 状态映射。
+- 阶段 6 发现的新能力需求进入后续阶段候选，不在本阶段扩大范围。
+
+运行手册需要包含：
+
+1. MCP server 安装和构建命令。
+2. MCP server 启动命令。
+3. Claude Code MCP 配置示例。
+4. `run_pdf_auto` 调用示例。
+5. `passed`、`needs_review`、`failed` 返回样例。
+6. 常见失败模式和排障步骤。
+
+完成阶段 6 时，需要把真实样本运行证据同步回 `docs/PLAN_MAP.md` 和 `docs/plans/automated-pdf-pipeline.md`。
 
 ## 后续扩展工具草案
 
@@ -265,27 +308,37 @@ status 取值：
 }
 ```
 
-## Claude Code 配置草案
+## Claude Code 配置
 
-后续实现 MCP server 后，可以在 Claude Code 配置中加入类似条目：
+MCP server 已实现，在 Claude Code 中添加：
 
 ```json
 {
   "mcpServers": {
     "mineru-pdf-workflow": {
-      "command": "python",
+      "command": "node",
       "args": [
-        "/Users/jafish/Documents/work/mineru-pdf-workflow/mcp/server.py"
+        "/Users/jafish/Documents/work/mineru-pdf-workflow/mcp/server/dist/index.js"
       ]
     }
   }
 }
 ```
 
-## 实现前置条件
+## 实现状态（阶段 5 已完成）
 
-- `scripts/pdf-validate` 已支持 JSON 输出。
-- `scripts/pdf-auto` 增加 JSON summary，或 MCP server 明确使用退出码和文件路径推导结果。
+- `mcp/server/` Node.js / TypeScript 项目已就绪。
+- 只暴露 `run_pdf_auto` 工具，符合第一版边界。
+- 项目根通过源文件位置推导，无需在配置中指定 `cwd`。
+- 子进程使用白名单环境变量，不注入任意 env。
+- MCP 协议验证通过（`initialize`、`tools/list`）。
+- 构建命令：`cd mcp/server && npm install && npm run build`。
+- 本地验证：`npx @modelcontextprotocol/inspector node dist/index.js`。
+
+## 实现前置条件（已满足）
+
+- ✅ `scripts/pdf-validate` 已支持 JSON 输出。
+- ✅ `scripts/pdf-auto` 已实现 `PDF_AUTO_JSON=1` JSON summary。
 - `scripts/pdf-seg` 的只生成计划能力不属于第一版范围。
 - `scripts/pdf-merge` JSON 输出不属于第一版范围。
 

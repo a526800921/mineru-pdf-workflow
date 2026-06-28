@@ -65,11 +65,12 @@
 | 阶段 2 | 验证报告机器化 | `pdf-validate` 人类输出已验证有效 | JSON 输出可被程序消费 | 已完成 |
 | 阶段 3 | 自动闭环 | JSON 报告可用 | 可疑段 high 重跑、再验证、合并并按需生成 review 文件 | 已完成 |
 | 阶段 4 | MCP 接入准备 | CLI 契约稳定 | MCP 工具契约和脚本输出对齐 | 已完成 |
-| 阶段 5 | MCP server 最小实现 | `PDF_AUTO_JSON=1` 可用且工具边界已固定 | `run_pdf_auto` 返回结构化结果 | 待实施 |
+| 阶段 5 | MCP server 最小实现 | `PDF_AUTO_JSON=1` 可用且工具边界已固定 | `run_pdf_auto` 返回结构化结果 | 已完成 |
+| 阶段 6 | MCP 端到端验收与运行手册固化 | 阶段 5 已完成 | Claude Code 通过 MCP 跑通真实样本并覆盖主要返回路径 | 待实施 |
 
 ## 当前阶段
 
-阶段 4 已完成，superpowers 中的 `pdf-auto` 进度 3 已合并到本计划。下一阶段为阶段 5（MCP server 最小实现）。
+阶段 5 已完成，下一阶段为阶段 6（MCP 端到端验收与运行手册固化）。
 
 ### 阶段 3 完成证据
 
@@ -89,41 +90,100 @@
 - 191 页说明书样本的 `pdf-validate` JSON 摘要已固定：10 个分段，9 个 `passed`，1 个 `suspicious`，阈值 0.82。
 - `mcp/README.md` 已将 MCP 第一版边界固定为 `run_pdf_auto`，拆分式工具保留为后续扩展。
 
-### 阶段 5 实施计划
+### 阶段 5 完成证据
 
-目标：实现只包装 `scripts/pdf-auto` 的最小 MCP server。
+- `mcp/server/` 已包含 Node.js / TypeScript MCP server 项目。
+- 只暴露 `run_pdf_auto` 工具，不实现拆分式工具。
+- 工具通过 `execFile("bash", [scriptPath, pdf, segDir])` 调用 `PDF_AUTO_JSON=1 scripts/pdf-auto`。
+- Zod schema 校验 `pdf_path`、`segments_dir`（必填）和 `threshold`、`rerun_effort`、`merge_output`（可选）。
+- 运行时校验在启动子进程前检查 PDF 路径扩展名、文件存在性、分段目录存在性。
+- stdout JSON 是状态判断的唯一事实来源；stderr 作为诊断信息返回。
+- CLI 状态映射：`all_passed` → `passed`，`merged_with_issues` → `needs_review`，`error`/调用失败 → `failed`。
+- 子进程使用白名单环境变量（`PDF_AUTO_JSON=1`、`PDF_VALIDATE_THRESHOLD`、`MINERU_RERUN_EFFORT`、`PDF_AUTO_MERGE_OUTPUT`），无其他 env 注入。
+- 项目根通过源文件位置推导（`__dirname` → 上溯 3 层），确保从任意 cwd 启动都能找到 `scripts/pdf-auto`。
+- MCP 协议验证通过：`initialize` 和 `tools/list` 响应正确，`run_pdf_auto` 工具含完整 inputSchema。
+- TypeScript 编译通过，产物位于 `mcp/server/dist/`。
+
+
+
+### 阶段 6 实施计划
+
+目标：在阶段 5 完成最小 MCP server 后，用真实样本验证 `run_pdf_auto` 能稳定完成 PDF 自动解析闭环，并把安装、启动、配置、调用和排障流程固化成可重复执行的手册。
+
+确认状态：不需要额外产品或架构确认。阶段 6 的执行边界、状态覆盖和非目标已固定；真实样本路径、MCP 配置位置和具体运行输出在执行时作为验证证据记录。
+
+实施标准：
+
+- 阶段 6 必须在阶段 5 完成后开始。
+- 以 Claude Code 通过 MCP 调用 `run_pdf_auto` 为验收入口，不直接用 shell 调用替代端到端验收。
+- 至少使用一个真实 PDF 样本完成 `passed` 路径验证。
+- `needs_review` 和 `failed` 可以使用真实样本，也可以使用最小模拟样例，但必须记录输入、返回 JSON 和诊断信息。
+- 验收过程只固化运行手册和排障清单，不新增 MCP 工具。
+- 阶段 6 发现的新能力需求一律进入阶段 7 候选，不在阶段 6 扩大范围。
+
+范围：
+
+- 通过 Claude Code MCP 调用 `run_pdf_auto`。
+- 使用真实 PDF 样本跑完整流程。
+- 验证 `passed`、`needs_review`、`failed` 三类返回路径。
+- 固化 MCP server 使用文档和排障清单。
+- 收集阶段 7 候选问题。
+
+非目标：
+
+- 不新增拆分式 MCP 工具。
+- 不实现批量 PDF 队列。
+- 不引入 OCR/VLM 验证策略。
+- 不改写 `pdf-auto` 的核心调度逻辑，除非阶段 6 验收发现必须修复的缺陷。
+
+进入条件：
+
+- 阶段 5 已完成。
+- `mcp/server/` 中已有 Node.js / TypeScript MCP server。
+- `run_pdf_auto` 已能调用 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`。
+- MCP 对外状态映射已实现：`passed`、`needs_review`、`failed`。
+
+Step 0 证据：
+
+- 一个已知可通过的真实 PDF 样本及其分段目录。
+- 一个可触发 `needs_review` 的样本或最小模拟。
+- 一个可触发 `failed` 的最小失败样例，例如不存在的 PDF 路径或非法分段目录。
+- 当前 Claude Code MCP 配置方式截图或文本记录。
+
+默认决策：
+
+- 真实样本优先复用阶段 3 使用过的 191 页说明书样本。
+- `failed` 路径默认使用不存在的 PDF 路径或不存在的分段目录模拟。
+- `needs_review` 路径优先复用已知低覆盖率分段；如果真实样本不稳定，则使用最小模拟输出验证 MCP 状态映射。
+- 运行手册写入 [MCP 接入设计](../../mcp/README.md)，完成证据写入 [PLAN_MAP](../PLAN_MAP.md) 和本计划。
 
 实施任务：
 
-1. 选择 MCP server 技术栈和本地启动方式。
-2. 暴露 `run_pdf_auto(pdf_path, segments_dir, threshold?, rerun_effort?, merge_output?)`。
-3. 调用 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`，把 stdout JSON 映射为工具返回值。
-4. 保留 stderr 作为诊断信息，不让 MCP 解析中文日志决定状态。
-5. 增加最小本地验证命令，并更新 [MCP 接入设计](../../mcp/README.md)。
+1. 记录 MCP server 安装、构建、启动命令。
+2. 记录 Claude Code MCP 配置示例。
+3. 用真实 PDF 调用 `run_pdf_auto`，保存返回 JSON 和输出文件路径。
+4. 验证 `passed` 路径：合并文件存在，`review_markdown` 为空。
+5. 验证 `needs_review` 路径：合并文件存在，`review_markdown` 存在。
+6. 验证 `failed` 路径：错误可读，stderr 或诊断信息可定位问题。
+7. 更新 [MCP 接入设计](../../mcp/README.md) 的运行手册和排障表。
+8. 更新 [PLAN_MAP](../PLAN_MAP.md) 和本计划完成证据。
+9. 运行 `python3 scripts/check_plan_governance.py .`。
 
-### 阶段 5 Step 0 证据
+完成条件：
 
-- `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>` 已输出 `status`、`exit_code`、`merged_markdown`、`review_markdown`、`rerun_segments`。
-- 当前仓库还没有 MCP server 实现，第一版不拆分 `parse_pdf_segmented`、`validate_segments`、`rerun_segments`、`merge_segments`。
-- MCP 调用前校验必须覆盖 PDF 路径、分段目录和可选参数类型。
+- Claude Code 能通过 MCP 调用 `run_pdf_auto` 跑通至少一个真实样本。
+- 三类返回状态都有验证证据或最小模拟。
+- MCP 使用手册足够让后续会话按步骤复现。
+- 阶段 7 候选项已整理，不在阶段 6 扩大范围。
+- 计划治理检查通过。
 
-### 阶段 5 契约决策
+阶段 7 候选：
 
-第一版 MCP 工具只包装 `scripts/pdf-auto`：
-
-```text
-run_pdf_auto(pdf_path, segments_dir, threshold?, rerun_effort?, merge_output?)
-```
-
-暂不在第一版拆分 `parse_pdf_segmented`、`validate_segments`、`rerun_segments`、`merge_segments`、`create_review_report`。这些工具保留为后续扩展。
-
-已实施 `pdf-auto` 的 JSON summary 模式（`PDF_AUTO_JSON=1`）：
-
-```bash
-PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
-```
-
-当前输出包含 `status`、`exit_code`、`merged_markdown`、`review_markdown`、`rerun_segments`，并保留现有退出码语义。CLI `status` 当前使用 `all_passed`、`merged_with_issues`、`error`；MCP server 可以再映射为对外工具状态。
+- 拆分式 MCP 工具。
+- 无文本层 PDF 验证策略。
+- OCR/VLM 辅助验收。
+- 批量处理和任务队列。
+- 更结构化的 review 报告。
 
 ## 未决问题
 
@@ -132,7 +192,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 | 无文本层 PDF 如何验证 | 后续增加 OCR/VLM 对照验证策略 | 否 | 已延后 |
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
 | `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 否 | 已完成 |
-| MCP server 尚未实现 | 阶段 5 只实现 `run_pdf_auto` 包装 | 否 | 待实施 |
+| MCP server 尚未实现 | 阶段 5 已实现，`mcp/server/` 项目已就绪 | 否 | 已解决 |
 
 ## 风险和回滚
 
