@@ -20,6 +20,7 @@
 | [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 实施中 | 方案确认和实施门禁 | automated-pdf-pipeline、coverage-validation-optimization | [Step 0 证据](plans/pdf-output-package-layout.md#step-0-证据) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
+| [marker-feature-absorption](plans/marker-feature-absorption.md) | 待实施 | 阶段 0：Step 0 证据固化 | pdf-output-package-layout、automated-pdf-pipeline | [Step 0 证据](plans/marker-feature-absorption.md#step-0-证据) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -28,7 +29,8 @@
 1. `automated-pdf-pipeline`
 2. `pdf-output-package-layout`
 3. `coverage-validation-optimization`
-4. `minimal-automation-runbook`
+4. `marker-feature-absorption`
+5. `minimal-automation-runbook`
 
 ## 依赖关系
 
@@ -40,6 +42,8 @@
 | pdf-output-package-layout | coverage-validation-optimization | 沿用 `review_only`、TOC 修复和 review 生成结果 |
 | coverage-validation-optimization | automated-pdf-pipeline | 作为自动化流水线阶段 7，优化验证和重跑策略 |
 | coverage-validation-optimization | `content_list_v2.json` | 页面类型识别和结构化文本提取依赖 MinerU 中间结构 |
+| marker-feature-absorption | pdf-output-package-layout | 段级汇总、进度输出和幂等验收基于输出包结构 |
+| marker-feature-absorption | automated-pdf-pipeline | 变更集中在 `pdf-auto`，属于流水线主脚本 |
 | minimal-automation-runbook | automated-pdf-pipeline | 执行手册描述流水线当前可用子集 |
 
 ## 替代、合并和废弃
@@ -66,4 +70,5 @@
 | automated-pdf-pipeline | 阶段 1-7 | 详见 [自动化 PDF 解析流水线计划](plans/automated-pdf-pipeline.md#阶段-7-完成证据) |
 | pdf-output-package-layout | Step 0 | 详见 [PDF 输出包目录结构计划](plans/pdf-output-package-layout.md#step-0-证据) |
 | coverage-validation-optimization | 阶段 0-5 | 详见 [覆盖率验证口径优化计划](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
+| marker-feature-absorption | 阶段 0 | 详见 [marker 特性吸纳计划](plans/marker-feature-absorption.md#step-0-证据) |
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |
