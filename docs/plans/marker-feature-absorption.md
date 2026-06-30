@@ -127,12 +127,12 @@
 | 阶段 0 | 固化 Step 0 证据 | 本计划已记录 | 确认当前 review.md、进度输出和治理文档基线 | 已完成 |
 | 阶段 1 | review.md 段级汇总表 | 阶段 0 完成 | 全量段级汇总表 + 人工审核约定 + 向后兼容 | 已完成 |
 | 阶段 2 | 探针报告机制治理化 | 阶段 1 完成 | `docs/reports/` 目录就绪、探针模板到位 | 已完成 |
-| 阶段 3 | 分步进度输出 + 耗时统计 | 阶段 1 完成 | `pdf-auto` 控制台输出步骤编号和耗时 | 候选 |
+| 阶段 3 | 分步进度输出 + 耗时统计 | 阶段 1 完成 | `pdf-auto` 控制台输出步骤编号和耗时 | 已完成 |
 | 阶段 4 | 图片幂等性验收 + 治理收尾 | 阶段 1-3 完成 | 验证命令、治理检查和 PLAN_MAP 同步 | 候选 |
 
 ## 当前阶段
 
-阶段 1 已完成（2026-06-30）。阶段 2 已完成（2026-06-30）。下一步阶段 3（分步进度输出 + 耗时统计，候选）。
+阶段 1-3 已完成（2026-06-30）。下一步阶段 4（图片幂等性验收 + 治理收尾，候选）。
 
 ### Step 0 证据
 
@@ -465,6 +465,186 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 ### 后续衔接
 
 阶段 3（分步进度输出 + 耗时统计）可直接实施；如涉及外部监控或结构化日志协议，则需先写探针报告。
+
+## 阶段 3 可实施说明
+
+阶段 3 只改进 `pdf-auto` 的非 JSON 人类可读进度输出：增加步骤编号、步骤摘要和单步耗时。不得改变 `PDF_AUTO_JSON=1` 的 stdout JSON 契约，不新增 MCP 工具，不改变验证判定口径。
+
+阶段 3 不需要探针报告：本阶段不引入外部 API、新文件格式、远端服务或结构化日志协议，只是在现有 stderr/stdout 人类日志中增加可读进度。
+
+### 修改范围
+
+代码修改范围限定为 `scripts/pdf-auto`：
+
+- `log()` 相关的人类可读输出。
+- 第一次验证分支：当前约行 199–264。
+- 首次 `merge` 分支：当前约行 258–601。
+- 首次 `needs_review` 分支：当前约行 607–775。
+- 重跑分支：当前约行 779–883。
+- 第二次验证和后续合并 / review 分支：当前约行 885–1218。
+
+阶段 3 不修改：
+
+- `scripts/pdf-validate` JSON 字段和判定逻辑。
+- `scripts/pdf-seg`、`scripts/pdf-merge`、`scripts/pdf-rerun`。
+- `mcp/server/*`。
+- `PDF_AUTO_JSON=1` stdout JSON 结构。
+- review.md 内容结构。
+
+实施代码改动前必须按项目 GitNexus 规则对 `scripts/pdf-auto` 相关变更点做影响分析；如果只改本文档，不需要符号影响分析。
+
+### 输出格式
+
+非 JSON 模式下，阶段 3 目标输出格式：
+
+```text
+[1/4] 验证分段覆盖率
+  → 阈值: 0.82
+  → 通过: 0, 需重跑: 0, 需复核: 1
+  → 耗时 0.4s
+
+[2/4] 生成人工兜底清单
+  → review.md: /abs/path/pdf/demo5/review.md
+  → 耗时 0.1s
+```
+
+如果进入全部通过路径：
+
+```text
+[1/3] 验证分段覆盖率
+  → 阈值: 0.4
+  → 通过: 1, 需重跑: 0, 需复核: 0
+  → 耗时 0.4s
+
+[2/3] 合并 Markdown
+  → 输出: /abs/path/pdf/demo5/demo5.md
+  → 耗时 0.1s
+```
+
+如果进入重跑路径：
+
+```text
+[1/5] 验证分段覆盖率
+[2/5] 重跑可疑段
+[3/5] 二次验证
+[4/5] 合并 Markdown
+[5/5] 生成人工兜底清单
+```
+
+步骤总数可以按实际分支动态确定，但必须在每个步骤输出中保持一致。例如 `needs_review` 直接结束路径可以是 `[1/2]`、`[2/2]`；全部通过路径可以是 `[1/2]`、`[2/2]`；重跑后需要 review 的路径可以是 `[1/4]` 到 `[4/4]`。
+
+### 耗时口径
+
+建议实现两个 Bash helper：
+
+```bash
+now_ms() {
+  python3 - <<'PY'
+import time
+print(int(time.time() * 1000))
+PY
+}
+
+elapsed_s() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+start = int(sys.argv[1])
+end = int(sys.argv[2])
+print(f"{(end - start) / 1000:.1f}s")
+PY
+}
+```
+
+要求：
+
+- 单步耗时从该步骤开始到该步骤主要动作完成。
+- 耗时输出只进入人类日志，不进入 JSON stdout。
+- `PDF_AUTO_JSON=1` 模式下，人类日志仍走 stderr，stdout 只能是最终 JSON。
+- 不要求总耗时；如实现总耗时，只能作为人类日志。
+
+### 建议实现步骤
+
+1. 增加轻量日志 helper，例如 `step_start <n> <total> <title>` 和 `step_done <start_ms> [summary...]`。
+2. 将当前 `=== 第一次验证 ===` 替换或包裹为 `[1/N] 验证分段覆盖率`。
+3. 在第一次验证后输出摘要：通过段数、需重跑段数、需复核段数。
+4. 对 `needs_review` 直接结束路径增加“生成人工兜底清单”步骤。
+5. 对 `merge` 路径增加“合并 Markdown”步骤；TOC 修复可作为合并步骤内的子日志，不单独计步骤。
+6. 对 `rerun` 路径增加“重跑可疑段”“二次验证”“合并 Markdown”或“生成人工兜底清单”步骤。
+7. 保留现有关键诊断信息，如段名、覆盖率、失败原因、review 输出路径和合并输出路径。
+
+### 验收样本
+
+阶段 3 默认使用 Phase 8 输出包样本：
+
+```text
+pdf/demo5/demo5.pdf
+pdf/demo5/segments/
+```
+
+必须覆盖两条稳定路径：
+
+1. `needs_review`：`PDF_VALIDATE_THRESHOLD=0.82 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments`
+2. `all_passed`：`PDF_VALIDATE_THRESHOLD=0.4 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments`
+
+如果当前样本无法稳定触发重跑路径，重跑路径的步骤编号可通过代码审查确认，后续遇到真实 `rerunnable=true` 样本时补验收记录。
+
+### 阶段 3 验收命令
+
+```bash
+bash -n scripts/pdf-auto
+
+PDF_VALIDATE_THRESHOLD=0.82 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/pdf-auto-review.log 2>&1 || test "$?" -eq 2
+grep -E "\[[0-9]+/[0-9]+\] 验证分段覆盖率" /tmp/pdf-auto-review.log
+grep -E "\[[0-9]+/[0-9]+\] 生成人工兜底清单" /tmp/pdf-auto-review.log
+grep -E "耗时 [0-9]+\\.[0-9]s" /tmp/pdf-auto-review.log
+
+PDF_VALIDATE_THRESHOLD=0.4 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/pdf-auto-pass.log 2>&1
+grep -E "\[[0-9]+/[0-9]+\] 验证分段覆盖率" /tmp/pdf-auto-pass.log
+grep -E "\[[0-9]+/[0-9]+\] 合并 Markdown" /tmp/pdf-auto-pass.log
+grep -E "耗时 [0-9]+\\.[0-9]s" /tmp/pdf-auto-pass.log
+
+PDF_VALIDATE_THRESHOLD=0.82 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/pdf-auto-review.json 2>/tmp/pdf-auto-review-json.stderr || test "$?" -eq 2
+python3 -m json.tool /tmp/pdf-auto-review.json > /dev/null
+grep -E "\[[0-9]+/[0-9]+\]" /tmp/pdf-auto-review-json.stderr
+
+PDF_VALIDATE_THRESHOLD=0.4 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/pdf-auto-pass.json 2>/tmp/pdf-auto-pass-json.stderr
+python3 -m json.tool /tmp/pdf-auto-pass.json > /dev/null
+grep -E "\[[0-9]+/[0-9]+\]" /tmp/pdf-auto-pass-json.stderr
+
+cd mcp/server && npm run build
+cd ../..
+python3 scripts/check_plan_governance.py .
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+JSON 模式验收重点：
+
+- stdout 必须是合法 JSON。
+- 步骤编号和耗时只能出现在 stderr。
+- MCP 构建通过，证明 `run_pdf_auto` 消费 stdout JSON 不受影响。
+
+### 阶段 3 完成证据（2026-06-30）
+
+- `scripts/pdf-auto` 新增 `now_ms()` / `elapsed_s()` 计时 helper 和 `step_start()` / `step_done()` 步骤 helper。
+- `needs_review` 路径（阈值 0.82）：`[1/2] 验证分段覆盖率` → `[2/2] 生成人工兜底清单`，各有 `→ 耗时`。
+- `all_passed` 路径（阈值 0.4）：`[1/2] 验证分段覆盖率` → `[2/2] 合并 Markdown`，各有 `→ 耗时`。
+- `rerun` 路径：`_step_total` 动态更新为 4（验证→重跑→二验→合并/兜底）。
+- JSON 模式：stdout 纯 JSON（`python3 -m json.tool` 验证通过），步骤进度和耗时只出现在 stderr。
+- 现有关键诊断信息保留：段名、覆盖率、review/merge 输出路径、TOC 修复日志。
+- `bash -n`、`npm run build`、`check_plan_governance.py` 通过。
+- JSON/MCP 契约不变。
+
+### 阶段 3 完成条件
+- `marker-feature-absorption` 阶段 3 状态更新为 `已完成`，记录验收证据。
+- `PLAN_MAP.md` 同步当前阶段为阶段 4 或后续阶段。
+
+### 阶段 3 完成后同步
+
+阶段 3 完成后更新：
+
+- `docs/plans/marker-feature-absorption.md`：记录阶段 3 完成证据，阶段路线图状态改为 `已完成`。
+- `docs/PLAN_MAP.md`：当前阶段切到阶段 4。
+- 如 README 已描述 `pdf-auto` 控制台输出，可补充步骤编号和耗时说明；没有相关说明时不强行新增。
 
 ## 验证方式
 

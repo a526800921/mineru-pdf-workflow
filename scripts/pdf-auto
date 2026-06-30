@@ -28,6 +28,40 @@ log() {
   fi
 }
 
+# --- step progress helpers (stage 3) ---
+now_ms() {
+  python3 -c 'import time; print(int(time.time() * 1000))'
+}
+
+elapsed_s() {
+  python3 - "$1" "$2" <<'PY'
+import sys; s=int(sys.argv[1]); e=int(sys.argv[2])
+print(f"{(e-s)/1000:.1f}s")
+PY
+}
+
+_step_total=0
+_step_index=0
+_step_start_ms=0
+
+step_start() {
+  _step_index=$((_step_index + 1))
+  _step_total="${1:-$_step_total}"
+  local title="${2:-}"
+  _step_start_ms="$(now_ms)"
+  if [[ "$_step_index" -eq 1 ]]; then
+    log
+  fi
+  log "[${_step_index}/${_step_total}] ${title}"
+}
+
+step_done() {
+  local _end="$(now_ms)"
+  local _elapsed="$(elapsed_s "$_step_start_ms" "$_end")"
+  log "  → 耗时 ${_elapsed}"
+}
+# --- end step progress helpers ---
+
 # Emit final JSON to stdout
 emit_json() {
   local status="$1"
@@ -197,8 +231,7 @@ done
 pdf_stem="$(basename "$pdf_path" .pdf)"
 
 # --- 第一次验证 ---
-log
-log "=== 第一次验证 ==="
+step_start 2 "验证分段覆盖率"
 
 # 临时文件保存 pdf-validate 的 JSON 输出
 validate_tmp="$(mktemp)"
@@ -255,12 +288,17 @@ PY
   exit 1
 }
 
+step_done
+if [[ "$action" == "rerun" ]]; then
+  _step_total=4
+fi
+
 if [[ "$action" == "merge" ]]; then
   merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
-  log "全部通过，开始合并..."
 
   # --- TOC 段修复：用 PDF 文本层重生成目录页 Markdown ---
-  log "检查 TOC 页..."
+  step_start "$_step_total" "合并 Markdown"
+  log "  → 路径: $merge_output"
   python3 - "$pdf_path" "$segments_dir" "$validate_tmp" <<'PY'
 import json, re, sys
 from collections import OrderedDict
@@ -428,7 +466,7 @@ if fixed_count:
         print(f"TOC 再验证完成: {updated} 段，{'全部通过' if all_ok else '仍有未通过'}", file=sys.stderr)
 PY
 
-  log "合并输出: $merge_output"
+  log "  → 输出: $merge_output"
   PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
 
   # 检查是否有 review_only 段，生成人工复核清单
@@ -595,6 +633,8 @@ print(f"人工兜底清单已生成: {review_path}", file=sys.stderr)
 PY
   fi
 
+
+  step_done
   if [[ "$json_mode" == "1" ]]; then
     emit_json "all_passed" 0 "$merge_output" "$review_output" "$validate_tmp"
   fi
@@ -605,8 +645,8 @@ fi
 if [[ "$action" == "needs_review" ]]; then
   review_output="$(dirname "$segments_dir")/review.md"
 
-  log
-  log "=== 首次验证：存在需人工复核段，跳过合并 ==="
+
+  step_start "$_step_total" "生成人工兜底清单"
 
   python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate_tmp" "" <<'PY'
 import json, sys
@@ -769,6 +809,8 @@ Path(review_path).write_text("\n".join(lines), encoding="utf-8")
 print(f"人工兜底清单已生成: {review_path}", file=sys.stderr)
 PY
 
+
+  step_done
   if [[ "$json_mode" == "1" ]]; then
     emit_json "needs_review" 2 "" "$review_output" "$validate_tmp"
   fi
@@ -776,11 +818,9 @@ PY
   exit 2
 fi
 
-log "需要重跑可疑段，继续执行..."
 
 if [[ "$action" == "rerun" ]]; then
-  log
-  log "=== 重跑可疑段（effort=${rerun_effort}） ==="
+  step_start "$_step_total" "重跑可疑段"
 
   # Extract rerunnable segment names from JSON (阶段 4：只重跑 rerunnable==true 的段)
   rerun_names="$(cat "$validate_tmp" | python3 -c "
@@ -882,7 +922,7 @@ fi
 
 # --- 第二次验证 ---
 log
-log "=== 第二次验证 ==="
+step_start "$_step_total" "二次验证"
 
 validate2_tmp="$(mktemp)"
 trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"; _d="$(cd "$(dirname "$0")" && pwd)"; rm -rf "$(dirname "$_d")/output"' EXIT
@@ -936,12 +976,13 @@ PY
   exit 1
 }
 
+step_done
+
 merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
 
 # --- 全部通过：直接合并 ---
 if echo "$decision" | grep -q "^all_passed$"; then
-  log
-  log "=== 准备合并 ==="
+  step_start "$_step_total" "合并 Markdown"
 
   for rerun_dir in "$segments_dir"/*-rerun/; do
     [[ -d "$rerun_dir" ]] || continue
@@ -1031,6 +1072,8 @@ PY
   PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
   log "合并完成: $merge_output"
 
+
+  step_done
   if [[ "$json_mode" == "1" ]]; then
     emit_json "all_passed" 0 "$merge_output" "" "$validate2_tmp"
   fi
@@ -1042,8 +1085,7 @@ fi
 if echo "$decision" | grep -q "^has_issues$"; then
   review_output="$(dirname "$segments_dir")/review.md"
 
-  log
-  log "=== 人工兜底清单 ==="
+  step_start "$_step_total" "生成人工兜底清单"
 
   python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate2_tmp" "$rerun_failures" <<'PY'
 import json, sys
@@ -1212,6 +1254,8 @@ PY
     log "  $seg"
   done
 
+
+  step_done
   if [[ "$json_mode" == "1" ]]; then
     emit_json "needs_review" 2 "" "$review_output" "$validate2_tmp"
   fi
