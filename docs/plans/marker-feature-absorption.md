@@ -124,21 +124,21 @@
 
 | 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
 |------|------|----------|----------|------|
-| 阶段 0 | 固化 Step 0 证据 | 本计划已记录 | 确认当前 review.md、进度输出和治理文档基线 | 待实施 |
-| 阶段 1 | review.md 段级汇总表 | 阶段 0 完成 | 全量段级汇总表 + 人工审核约定 + 向后兼容 | 候选 |
+| 阶段 0 | 固化 Step 0 证据 | 本计划已记录 | 确认当前 review.md、进度输出和治理文档基线 | 已完成 |
+| 阶段 1 | review.md 段级汇总表 | 阶段 0 完成 | 全量段级汇总表 + 人工审核约定 + 向后兼容 | 已完成 |
 | 阶段 2 | 探针报告机制治理化 | 阶段 1 完成 | `docs/reports/` 目录就绪、探针模板到位 | 候选 |
 | 阶段 3 | 分步进度输出 + 耗时统计 | 阶段 1 完成 | `pdf-auto` 控制台输出步骤编号和耗时 | 候选 |
 | 阶段 4 | 图片幂等性验收 + 治理收尾 | 阶段 1-3 完成 | 验证命令、治理检查和 PLAN_MAP 同步 | 候选 |
 
 ## 当前阶段
 
-阶段 0（Step 0 证据固化）。
+阶段 1 已完成（2026-06-30）。下一步阶段 2（探针报告机制治理化，候选）。
 
 ### Step 0 证据
 
 #### review.md 基线
 
-当前 `scripts/pdf-auto` 的 review.md 结构（来自两处内联 Python 代码，行 438–530 和 800–860）：
+当前 `scripts/pdf-auto` 的 review.md 结构（来自三处内联 Python 代码：首次直接合并但仍有复核段的分支约行 446–538、首次 `needs_review` 分支约行 555–656、重跑后二次验证仍有问题的分支约行 935–1037）：
 
 - 标题：`# 人工兜底清单`
 - 元信息：生成时间、原始 PDF、分段目录、阈值
@@ -148,12 +148,14 @@
 
 #### 进度输出基线
 
-当前 `pdf-auto` 的步骤输出（行 230–260 附近）：
+当前 `pdf-auto` 的步骤输出（首次验证决策约行 199–248，重跑分支约行 666 以后）：
 
 ```
-验证分段覆盖率... 8/10 通过，2 段可疑/需复核
-重跑可疑段 (high)... p0001-0010: done
-二次验证...
+=== 第一次验证 ===
+通过: 1 段
+需重跑: 0 段
+  [pass] p0001-0005: 覆盖率 0.4379 (coverage_ok)
+全部通过，开始合并...
 ```
 
 - 无步骤编号（`[1/N]`）
@@ -177,6 +179,138 @@
 - 风险：LOW。
 - 受影响执行流：0。
 
+## 阶段 1 可实施说明
+
+### 阶段 1 完成证据（2026-06-30）
+
+- `pdf-auto` 三个 review 生成分支均已插入段级汇总表和人工审核结论约定。
+- demo5 `needs_review` 路径验证：`review.md` 包含 `## 段级汇总`（1 段/6 列）、`## 人工审核结论约定`（3 行）、`## 需复核分段`（保留）、`## 逐页详情`（保留）。
+- demo5 `all_passed` 路径验证：JSON 合法，`status: "all_passed"`，`review_markdown: null`。
+- `bash -n`、`npm run build`、`check_plan_governance.py` 通过。
+- JSON 契约、MCP 工具边界、验证判定口径未变更。
+
+阶段 1 只落地 `review.md` 段级汇总表和人工审核结论约定，不改变 JSON 契约、不改变 MCP 工具边界、不改变验证判定口径。
+
+### 修改范围
+
+代码修改范围限定为 `scripts/pdf-auto` 的 `review.md` 生成逻辑：
+
+- 首次直接合并后仍有复核段的 review 生成分支：约行 446–538。
+- 首次验证直接 `needs_review` 的 review 生成分支：约行 555–656。
+- 重跑后二次验证仍有问题的 review 生成分支：约行 935–1037。
+
+阶段 1 不修改：
+
+- `scripts/pdf-validate` 的 JSON 字段和判定逻辑。
+- `scripts/pdf-seg`、`scripts/pdf-merge`、`scripts/pdf-rerun`。
+- MCP `run_pdf_auto` 入参、出参和状态映射。
+- `PDF_AUTO_JSON=1` stdout JSON 结构。
+
+### 建议实现方式
+
+优先在 `scripts/pdf-auto` 的内联 Python 中抽出或复制同一套 review 渲染逻辑，确保三处分支生成一致的 `review.md` 结构。
+
+阶段 1 的目标结构：
+
+```markdown
+# 人工兜底清单
+
+生成时间: 2026-06-30 21:30
+原始 PDF: /abs/path/pdf/demo5/demo5.pdf
+分段目录: /abs/path/pdf/demo5/segments
+阈值: 0.82
+
+## 段级汇总
+
+| 分段 | 页码范围 | 段级状态 | 可重跑 | 需复核页数 | 页级分布 |
+|------|----------|----------|--------|------------|----------|
+| p0001-0005 | 1-5 | `review_only` | 否 | 5 | review_only:5 |
+
+## 人工审核结论约定
+
+| 结论 | 含义 |
+|------|------|
+| `pass` | 人工确认该段无需修改 |
+| `fix_md` | 人工直接修正合并 Markdown |
+| `rerun` | 人工决定后续重新解析该段 |
+
+## 需复核分段
+
+...（现有表格保留）
+```
+
+### 字段映射
+
+段级汇总表字段来源：
+
+| 列 | 来源 | 规则 |
+|---|---|---|
+| 分段 | `seg["name"]` | 原样输出 |
+| 页码范围 | `seg["start_page"]` / `seg["end_page"]` | 1-based 页码范围，格式 `start-end` |
+| 段级状态 | `seg["decision"]` 优先，否则 `seg["status"]` | 用反引号包裹 |
+| 可重跑 | `seg["rerunnable"]` | `true` 输出“是”，其他输出“否” |
+| 需复核页数 | `seg["pages"]` 中 `decision in ("review_only", "rerun")` 或 `status in ("failed", "skipped", "suspicious")` 的页数 | 无页级数据时，如果段本身需复核则记 `1`，否则记 `0` |
+| 页级分布 | `seg["pages"]` 中页面 `decision` 或 `status` 计数 | 格式 `passed:3, review_only:7`；无页级数据时使用段级状态 `status:1` |
+
+段级状态建议归一化：
+
+| 原始字段组合 | 段级状态 |
+|---|---|
+| `decision == "review_only"` | `review_only` |
+| `decision == "rerun"` | `rerun` |
+| `decision == "pass"` 或 `status == "passed"` | `passed` |
+| `status == "failed"` | `failed` |
+| `status == "skipped"` | `skipped` |
+| 其他 | 原始 `decision` 或 `status` |
+
+### 保留现有内容
+
+阶段 1 必须保留现有页级明细能力：
+
+- 现有“需复核分段”表格不删列。
+- 现有逐页详情不删列。
+- 现有 `review_only`、`rerun`、`failed`、`skipped` 的处理建议文案不降低信息量。
+- 已通过段只进入“段级汇总”，不进入“需复核分段”和逐页详情。
+
+### 验收样本
+
+阶段 1 默认使用 Phase 8 已跑通的输出包样本：
+
+```text
+pdf/demo5/demo5.pdf
+pdf/demo5/segments/
+```
+
+验收时至少覆盖两个返回路径：
+
+1. `needs_review`：`PDF_VALIDATE_THRESHOLD=0.82 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments`
+2. `all_passed`：`PDF_VALIDATE_THRESHOLD=0.4 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments`
+
+`needs_review` 路径必须生成 `pdf/demo5/review.md`，并包含“段级汇总”“人工审核结论约定”“可重跑”。
+
+`all_passed` 路径的 JSON stdout 必须保持合法，且不要求生成 review；如果因后续样本存在 `review_only` 同时合并的情况生成 review，也必须使用同一结构。
+
+### 阶段 1 完成后同步
+
+阶段 1 完成后需要同步：
+
+- `docs/plans/marker-feature-absorption.md`：阶段 1 状态改为 `已完成`，记录验收证据。
+- `docs/PLAN_MAP.md`：`marker-feature-absorption` 当前阶段改为阶段 2 或后续阶段。
+- 如 README 中已有 review.md 说明，则补充段级汇总和人工审核结论约定；没有相关说明时不强行新增。
+
+阶段 1 完成前必须运行：
+
+```bash
+bash -n scripts/pdf-auto
+PDF_VALIDATE_THRESHOLD=0.82 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/review-test.json
+python3 -m json.tool /tmp/review-test.json > /dev/null
+grep -c "段级汇总" pdf/demo5/review.md
+grep -c "人工审核结论约定" pdf/demo5/review.md
+grep -c "可重跑" pdf/demo5/review.md
+python3 scripts/check_plan_governance.py .
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
 ## 验证方式
 
 ### 阶段 1（review.md 段级汇总表）
@@ -184,13 +318,13 @@
 ```bash
 # 语法检查和 JSON 模式兼容
 bash -n scripts/pdf-auto
-PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo20/demo20.pdf demo20-output/segments > /tmp/review-test.json
+PDF_VALIDATE_THRESHOLD=0.82 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/review-test.json
 python3 -m json.tool /tmp/review-test.json > /dev/null
 
 # 验证 review.md 结构
-grep -c "段级汇总" /path/to/review.md     # ≥ 1
-grep -c "人工审核结论约定" /path/to/review.md  # ≥ 1
-grep -c "可重跑" /path/to/review.md       # ≥ 1（段级汇总表列名）
+grep -c "段级汇总" pdf/demo5/review.md     # ≥ 1
+grep -c "人工审核结论约定" pdf/demo5/review.md  # ≥ 1
+grep -c "可重跑" pdf/demo5/review.md       # ≥ 1（段级汇总表列名）
 ```
 
 ### 阶段 2（探针报告机制）
@@ -207,10 +341,10 @@ python3 scripts/check_plan_governance.py .
 
 ```bash
 # 非 JSON 模式输出包含步骤编号
-scripts/pdf-auto pdf/demo5/demo5.pdf demo5-output/segments 2>&1 | grep -E "\[[0-9]+/[0-9]+\]"
+scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments 2>&1 | grep -E "\[[0-9]+/[0-9]+\]"
 
 # JSON 模式不输出步骤进度（stdout 为纯 JSON）
-PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf demo5-output/segments 2>/dev/null | python3 -m json.tool > /dev/null
+PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments 2>/dev/null | python3 -m json.tool > /dev/null
 ```
 
 ### 阶段 4（图片幂等性验收 + 治理收尾）

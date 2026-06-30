@@ -466,6 +466,62 @@ lines.append(f"原始 PDF: {pdf_path}")
 lines.append(f"分段目录: {segments_dir}")
 lines.append(f"阈值: {threshold}")
 lines.append("")
+
+# --- 段级汇总 ---
+lines.append("## 段级汇总")
+lines.append("")
+lines.append("| 分段 | 页码范围 | 段级状态 | 可重跑 | 需复核页数 | 页级分布 |")
+lines.append("|------|----------|----------|--------|------------|----------|")
+
+for seg in report["segments"]:
+    seg_name = seg["name"]
+    pages = f"{seg['start_page']}-{seg['end_page']}"
+    decision = seg.get("decision", "")
+    status = seg.get("status", "")
+    if decision == "review_only":
+        seg_status = "`review_only`"
+    elif decision == "rerun":
+        seg_status = "`rerun`"
+    elif decision == "pass" or status == "passed":
+        seg_status = "`passed`"
+    elif status == "failed":
+        seg_status = "`failed`"
+    elif status == "skipped":
+        seg_status = "`skipped`"
+    else:
+        seg_status = f"`{decision or status}`"
+    rerunnable = "是" if seg.get("rerunnable", False) else "否"
+    pages_data = seg.get("pages", [])
+    review_count = 0
+    dist = {}
+    if pages_data:
+        for p in pages_data:
+            pd = p.get("decision", "")
+            ps = p.get("status", "")
+            key = pd if pd in ("review_only", "rerun", "pass") else (ps or "?")
+            dist[key] = dist.get(key, 0) + 1
+            if pd in ("review_only", "rerun") or ps in ("failed", "skipped", "suspicious"):
+                review_count += 1
+    else:
+        if decision in ("review_only", "rerun") or status in ("failed", "skipped"):
+            review_count = 1
+        key = decision or status or "?"
+        dist[key] = 1
+    dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(dist.items()))
+    lines.append(f"| {seg_name} | {pages} | {seg_status} | {rerunnable} | {review_count} | {dist_str} |")
+
+lines.append("")
+
+# --- 人工审核结论约定 ---
+lines.append("## 人工审核结论约定")
+lines.append("")
+lines.append("| 结论 | 含义 |")
+lines.append("|------|------|")
+lines.append("| `pass` | 人工确认该段无需修改 |")
+lines.append("| `fix_md` | 人工直接修正合并 Markdown |")
+lines.append("| `rerun` | 人工决定后续重新解析该段 |")
+lines.append("")
+
 lines.append("## 需人工复核分段")
 lines.append("")
 lines.append("| 分段 | 页码范围 | 覆盖率 | 处理建议 | 原因 |")
@@ -578,6 +634,63 @@ lines.append(f"原始 PDF: {pdf_path}")
 lines.append(f"分段目录: {segments_dir}")
 lines.append(f"阈值: {threshold}")
 lines.append("")
+lines.append("")
+
+# --- 段级汇总 ---
+lines.append("## 段级汇总")
+lines.append("")
+lines.append("| 分段 | 页码范围 | 段级状态 | 可重跑 | 需复核页数 | 页级分布 |")
+lines.append("|------|----------|----------|--------|------------|----------|")
+
+for seg in report["segments"]:
+    seg_name = seg["name"]
+    pages = f"{seg['start_page']}-{seg['end_page']}"
+    decision = seg.get("decision", "")
+    status = seg.get("status", "")
+    if decision == "review_only":
+        seg_status = "`review_only`"
+    elif decision == "rerun":
+        seg_status = "`rerun`"
+    elif decision == "pass" or status == "passed":
+        seg_status = "`passed`"
+    elif status == "failed":
+        seg_status = "`failed`"
+    elif status == "skipped":
+        seg_status = "`skipped`"
+    else:
+        seg_status = f"`{decision or status}`"
+    rerunnable = "是" if seg.get("rerunnable", False) else "否"
+    pages_data = seg.get("pages", [])
+    review_count = 0
+    dist = {}
+    if pages_data:
+        for p in pages_data:
+            pd = p.get("decision", "")
+            ps = p.get("status", "")
+            key = pd if pd in ("review_only", "rerun", "pass") else (ps or "?")
+            dist[key] = dist.get(key, 0) + 1
+            if pd in ("review_only", "rerun") or ps in ("failed", "skipped", "suspicious"):
+                review_count += 1
+    else:
+        if decision in ("review_only", "rerun") or status in ("failed", "skipped"):
+            review_count = 1
+        key = decision or status or "?"
+        dist[key] = 1
+    dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(dist.items()))
+    lines.append(f"| {seg_name} | {pages} | {seg_status} | {rerunnable} | {review_count} | {dist_str} |")
+
+lines.append("")
+
+# --- 人工审核结论约定 ---
+lines.append("## 人工审核结论约定")
+lines.append("")
+lines.append("| 结论 | 含义 |")
+lines.append("|------|------|")
+lines.append("| `pass` | 人工确认该段无需修改 |")
+lines.append("| `fix_md` | 人工直接修正合并 Markdown |")
+lines.append("| `rerun` | 人工决定后续重新解析该段 |")
+lines.append("")
+
 lines.append("## 需复核分段")
 lines.append("")
 lines.append("| 分段 | 页码范围 | 覆盖率 | 处理建议 | 原因 |")
@@ -959,6 +1072,63 @@ lines.append(f"原始 PDF: {pdf_path}")
 lines.append(f"分段目录: {segments_dir}")
 lines.append(f"阈值: {threshold}")
 lines.append("")
+lines.append("")
+
+# --- 段级汇总 ---
+lines.append("## 段级汇总")
+lines.append("")
+lines.append("| 分段 | 页码范围 | 段级状态 | 可重跑 | 需复核页数 | 页级分布 |")
+lines.append("|------|----------|----------|--------|------------|----------|")
+
+for seg in report["segments"]:
+    seg_name = seg["name"]
+    pages = f"{seg['start_page']}-{seg['end_page']}"
+    decision = seg.get("decision", "")
+    status = seg.get("status", "")
+    if decision == "review_only":
+        seg_status = "`review_only`"
+    elif decision == "rerun":
+        seg_status = "`rerun`"
+    elif decision == "pass" or status == "passed":
+        seg_status = "`passed`"
+    elif status == "failed":
+        seg_status = "`failed`"
+    elif status == "skipped":
+        seg_status = "`skipped`"
+    else:
+        seg_status = f"`{decision or status}`"
+    rerunnable = "是" if seg.get("rerunnable", False) else "否"
+    pages_data = seg.get("pages", [])
+    review_count = 0
+    dist = {}
+    if pages_data:
+        for p in pages_data:
+            pd = p.get("decision", "")
+            ps = p.get("status", "")
+            key = pd if pd in ("review_only", "rerun", "pass") else (ps or "?")
+            dist[key] = dist.get(key, 0) + 1
+            if pd in ("review_only", "rerun") or ps in ("failed", "skipped", "suspicious"):
+                review_count += 1
+    else:
+        if decision in ("review_only", "rerun") or status in ("failed", "skipped"):
+            review_count = 1
+        key = decision or status or "?"
+        dist[key] = 1
+    dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(dist.items()))
+    lines.append(f"| {seg_name} | {pages} | {seg_status} | {rerunnable} | {review_count} | {dist_str} |")
+
+lines.append("")
+
+# --- 人工审核结论约定 ---
+lines.append("## 人工审核结论约定")
+lines.append("")
+lines.append("| 结论 | 含义 |")
+lines.append("|------|------|")
+lines.append("| `pass` | 人工确认该段无需修改 |")
+lines.append("| `fix_md` | 人工直接修正合并 Markdown |")
+lines.append("| `rerun` | 人工决定后续重新解析该段 |")
+lines.append("")
+
 lines.append("## 需复核分段")
 lines.append("")
 lines.append("| 分段 | 页码范围 | 覆盖率 | 处理建议 | 原因 |")
