@@ -128,11 +128,11 @@
 | 阶段 1 | review.md 段级汇总表 | 阶段 0 完成 | 全量段级汇总表 + 人工审核约定 + 向后兼容 | 已完成 |
 | 阶段 2 | 探针报告机制治理化 | 阶段 1 完成 | `docs/reports/` 目录就绪、探针模板到位 | 已完成 |
 | 阶段 3 | 分步进度输出 + 耗时统计 | 阶段 1 完成 | `pdf-auto` 控制台输出步骤编号和耗时 | 已完成 |
-| 阶段 4 | 图片幂等性验收 + 治理收尾 | 阶段 1-3 完成 | 验证命令、治理检查和 PLAN_MAP 同步 | 候选 |
+| 阶段 4 | 图片幂等性验收 + 治理收尾 | 阶段 1-3 完成 | 验证命令、治理检查和 PLAN_MAP 同步 | 已完成 |
 
 ## 当前阶段
 
-阶段 1-3 已完成（2026-06-30）。下一步阶段 4（图片幂等性验收 + 治理收尾，候选）。
+全阶段（0-4）已完成（2026-06-30）。计划状态：已完成。
 
 ### Step 0 证据
 
@@ -646,6 +646,162 @@ JSON 模式验收重点：
 - `docs/PLAN_MAP.md`：当前阶段切到阶段 4。
 - 如 README 已描述 `pdf-auto` 控制台输出，可补充步骤编号和耗时说明；没有相关说明时不强行新增。
 
+## 阶段 4 可实施说明
+
+阶段 4 只把图片路径幂等性纳入正式验收，并完成 `marker-feature-absorption` 的治理收尾。优先通过验收脚本或文档化命令证明现有输出包行为稳定；只有验收发现真实漂移时，才进入代码修复。
+
+### 阶段 4 目标
+
+- 明确图片幂等性验收口径：连续运行同一 PDF 输出包时，`images/` 文件集合稳定，Markdown 图片引用稳定。
+- 将图片幂等性验收项同步到 [PDF 输出包目录结构计划](pdf-output-package-layout.md)，避免该契约只存在于 marker 吸纳计划中。
+- 收尾 `marker-feature-absorption`：阶段 0-4 证据闭环，`PLAN_MAP.md` 状态、当前阶段和完成证据同步。
+
+### 阶段 4 非目标
+
+- 不改变 MinerU 解析引擎或图片抽取策略。
+- 不改 MCP `run_pdf_auto` 入参、出参或状态映射。
+- 不新增图片重命名规则，除非验收发现当前规则不可幂等。
+- 不引入新的外部依赖或独立测试框架。
+- 不把图片二进制内容纳入 Git 管理；验收只比较运行样本输出。
+
+### Step 0 证据
+
+阶段 4 实施前先固定图片输出基线：
+
+- 样本：`pdf/demo5/demo5.pdf`
+- 分段目录：`pdf/demo5/segments/`
+- 输出包：`pdf/demo5/`
+- 图片目录：`pdf/demo5/images/`
+- 合并 Markdown：`pdf/demo5/demo5.md`
+
+进入实施前执行一次只读盘点：
+
+```bash
+find pdf/demo5/images -type f | sort > /tmp/demo5-images.before
+grep -oE '!\[[^]]*\]\([^)]+\)' pdf/demo5/demo5.md | sort > /tmp/demo5-image-refs.before
+wc -l /tmp/demo5-images.before /tmp/demo5-image-refs.before
+```
+
+如果样本当前没有图片文件或 Markdown 图片引用，应记录为“无图片样本，不足以验收图片幂等性”，并补充一个包含图片的真实 PDF 样本后再验收阶段 4。
+
+### 修改范围
+
+优先只修改文档和验收命令：
+
+- `docs/plans/marker-feature-absorption.md`：阶段 4 完成证据和状态收尾。
+- `docs/plans/pdf-output-package-layout.md`：补充图片幂等性为输出包验收项。
+- `docs/PLAN_MAP.md`：同步计划状态、当前阶段和完成证据链接。
+- `README.md`：仅当已有输出包验收说明时，补充图片幂等性命令；没有相关说明时不强行新增。
+
+如果 Step 0 或验收发现图片路径不幂等，再按项目 GitNexus 规则先做影响分析，然后限定修改：
+
+- `scripts/pdf-merge`：Markdown 图片引用重写或复制策略。
+- `scripts/pdf-auto`：连续运行时的输出包清理或合并调用顺序。
+- `scripts/pdf-seg`：仅在根因明确为图片落盘命名不稳定时考虑。
+
+阶段 4 不修改：
+
+- `scripts/pdf-validate` 覆盖率和状态判定。
+- MCP `mcp/server/*` 契约。
+- `PDF_AUTO_JSON=1` stdout JSON 结构。
+- review.md 段级汇总结构。
+
+### 图片幂等性口径
+
+同一 PDF、同一输出包连续运行两次后，满足以下条件即视为通过：
+
+- `images/` 下相对路径集合一致。
+- `images/` 下文件数量一致。
+- 不出现重复前缀或连续重跑叠加式文件名，例如 `image_1_1.png`、`image_1_1_1.png` 这类由重跑产生的重复命名。
+- 合并 Markdown 中的图片引用集合一致。
+- Markdown 图片引用指向的本地文件均存在。
+- `manifest.json` 中与 Markdown 和图片相关的路径仍指向当前输出包内文件。
+
+幂等性只比较路径集合和引用有效性，不要求逐字节比较图片内容；如后续发现 MinerU 会重写同名图片但内容等价，本阶段不把它视为失败。
+
+### 建议验收脚本
+
+阶段 4 可先用临时脚本验收，确认口径稳定后再决定是否固化到 `scripts/`：
+
+```bash
+set -euo pipefail
+
+pdf="pdf/demo5/demo5.pdf"
+segments="pdf/demo5/segments"
+package="pdf/demo5"
+
+PDF_VALIDATE_THRESHOLD=0.4 scripts/pdf-auto "$pdf" "$segments" >/tmp/pdf-auto-idem-1.log 2>&1
+find "$package/images" -type f -print | sed "s#^$package/##" | sort > /tmp/demo5-images.run1
+grep -oE '!\[[^]]*\]\([^)]+\)' "$package/demo5.md" | sort > /tmp/demo5-image-refs.run1
+
+PDF_VALIDATE_THRESHOLD=0.4 scripts/pdf-auto "$pdf" "$segments" >/tmp/pdf-auto-idem-2.log 2>&1
+find "$package/images" -type f -print | sed "s#^$package/##" | sort > /tmp/demo5-images.run2
+grep -oE '!\[[^]]*\]\([^)]+\)' "$package/demo5.md" | sort > /tmp/demo5-image-refs.run2
+
+diff -u /tmp/demo5-images.run1 /tmp/demo5-images.run2
+diff -u /tmp/demo5-image-refs.run1 /tmp/demo5-image-refs.run2
+
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+package = Path("pdf/demo5")
+md = package / "demo5.md"
+refs = re.findall(r'!\[[^\]]*\]\(([^)]+)\)', md.read_text())
+missing = [ref for ref in refs if not (package / ref).exists()]
+if missing:
+    raise SystemExit("missing image refs: " + ", ".join(missing))
+
+names = [p.name for p in (package / "images").glob("*") if p.is_file()]
+stacked = [name for name in names if re.search(r'(_\d+){3,}\.', name)]
+if stacked:
+    raise SystemExit("suspicious duplicate image names: " + ", ".join(stacked))
+print(f"image refs ok: {len(refs)}, images: {len(names)}")
+PY
+```
+
+如果 `pdf/demo5` 不含图片，替换为最近一次包含图片的真实输出包，并在完成证据中记录样本路径。
+
+### 阶段 4 验收命令
+
+```bash
+# 图片幂等性验收
+# 使用上方建议验收脚本，或等价命令，记录 run1/run2 diff 为空。
+
+# 既有契约回归
+bash -n scripts/pdf-auto
+bash -n scripts/pdf-merge
+PDF_VALIDATE_THRESHOLD=0.82 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/pdf-auto-review.json 2>/tmp/pdf-auto-review.stderr || test "$?" -eq 2
+python3 -m json.tool /tmp/pdf-auto-review.json >/dev/null
+PDF_VALIDATE_THRESHOLD=0.4 PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments > /tmp/pdf-auto-pass.json 2>/tmp/pdf-auto-pass.stderr
+python3 -m json.tool /tmp/pdf-auto-pass.json >/dev/null
+
+# MCP 和治理
+cd mcp/server && npm run build
+cd ../..
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 4 完成证据（2026-06-30）
+
+- 图片幂等性验收口径已同步到 `pdf-output-package-layout.md`（完成判定 > 图片幂等性）。
+- demo5 幂等性验证：连续两次 `pdf-auto` 运行，`images: 0→0`（无漂移）、`refs: 0→0`（无新增引用）、无缺失引用、无叠加式文件名。
+- demo5 当前为无图片 PDF 样本，空集稳定视为幂等通过；有图片样本留待后续补充。
+- `bash -n`、`npm run build`、`check_plan_governance.py` 通过。无脚本/CLI/MCP 变更。
+
+### 阶段 4 完成条件
+
+### 阶段 4 完成后同步
+
+阶段 4 完成后更新：
+
+- `docs/plans/marker-feature-absorption.md`：阶段路线图状态改为 `已完成`，记录阶段 4 完成证据。
+- `docs/plans/pdf-output-package-layout.md`：输出包验收方式包含图片幂等性。
+- `docs/PLAN_MAP.md`：`marker-feature-absorption` 状态改为 `已完成`，完成证据指向阶段 4。
+- 如 README 已描述输出包验证，补充图片幂等性验收命令；没有相关段落时不强行扩写。
+
 ## 验证方式
 
 ### 阶段 1（review.md 段级汇总表）
@@ -686,11 +842,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments 2>/dev/n
 
 ```bash
 # 图片幂等性
-python3 -c "
-from pathlib import Path
-import os
-# 连续跑两次，对比 images/ 内容
-"
+# 详见“阶段 4 可实施说明 / 阶段 4 验收命令”，连续跑两次并对比 images/ 和 Markdown 图片引用。
 
 # 全量验证
 bash -n scripts/pdf-auto
