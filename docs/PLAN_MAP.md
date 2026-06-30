@@ -16,8 +16,8 @@
 
 | 计划 | 状态 | 当前阶段 | 依赖 | 证据 |
 |---|---|---|---|---|
-| [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 实施中 | 阶段 8：PDF 输出包目录结构（实施中） | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [阶段 8 设计入口](plans/automated-pdf-pipeline.md#阶段-8-设计入口) |
-| [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 实施中 | 方案确认和实施门禁 | automated-pdf-pipeline、coverage-validation-optimization | [Step 0 证据](plans/pdf-output-package-layout.md#step-0-证据) |
+| [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 实施中 | 阶段 8：PDF 输出包目录结构（真实 MinerU 样本验收待完成） | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [阶段 8 复验记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
+| [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 实施中 | 真实 MinerU 样本验收待完成 | automated-pdf-pipeline、coverage-validation-optimization | [验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 待实施 | 阶段 0：Step 0 证据固化 | pdf-output-package-layout、automated-pdf-pipeline | [Step 0 证据](plans/marker-feature-absorption.md#step-0-证据) |
@@ -61,15 +61,16 @@
 | MCP server 尚未实现 | 已实现 `mcp/server/`，运行手册和排障清单已就绪 | Claude Code 现已可通过 MCP 调用 PDF 流水线 | 否 | 已解决 |
 | 阶段 6 验收未执行 | 已完成三类路径验证和手册固化 | 运行手册可被后续会话按步骤复现 | 否 | 已解决 |
 | 覆盖率低页面触发无效 high 重跑 | 已实现：区分 `rerun` 与 `review_only`，只重跑可修复段 | `pdf-validate`、`pdf-auto`、MCP 诊断输出 | 否 | 已解决 |
-| 输出产物分散在旧目录 | 阶段 8 已实施：统一为 `<package>/` 输出包结构 | `pdf-seg`、`pdf-merge`、`pdf-auto`、MCP 返回路径 | 否 | 实施中 |
-| 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 修复 Python 分支 + bash 新增 `needs_review` 处理分支 | `pdf-auto` | 是 | 修复中 |
+| 输出产物分散在旧目录 | 阶段 8 已实施：统一为 `<package>/` 输出包结构；仍需真实 MinerU 样本跑完生成完整输出包 | `pdf-seg`、`pdf-merge`、`pdf-auto`、MCP 返回路径 | 是 | 实施中 |
+| 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复 Python 分支 + bash `needs_review` 处理分支，复验返回 `needs_review` 并生成 `<package>/review.md` | `pdf-auto` | 否 | 已解决 |
+| 真实样本 `pdf-seg` 环境依赖未满足 | 安装 `mineru[pipeline]` / `torch`，或切换到可用的 `vlm-http-client` / 远端服务配置后重跑 demo5 或等价样本 | Phase 8 端到端验收、`manifest.json`、`data/`、合并 Markdown 生成证据 | 是 | 待处理 |
 
 ## 完成证据
 
 | 计划 | 阶段 | 证据 |
 |---|---|---|
 | automated-pdf-pipeline | 阶段 1-7 | 详见 [自动化 PDF 解析流水线计划](plans/automated-pdf-pipeline.md#阶段-7-完成证据) |
-| pdf-output-package-layout | Step 0 | 详见 [PDF 输出包目录结构计划](plans/pdf-output-package-layout.md#step-0-证据) |
+| pdf-output-package-layout | Phase 8 复验 | 详见 [PDF 输出包目录结构计划验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | coverage-validation-optimization | 阶段 0-5 | 详见 [覆盖率验证口径优化计划](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | marker-feature-absorption | 阶段 0 | 详见 [marker 特性吸纳计划](plans/marker-feature-absorption.md#step-0-证据) |
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |

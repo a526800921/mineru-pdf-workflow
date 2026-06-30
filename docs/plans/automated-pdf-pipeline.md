@@ -82,7 +82,9 @@
 
 阶段 7 已完成（2026-06-28）。阶段 8 正在实施中，专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。代码改动已应用于 `scripts/pdf-seg`、`scripts/pdf-merge`、`scripts/pdf-auto`。
 
-当前阻断：首次验证 Python 分支（`pdf-auto` 行 230）在 `rerunnable` 为空但存在 `review_only` 段时误输出 `merge`，导致合并失败。已修复：Python 层新增 `review_only` 检查输出 `needs_review`，bash 层新增对应处理分支。修复完成后需在可用 MinerU 后端环境下重跑真实样本完成阶段 8 验收。详见 [PDF 输出包目录结构计划未决问题](pdf-output-package-layout.md#未决问题)。
+已解决问题：首次验证 Python 分支（`pdf-auto` 行 230）在 `rerunnable` 为空但存在 `review_only` 段时曾误输出 `merge`，导致合并失败；当前已改为输出 `needs_review`，bash 层也已新增对应处理分支。
+
+剩余阻断：真实样本 `pdf-seg` 仍需在可用 MinerU 后端环境下跑通，才能完成阶段 8 验收。详见 [PDF 输出包目录结构计划验收记录](pdf-output-package-layout.md#验收记录2026-06-30)。
 
 阶段 7 专项计划为 [覆盖率验证口径优化](coverage-validation-optimization.md)。主要成果：
 - `pdf-validate` 新增 `page_type`、`decision`、`rerunnable`、`reason`、`page_type_summary` 字段
@@ -163,6 +165,17 @@
 
 阶段 8 的拟议契约、Step 0 证据、验证方式和完成条件见 [PDF 输出包目录结构计划](pdf-output-package-layout.md)。
 
+### 阶段 8 复验记录
+
+2026-06-30 复验见 [PDF 输出包目录结构计划验收记录](pdf-output-package-layout.md#验收记录2026-06-30)。
+
+当前结论：
+
+- 静态检查、MCP TypeScript 编译、治理检查和 GitNexus `detect_changes` 已通过。
+- `pdf-auto` 首次验证 `review_only` 段误触发合并的问题已修复并复验通过，当前会返回 `needs_review` 并生成 `<package>/review.md`。
+- `pdf-merge` 默认输出 `<package>/<package名>.md` 和 `PDF_MERGE_OUTPUT` 覆盖路径均已验证。
+- 真实样本 `pdf-seg` 仍被 MinerU 环境依赖阻塞，错误为缺少 `mineru[pipeline]` / `torch`；因此阶段 8 保持 `实施中`，尚未进入完成状态。
+
 
 
 ## 未决问题
@@ -171,7 +184,8 @@
 |---|---|---|---|
 | 无文本层 PDF 如何验证 | 后续增加 OCR/VLM 对照验证策略 | 否 | 已延后 |
 | 覆盖率低页面触发无效 high 重跑 | 阶段 7 区分 `rerun` 与 `review_only`，只重跑可修复段 | 否 | 设计中 |
-| 输出产物分散在旧目录 | 阶段 8 已实施：统一为 `<package>/` 输出包结构 | 否 | 实施中 |
+| 输出产物分散在旧目录 | 阶段 8 已实施：统一为 `<package>/` 输出包结构；仍需真实 MinerU 样本跑完整输出包验收 | 是 | 实施中 |
+| 真实样本 `pdf-seg` 环境依赖未满足 | 安装 `mineru[pipeline]` / `torch`，或切换到可用的 `vlm-http-client` / 远端服务配置后重跑 demo5 或等价样本 | 是 | 待处理 |
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
 | `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 否 | 已完成 |
 | MCP server 尚未实现 | 阶段 5 已实现，`mcp/server/` 项目已就绪 | 否 | 已解决 |

@@ -122,7 +122,7 @@ GitNexus 影响分析：
 - `main`：风险 LOW。
 - `scripts/pdf-auto` 文件层面：风险 LOW，图谱无上游符号调用；实际影响为 CLI/MCP 路径契约。
 
-阶段 8 实施验收中发现阻断 bug：`pdf-auto` 首次验证 Python 分支（行 230）在 `rerunnable` 为空时无条件进入合并分支，但 `review_only` 段（如 `missing_markdown` 且无文本层）不应触发合并。修复方案：Python 层新增 `review_only` 检查输出 `needs_review`，bash 层新增 `action == "needs_review"` 处理分支，复用已有 `review.md` 生成逻辑。详见 [未决问题](#未决问题)。
+阶段 8 实施验收中发现并已修复阻断 bug：`pdf-auto` 首次验证 Python 分支（行 230）在 `rerunnable` 为空时曾无条件进入合并分支，但 `review_only` 段（如 `missing_markdown`）不应触发合并。当前实现已新增 `review_only` 检查输出 `needs_review`，bash 层已新增 `action == "needs_review"` 处理分支，复用已有 `review.md` 生成逻辑。复验记录见 [验收记录（2026-06-30）](#验收记录2026-06-30)。
 
 ## 实施步骤
 
@@ -172,6 +172,35 @@ pdf/春风 150AURA/manifest.json
 - MCP 返回的 `merged_markdown` 和 `review_markdown` 指向新目录结构。
 - 验证命令通过，计划治理检查通过。
 
+## 验收记录（2026-06-30）
+
+静态和治理验证：
+
+- `bash -n scripts/pdf-seg && bash -n scripts/pdf-merge && bash -n scripts/pdf-auto` 通过。
+- `cd mcp/server && npm run build` 通过。
+- `git diff --check` 通过。
+- `python3 scripts/check_plan_governance.py .` 通过。
+- 代码复验前 `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 输出 `No changes detected`。
+- 治理文档写回后再次运行 `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow`，结果为 3 个文档文件、13 个文档符号变更，受影响执行流 0，风险 `low`。
+
+路径和兼容验证：
+
+- `scripts/pdf-merge /tmp/phase8-merge-fixture/segments` 默认输出 `/tmp/phase8-merge-fixture/phase8-merge-fixture.md`，符合 `<package>/<package名>.md`。
+- `PDF_MERGE_OUTPUT=/tmp/phase8-custom-output.md scripts/pdf-merge /tmp/phase8-merge-override/segments` 可覆盖默认输出路径。
+- `PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments` 在首次验证发现 `review_only` / `missing_markdown` 时返回：
+  - exit code：`2`
+  - `status`：`needs_review`
+  - `merged_markdown`：`null`
+  - `review_markdown`：`/Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo5/review.md`
+- 上述 `pdf-auto` 复验已确认不再误触发合并，并会在 `<package>/review.md` 生成兜底清单。
+
+未完成的真实样本闭环：
+
+- `MINERU_SEGMENT_SIZE=5 MINERU_API_RESTART=0 scripts/pdf-seg pdf/demo5/demo5.pdf` 仍失败，退出码 `1`。
+- 失败原因来自 MinerU 后端环境：`hybrid-transformers` requires local pipeline dependencies (`mineru[pipeline]`, including `torch`)。
+- 因 `pdf-seg` 未完成，当前样本未生成完整 `manifest.json`、`data/` 和合并 Markdown，尚不能满足“新默认目录结构已由脚本生成”的完成条件。
+- 阶段 8 因真实 MinerU 环境验收未跑通，状态保持 `实施中`。
+
 ## 风险和回滚
 
 风险：
@@ -193,7 +222,8 @@ pdf/春风 150AURA/manifest.json
 | `data/` 下草案文件由谁生成 | 后续数据抽取计划负责 | 否 | 候选 |
 | `manifest.json` 的车型和版本字段是否需要外部配置 | 初期用 PDF stem 作为 model，version 为 null | 否 | 待确认 |
 | 散落 PDF 是否自动创建车型目录 | 不自动创建；调用方先放入目标目录，`/pdf2md` 以 PDF 所在目录为包根 | 否 | 已确认 |
-| 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 修复 Python 分支逻辑：当 `rerunnable` 为空但存在 `review_only` 段时输出 `needs_review` 而非 `merge`，bash 层新增对应处理分支 | 是 | 修复中 |
+| 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复：当 `rerunnable` 为空但存在 `review_only` 段时输出 `needs_review` 而非 `merge`，bash 层已新增对应处理分支；复验返回 `needs_review` 且生成 `<package>/review.md` | 否 | 已解决 |
+| 真实样本 `pdf-seg` 环境依赖未满足 | 安装 `mineru[pipeline]` / `torch`，或切换到可用的 `vlm-http-client` / 远端服务配置后重跑 demo5 或等价样本 | 是 | 待处理 |
 | 是否需要历史目录迁移脚本 | 暂不迁移，避免误动历史产物 | 否 | 已延后 |
 
 ## 关联 ADR、迁移、spec 或 issue
