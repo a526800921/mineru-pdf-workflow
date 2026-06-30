@@ -80,7 +80,7 @@
 
 ## 当前阶段
 
-阶段 7 已完成（2026-06-28）。阶段 8 正在复验收尾，专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。
+阶段 7 已完成（2026-06-28）。阶段 8 已完成（2026-06-30），专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。
 
 阶段 8 核心成果：
 - 输出包根目录 = `dirname(pdf_path)`，所有产物统一在 `<package>/` 下。
@@ -208,8 +208,8 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 |---|---|---|---|
 | 无文本层 PDF 如何验证 | 后续增加 OCR/VLM 对照验证策略 | 否 | 已延后 |
 | 覆盖率低页面触发无效 high 重跑 | 阶段 7 区分 `rerun` 与 `review_only`，只重跑可修复段 | 否 | 设计中 |
-| 输出产物分散在旧目录 | 阶段 8 已实施：统一为 `<package>/` 输出包结构；仍需真实 MinerU 样本跑完整输出包验收 | 是 | 实施中 |
-| 真实样本 `pdf-seg` 环境依赖未满足 | 安装 `mineru[pipeline]` / `torch`，或切换到可用的 `vlm-http-client` / 远端服务配置后重跑 demo5 或等价样本 | 是 | 待处理 |
+| 输出产物分散在旧目录 | 阶段 8 已完成：统一为 `<package>/` 输出包结构，demo5 真实样本验收通过 | 否 | 已解决 |
+| 真实样本 `pdf-seg` 环境依赖未满足 | 已通过隔离 venv 解决 transformers 版本兼容问题，demo5 真实样本验收通过 | 否 | 已解决 |
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
 | `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 否 | 已完成 |
 | MCP server 尚未实现 | 阶段 5 已实现，`mcp/server/` 项目已就绪 | 否 | 已解决 |

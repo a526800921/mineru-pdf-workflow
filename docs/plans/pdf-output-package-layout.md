@@ -257,7 +257,7 @@ pdf/春风 150AURA/manifest.json
 | 散落 PDF 是否自动创建车型目录 | 不自动创建；调用方先放入目标目录，`/pdf2md` 以 PDF 所在目录为包根 | 否 | 已确认 |
 | 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复：当 `rerunnable` 为空但存在 `review_only` 段时输出 `needs_review` 而非 `merge`，bash 层已新增对应处理分支；复验返回 `needs_review` 且生成 `<package>/review.md` | 否 | 已解决 |
 | 真实样本 `pdf-seg` 环境依赖未满足 | 根因为 `transformers 5.x` 不兼容；已创建隔离 venv（`~/Documents/models/.venv`），安装 `transformers 4.57.6`，scripts 自动检测 venv 优先使用 | 否 | 已解决 |
-| 未检测到 MinerU API 时 `pdf-seg` 因 `_api_arg[@]` 未绑定失败 | 修复 `set -u` 下空数组展开，确保无 API 时也能启动临时服务；修复后重跑 demo5 真实分段验收 | 是 | 待修复 |
+| 未检测到 MinerU API 时 `pdf-seg` 因 `_api_arg[@]` 未绑定失败 | 已修复：`if/else` 分支替代空数组 `set -u` 展开；demo5 无 API 临时服务路径验收通过 | 否 | 已解决 |
 | 是否需要历史目录迁移脚本 | 暂不迁移，避免误动历史产物 | 否 | 已延后 |
 
 ## 关联 ADR、迁移、spec 或 issue
