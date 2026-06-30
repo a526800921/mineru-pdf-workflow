@@ -62,6 +62,7 @@
 | 阶段 6 验收未执行 | 已完成三类路径验证和手册固化 | 运行手册可被后续会话按步骤复现 | 否 | 已解决 |
 | 覆盖率低页面触发无效 high 重跑 | 已实现：区分 `rerun` 与 `review_only`，只重跑可修复段 | `pdf-validate`、`pdf-auto`、MCP 诊断输出 | 否 | 已解决 |
 | 输出产物分散在旧目录 | 阶段 8 已实施：统一为 `<package>/` 输出包结构 | `pdf-seg`、`pdf-merge`、`pdf-auto`、MCP 返回路径 | 否 | 实施中 |
+| 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 修复 Python 分支 + bash 新增 `needs_review` 处理分支 | `pdf-auto` | 是 | 修复中 |
 
 ## 完成证据
 

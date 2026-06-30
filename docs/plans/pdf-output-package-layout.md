@@ -122,6 +122,8 @@ GitNexus 影响分析：
 - `main`：风险 LOW。
 - `scripts/pdf-auto` 文件层面：风险 LOW，图谱无上游符号调用；实际影响为 CLI/MCP 路径契约。
 
+阶段 8 实施验收中发现阻断 bug：`pdf-auto` 首次验证 Python 分支（行 230）在 `rerunnable` 为空时无条件进入合并分支，但 `review_only` 段（如 `missing_markdown` 且无文本层）不应触发合并。修复方案：Python 层新增 `review_only` 检查输出 `needs_review`，bash 层新增 `action == "needs_review"` 处理分支，复用已有 `review.md` 生成逻辑。详见 [未决问题](#未决问题)。
+
 ## 实施步骤
 
 1. 更新 `/pdf2md` 或等价入口的输出包根目录推导：`package_dir="$(dirname "$pdf_path")"`。
@@ -191,6 +193,7 @@ pdf/春风 150AURA/manifest.json
 | `data/` 下草案文件由谁生成 | 后续数据抽取计划负责 | 否 | 候选 |
 | `manifest.json` 的车型和版本字段是否需要外部配置 | 初期用 PDF stem 作为 model，version 为 null | 否 | 待确认 |
 | 散落 PDF 是否自动创建车型目录 | 不自动创建；调用方先放入目标目录，`/pdf2md` 以 PDF 所在目录为包根 | 否 | 已确认 |
+| 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 修复 Python 分支逻辑：当 `rerunnable` 为空但存在 `review_only` 段时输出 `needs_review` 而非 `merge`，bash 层新增对应处理分支 | 是 | 修复中 |
 | 是否需要历史目录迁移脚本 | 暂不迁移，避免误动历史产物 | 否 | 已延后 |
 
 ## 关联 ADR、迁移、spec 或 issue

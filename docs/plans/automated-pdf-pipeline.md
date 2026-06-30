@@ -82,6 +82,8 @@
 
 阶段 7 已完成（2026-06-28）。阶段 8 正在实施中，专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。代码改动已应用于 `scripts/pdf-seg`、`scripts/pdf-merge`、`scripts/pdf-auto`。
 
+当前阻断：首次验证 Python 分支（`pdf-auto` 行 230）在 `rerunnable` 为空但存在 `review_only` 段时误输出 `merge`，导致合并失败。已修复：Python 层新增 `review_only` 检查输出 `needs_review`，bash 层新增对应处理分支。修复完成后需在可用 MinerU 后端环境下重跑真实样本完成阶段 8 验收。详见 [PDF 输出包目录结构计划未决问题](pdf-output-package-layout.md#未决问题)。
+
 阶段 7 专项计划为 [覆盖率验证口径优化](coverage-validation-optimization.md)。主要成果：
 - `pdf-validate` 新增 `page_type`、`decision`、`rerunnable`、`reason`、`page_type_summary` 字段
 - `pdf-auto` 改为只重跑 `rerunnable == true` 的段
