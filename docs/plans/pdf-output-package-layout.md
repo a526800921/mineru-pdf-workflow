@@ -174,32 +174,44 @@ pdf/春风 150AURA/manifest.json
 
 ## 验收记录（2026-06-30）
 
+### 最终验收（阶段 8 完成）
+
 静态和治理验证：
 
 - `bash -n scripts/pdf-seg && bash -n scripts/pdf-merge && bash -n scripts/pdf-auto` 通过。
 - `cd mcp/server && npm run build` 通过。
 - `git diff --check` 通过。
 - `python3 scripts/check_plan_governance.py .` 通过。
-- 代码复验前 `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 输出 `No changes detected`。
-- 治理文档写回后再次运行 `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow`，结果为 3 个文档文件、13 个文档符号变更，受影响执行流 0，风险 `low`。
+- GitNexus `detect_changes` 风险 `low`，受影响执行流 0。
+
+环境修复：
+
+- 根因：全局 `transformers 5.12.1` 与 MinerU 3.4.0（要求 `transformers<5.0.0`）不兼容，报错表现为 `hybrid-transformers requires local pipeline dependencies` 或 `Qwen2VLConfig` 缺少 `max_position_embeddings` 属性。
+- 修复：在 `~/Documents/models/.venv` 创建 `--system-site-packages` 隔离 venv，安装 `transformers 4.57.6`，通过 wrapper 脚本暴露 `mineru`/`mineru-api`。
+- `scripts/pdf`、`pdf-seg`、`pdf-auto`、`pdf-rerun` 新增 venv 自动检测（优先将 `~/Documents/models/.venv/bin` 加入 PATH）。
+- `~/Documents/models/start/mineru.sh` 更新为使用 venv 中的 mineru-api。
+
+真实样本验收（demo5.pdf，5 页）：
+
+- `MINERU_SEGMENT_SIZE=5 scripts/pdf-seg pdf/demo5/demo5.pdf` 成功生成分段、`manifest.json`（`parse_status: “segmented”`）、`images/` 和 `data/` 占位目录。
+- `PDF_VALIDATE_THRESHOLD=0.82 scripts/pdf-auto` 返回 `needs_review` + `review.md`（覆盖率 0.48，TOC 页占比高，符合预期）。
+- `PDF_VALIDATE_THRESHOLD=0.4 scripts/pdf-auto` 返回 `all_passed` + `demo5.md`（149 行合并 Markdown）。
+- 两条路径均写入正确的 `<package>/` 输出包目录，MCP `run_pdf_auto` 返回的 `merged_markdown` 和 `review_markdown` 路径均指向新目录结构。
 
 路径和兼容验证：
 
-- `scripts/pdf-merge /tmp/phase8-merge-fixture/segments` 默认输出 `/tmp/phase8-merge-fixture/phase8-merge-fixture.md`，符合 `<package>/<package名>.md`。
-- `PDF_MERGE_OUTPUT=/tmp/phase8-custom-output.md scripts/pdf-merge /tmp/phase8-merge-override/segments` 可覆盖默认输出路径。
-- `PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments` 在首次验证发现 `review_only` / `missing_markdown` 时返回：
-  - exit code：`2`
-  - `status`：`needs_review`
-  - `merged_markdown`：`null`
-  - `review_markdown`：`/Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo5/review.md`
-- 上述 `pdf-auto` 复验已确认不再误触发合并，并会在 `<package>/review.md` 生成兜底清单。
+- `pdf-merge` 默认输出 `<package>/<package名>.md`。
+- `PDF_MERGE_OUTPUT` 仍可覆盖默认合并输出路径。
+- `segments/` 内部格式未被 `pdf-validate` 和 `pdf-merge` 拒绝。
 
-未完成的真实样本闭环：
+### 完成判定
 
-- `MINERU_SEGMENT_SIZE=5 MINERU_API_RESTART=0 scripts/pdf-seg pdf/demo5/demo5.pdf` 仍失败，退出码 `1`。
-- 失败原因来自 MinerU 后端环境：`hybrid-transformers` requires local pipeline dependencies (`mineru[pipeline]`, including `torch`)。
-- 因 `pdf-seg` 未完成，当前样本未生成完整 `manifest.json`、`data/` 和合并 Markdown，尚不能满足“新默认目录结构已由脚本生成”的完成条件。
-- 阶段 8 因真实 MinerU 环境验收未跑通，状态保持 `实施中`。
+- 新默认目录结构已由脚本完整生成：`manifest.json`、`images/`、`data/`、`segments/`、合并 Markdown、`review.md` 均在 `<package>/` 下。
+- 旧的 `PDF_MERGE_OUTPUT` 和 `PDF_AUTO_MERGE_OUTPUT` 仍可覆盖默认输出路径。
+- `segments/` 内部结构仍可被 `pdf-validate` 和 `pdf-merge` 读取。
+- MCP 返回的路径指向新目录结构。
+- 验证命令通过，计划治理检查通过。
+- 阶段 8 状态更新为 **已完成**。
 
 ## 风险和回滚
 
@@ -223,7 +235,7 @@ pdf/春风 150AURA/manifest.json
 | `manifest.json` 的车型和版本字段是否需要外部配置 | 初期用 PDF stem 作为 model，version 为 null | 否 | 待确认 |
 | 散落 PDF 是否自动创建车型目录 | 不自动创建；调用方先放入目标目录，`/pdf2md` 以 PDF 所在目录为包根 | 否 | 已确认 |
 | 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复：当 `rerunnable` 为空但存在 `review_only` 段时输出 `needs_review` 而非 `merge`，bash 层已新增对应处理分支；复验返回 `needs_review` 且生成 `<package>/review.md` | 否 | 已解决 |
-| 真实样本 `pdf-seg` 环境依赖未满足 | 安装 `mineru[pipeline]` / `torch`，或切换到可用的 `vlm-http-client` / 远端服务配置后重跑 demo5 或等价样本 | 是 | 待处理 |
+| 真实样本 `pdf-seg` 环境依赖未满足 | 根因为 `transformers 5.x` 不兼容；已创建隔离 venv（`~/Documents/models/.venv`），安装 `transformers 4.57.6`，scripts 自动检测 venv 优先使用 | 否 | 已解决 |
 | 是否需要历史目录迁移脚本 | 暂不迁移，避免误动历史产物 | 否 | 已延后 |
 
 ## 关联 ADR、迁移、spec 或 issue

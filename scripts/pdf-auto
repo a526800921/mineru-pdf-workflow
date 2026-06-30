@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 优先使用隔离 venv 中的 mineru（兼容 transformers 4.57.x）
+if [[ -d "$HOME/Documents/models/.venv/bin" ]]; then
+  export PATH="$HOME/Documents/models/.venv/bin:$PATH"
+fi
+
 # --- JSON mode infrastructure ---
 json_mode="${PDF_AUTO_JSON:-0}"
 

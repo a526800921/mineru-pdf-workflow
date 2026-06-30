@@ -76,21 +76,29 @@
 | 阶段 5 | MCP server 最小实现 | `PDF_AUTO_JSON=1` 可用且工具边界已固定 | `run_pdf_auto` 返回结构化结果 | 已完成 |
 | 阶段 6 | MCP 端到端验收与运行手册固化 | 阶段 5 已完成 | Claude Code 通过 MCP 跑通真实样本并覆盖主要返回路径 | 已完成 |
 | 阶段 7 | 覆盖率验证口径优化 | 阶段 6 已完成，存在无效 high 重跑样本 | 区分可重跑问题和仅需人工复核问题 | 已完成 |
-| 阶段 8 | PDF 输出包目录结构 | 阶段 7 已完成，需要统一后续 V2 和入库草案目录 | 输出包结构、manifest 和默认路径稳定 | 实施中 |
+| 阶段 8 | PDF 输出包目录结构 | 阶段 7 已完成，需要统一后续 V2 和入库草案目录 | 输出包结构、manifest 和默认路径稳定 | 已完成 |
 
 ## 当前阶段
 
-阶段 7 已完成（2026-06-28）。阶段 8 正在实施中，专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。代码改动已应用于 `scripts/pdf-seg`、`scripts/pdf-merge`、`scripts/pdf-auto`。
+阶段 7 已完成（2026-06-28）。阶段 8 已完成（2026-06-30），专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。
 
-已解决问题：首次验证 Python 分支（`pdf-auto` 行 230）在 `rerunnable` 为空但存在 `review_only` 段时曾误输出 `merge`，导致合并失败；当前已改为输出 `needs_review`，bash 层也已新增对应处理分支。
-
-剩余阻断：真实样本 `pdf-seg` 仍需在可用 MinerU 后端环境下跑通，才能完成阶段 8 验收。详见 [PDF 输出包目录结构计划验收记录](pdf-output-package-layout.md#验收记录2026-06-30)。
+阶段 8 核心成果：
+- 输出包根目录 = `dirname(pdf_path)`，所有产物统一在 `<package>/` 下。
+- `pdf-seg` 生成 `manifest.json`、`images/`、`data/`、`segments/`。
+- `pdf-merge` 默认输出 `<package>/<package名>.md`。
+- `pdf-auto` 默认输出 `<package>/<pdf_stem>.md` + `<package>/review.md`。
+- `PDF_MERGE_OUTPUT` / `PDF_AUTO_MERGE_OUTPUT` 兼容保留。
+- `needs_review` 首次验证分支 bug 已修复。
+- MinerU 环境兼容：隔离 venv（`~/Documents/models/.venv`）解决 transformers 5.x 不兼容问题。
+- 验收证据见 [PDF 输出包目录结构计划验收记录](pdf-output-package-layout.md#验收记录2026-06-30)。
 
 阶段 7 专项计划为 [覆盖率验证口径优化](coverage-validation-optimization.md)。主要成果：
 - `pdf-validate` 新增 `page_type`、`decision`、`rerunnable`、`reason`、`page_type_summary` 字段
 - `pdf-auto` 改为只重跑 `rerunnable == true` 的段
 - demo20 样本无效 high 重跑从 9 降为 0
 - 验收证据见 [覆盖率验证口径优化验收记录](coverage-validation-optimization.md#验收记录2026-06-28)
+
+## 完成证据
 
 ### 阶段 3 完成证据
 
@@ -165,18 +173,27 @@
 
 阶段 8 的拟议契约、Step 0 证据、验证方式和完成条件见 [PDF 输出包目录结构计划](pdf-output-package-layout.md)。
 
-### 阶段 8 复验记录
+### 阶段 8 完成证据
 
-2026-06-30 复验见 [PDF 输出包目录结构计划验收记录](pdf-output-package-layout.md#验收记录2026-06-30)。
+2026-06-30 验收完整记录见 [PDF 输出包目录结构计划验收记录](pdf-output-package-layout.md#验收记录2026-06-30)。
 
-当前结论：
+完成要点：
 
-- 静态检查、MCP TypeScript 编译、治理检查和 GitNexus `detect_changes` 已通过。
-- `pdf-auto` 首次验证 `review_only` 段误触发合并的问题已修复并复验通过，当前会返回 `needs_review` 并生成 `<package>/review.md`。
-- `pdf-merge` 默认输出 `<package>/<package名>.md` 和 `PDF_MERGE_OUTPUT` 覆盖路径均已验证。
-- 真实样本 `pdf-seg` 仍被 MinerU 环境依赖阻塞，错误为缺少 `mineru[pipeline]` / `torch`；因此阶段 8 保持 `实施中`，尚未进入完成状态。
+- demo5.pdf（5 页）真实样本全部路径验证通过：`all_passed`（合并 Markdown 149 行）和 `needs_review`（review.md）两条路径。
+- 输出包 `<package>/` 结构完整生成，manifest.json / images/ / data/ / segments/ / review.md / 合并 Markdown 均在正确位置。
+- `review_only` 误触发合并 bug 已修复，环境兼容通过隔离 venv 解决。
+- 静态检查、治理检查、MCP 编译全部通过。
 
+## 验证方式
 
+```bash
+bash -n scripts/pdf-seg && bash -n scripts/pdf-merge && bash -n scripts/pdf-auto
+cd mcp/server && npm run build
+python3 scripts/check_plan_governance.py .
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+MINERU_SEGMENT_SIZE=5 scripts/pdf-seg pdf/demo5/demo5.pdf
+PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
+```
 
 ## 未决问题
 
