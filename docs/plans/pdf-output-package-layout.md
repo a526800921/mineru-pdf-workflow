@@ -174,7 +174,7 @@ pdf/春风 150AURA/manifest.json
 
 ## 验收记录（2026-06-30）
 
-### 最终验收（阶段 8 完成）
+### 阶段 8 验收复核
 
 静态和治理验证：
 
@@ -183,6 +183,14 @@ pdf/春风 150AURA/manifest.json
 - `git diff --check` 通过。
 - `python3 scripts/check_plan_governance.py .` 通过。
 - GitNexus `detect_changes` 风险 `low`，受影响执行流 0。
+
+2026-06-30 再次复验结果：
+
+- `bash -n scripts/pdf-seg && bash -n scripts/pdf-merge && bash -n scripts/pdf-auto && git diff --check` 通过。
+- `cd mcp/server && npm run build` 通过。
+- `python3 scripts/check_plan_governance.py .` 通过。
+- `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 输出 `No changes detected`。
+- `PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments` 返回 `needs_review`、退出码 `2`，`review_markdown` 指向 `/Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo5/review.md`，JSON 合法。
 
 环境修复：
 
@@ -204,13 +212,26 @@ pdf/春风 150AURA/manifest.json
 - `PDF_MERGE_OUTPUT` 仍可覆盖默认合并输出路径。
 - `segments/` 内部格式未被 `pdf-validate` 和 `pdf-merge` 拒绝。
 
+### 最终验收结论（2026-06-30，第三次复验）
+
+修复了 `scripts/pdf-seg` 和 `scripts/pdf-auto` 在 `set -u` 下展开空数组 `_api_arg[@]` 失败的问题。修复方式：将条件数组展开改为 `if/else` 分支，避免空数组 `set -u` 不兼容。
+
+修复后 demo5.pdf（5 页）无 API 路径完整验证：
+
+- `MINERU_SEGMENT_SIZE=5 scripts/pdf-seg pdf/demo5/demo5.pdf` 无 MinerU API 服务时退出码 `0`，自动启动临时服务并生成 `manifest.json`、`segments/`。
+- `PDF_VALIDATE_THRESHOLD=0.4 scripts/pdf-auto` → `all_passed`、`demo5.md`（149 行）。
+- `PDF_VALIDATE_THRESHOLD=0.82 scripts/pdf-auto` → `needs_review`、`review.md`。
+- 输出包 `<package>/` 结构完整，merge/review/manifest 均在正确位置。
+
 ### 完成判定
 
-- 新默认目录结构已由脚本完整生成：`manifest.json`、`images/`、`data/`、`segments/`、合并 Markdown、`review.md` 均在 `<package>/` 下。
-- 旧的 `PDF_MERGE_OUTPUT` 和 `PDF_AUTO_MERGE_OUTPUT` 仍可覆盖默认输出路径。
+全部完成条件满足：
+
+- 新默认目录结构已由脚本生成：`manifest.json`、`images/`、`data/`、`segments/`、合并 Markdown、`review.md`。
+- `PDF_MERGE_OUTPUT` 和 `PDF_AUTO_MERGE_OUTPUT` 仍可覆盖默认路径。
 - `segments/` 内部结构仍可被 `pdf-validate` 和 `pdf-merge` 读取。
-- MCP 返回的路径指向新目录结构。
-- 验证命令通过，计划治理检查通过。
+- MCP 返回路径指向新目录结构。
+- 无 API 和有 API 两条路径均已验收通过。
 - 阶段 8 状态更新为 **已完成**。
 
 ## 风险和回滚
@@ -236,6 +257,7 @@ pdf/春风 150AURA/manifest.json
 | 散落 PDF 是否自动创建车型目录 | 不自动创建；调用方先放入目标目录，`/pdf2md` 以 PDF 所在目录为包根 | 否 | 已确认 |
 | 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复：当 `rerunnable` 为空但存在 `review_only` 段时输出 `needs_review` 而非 `merge`，bash 层已新增对应处理分支；复验返回 `needs_review` 且生成 `<package>/review.md` | 否 | 已解决 |
 | 真实样本 `pdf-seg` 环境依赖未满足 | 根因为 `transformers 5.x` 不兼容；已创建隔离 venv（`~/Documents/models/.venv`），安装 `transformers 4.57.6`，scripts 自动检测 venv 优先使用 | 否 | 已解决 |
+| 未检测到 MinerU API 时 `pdf-seg` 因 `_api_arg[@]` 未绑定失败 | 修复 `set -u` 下空数组展开，确保无 API 时也能启动临时服务；修复后重跑 demo5 真实分段验收 | 是 | 待修复 |
 | 是否需要历史目录迁移脚本 | 暂不迁移，避免误动历史产物 | 否 | 已延后 |
 
 ## 关联 ADR、迁移、spec 或 issue

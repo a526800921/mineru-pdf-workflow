@@ -80,7 +80,7 @@
 
 ## 当前阶段
 
-阶段 7 已完成（2026-06-28）。阶段 8 已完成（2026-06-30），专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。
+阶段 7 已完成（2026-06-28）。阶段 8 正在复验收尾，专项计划为 [PDF 输出包目录结构](pdf-output-package-layout.md)。
 
 阶段 8 核心成果：
 - 输出包根目录 = `dirname(pdf_path)`，所有产物统一在 `<package>/` 下。
@@ -173,16 +173,23 @@
 
 阶段 8 的拟议契约、Step 0 证据、验证方式和完成条件见 [PDF 输出包目录结构计划](pdf-output-package-layout.md)。
 
-### 阶段 8 完成证据
+### 阶段 8 复验记录
 
 2026-06-30 验收完整记录见 [PDF 输出包目录结构计划验收记录](pdf-output-package-layout.md#验收记录2026-06-30)。
 
-完成要点：
+已验证要点：
 
 - demo5.pdf（5 页）真实样本全部路径验证通过：`all_passed`（合并 Markdown 149 行）和 `needs_review`（review.md）两条路径。
 - 输出包 `<package>/` 结构完整生成，manifest.json / images/ / data/ / segments/ / review.md / 合并 Markdown 均在正确位置。
 - `review_only` 误触发合并 bug 已修复，环境兼容通过隔离 venv 解决。
 - 静态检查、治理检查、MCP 编译全部通过。
+
+最终验收结论（2026-06-30）：
+
+- `pdf-seg` 和 `pdf-auto` 的 `_api_arg[@]` 空数组 `set -u` 兼容问题已修复：改用 `if/else` 分支。
+- demo5.pdf（5 页）无 API 临时服务路径验收通过，退出码 `0`。
+- `all_passed`（阈值 0.4）→ `demo5.md`（149 行）；`needs_review`（阈值 0.82）→ `review.md`，两条 MCP 路径均正常。
+- 阶段 8 状态更新为 **已完成**。
 
 ## 验证方式
 

@@ -142,16 +142,28 @@ while [[ "$start" -lt "$pages" ]]; do
       _api_arg=(--api-url "$api_url")
     fi
 
-    mineru \
-      -p "$pdf_path" \
-      -o "$segment_output_dir" \
-      -b "$backend" \
-      -m "$method" \
-      --effort "$effort" \
-      -l "$lang" \
-      -s "$start" \
-      -e "$end" \
-      "${_api_arg[@]}"
+    if [[ -n "$api_url" ]]; then
+      mineru \
+        -p "$pdf_path" \
+        -o "$segment_output_dir" \
+        -b "$backend" \
+        -m "$method" \
+        --effort "$effort" \
+        -l "$lang" \
+        -s "$start" \
+        -e "$end" \
+        --api-url "$api_url"
+    else
+      mineru \
+        -p "$pdf_path" \
+        -o "$segment_output_dir" \
+        -b "$backend" \
+        -m "$method" \
+        --effort "$effort" \
+        -l "$lang" \
+        -s "$start" \
+        -e "$end"
+    fi
   } 2>&1
 
   echo "✓ 分段完成: $segment_name"
