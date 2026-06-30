@@ -126,13 +126,13 @@
 |------|------|----------|----------|------|
 | 阶段 0 | 固化 Step 0 证据 | 本计划已记录 | 确认当前 review.md、进度输出和治理文档基线 | 已完成 |
 | 阶段 1 | review.md 段级汇总表 | 阶段 0 完成 | 全量段级汇总表 + 人工审核约定 + 向后兼容 | 已完成 |
-| 阶段 2 | 探针报告机制治理化 | 阶段 1 完成 | `docs/reports/` 目录就绪、探针模板到位 | 候选 |
+| 阶段 2 | 探针报告机制治理化 | 阶段 1 完成 | `docs/reports/` 目录就绪、探针模板到位 | 已完成 |
 | 阶段 3 | 分步进度输出 + 耗时统计 | 阶段 1 完成 | `pdf-auto` 控制台输出步骤编号和耗时 | 候选 |
 | 阶段 4 | 图片幂等性验收 + 治理收尾 | 阶段 1-3 完成 | 验证命令、治理检查和 PLAN_MAP 同步 | 候选 |
 
 ## 当前阶段
 
-阶段 1 已完成（2026-06-30）。下一步阶段 2（探针报告机制治理化，候选）。
+阶段 1 已完成（2026-06-30）。阶段 2 已完成（2026-06-30）。下一步阶段 3（分步进度输出 + 耗时统计，候选）。
 
 ### Step 0 证据
 
@@ -310,6 +310,161 @@ grep -c "可重跑" pdf/demo5/review.md
 python3 scripts/check_plan_governance.py .
 node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 ```
+
+## 阶段 2 可实施说明
+
+阶段 2 只落地探针报告机制的治理文档和模板，不修改 PDF 解析脚本、不改变 CLI/MCP 契约、不引入运行时依赖。
+
+### 阶段 2 目标
+
+- 明确什么时候必须先写探针报告。
+- 固化探针报告的存放位置、命名规则和最低内容。
+- 提供可复制的探针报告模板。
+- 让后续外部 API、新版 MinerU 参数、文件格式、模型策略等探索有统一证据入口。
+
+### 修改范围
+
+阶段 2 建议修改或新增：
+
+- `docs/plans/marker-feature-absorption.md`：记录阶段 2 完成证据和状态。
+- `docs/PLAN_MAP.md`：同步 `marker-feature-absorption` 当前阶段和证据链接。
+- `docs/reports/README.md`：说明探针报告目录职责、命名规则、触发条件。
+- `docs/reports/probe-template.md`：探针报告模板。
+
+阶段 2 不修改：
+
+- `scripts/*`。
+- `mcp/server/*`。
+- README 中的用户操作流程，除非后续需要面向用户说明探针报告入口。
+- `scripts/check_plan_governance.py`。初期先作为文档约定，不把探针报告纳入强制脚本检查。
+
+### 触发条件
+
+后续工作满足任一条件时，实施前必须先写探针报告：
+
+- 接入外部 API、远端模型服务、HTTP 服务或不稳定第三方能力。
+- 尝试新版 MinerU 参数、后端、模型、OCR/VLM 策略或新的环境组合。
+- 引入新的输入/输出文件格式、结构化数据格式或图片资源组织方式。
+- 改变验证口径、阈值、状态语义、失败处理策略或人工复核策略。
+- 需要用真实样本确认性能、内存、准确率、兼容性或幂等性假设。
+
+不需要探针报告的情况：
+
+- 只改错别字、链接、说明文案或治理状态。
+- 小范围 bugfix 已有失败复现和明确修复路径。
+- 只更新已存在计划中的验收记录，且不改变阶段假设。
+
+### 命名和存放
+
+探针报告统一存放在：
+
+```text
+docs/reports/<topic>-probe.md
+```
+
+命名规则：
+
+- 使用小写 kebab-case。
+- 文件名必须以 `-probe.md` 结尾。
+- `<topic>` 应能表达技术对象或实验对象，例如：
+  - `mineru-vlm-http-client-probe.md`
+  - `image-path-idempotency-probe.md`
+  - `toc-entry-validation-probe.md`
+
+### 模板内容
+
+`docs/reports/probe-template.md` 建议内容：
+
+```markdown
+# 探针报告：<主题>
+
+## 背景
+
+为什么需要这个探针，关联哪个计划或阶段。
+
+## 问题和假设
+
+- 待验证问题：
+- 关键假设：
+- 不验证范围：
+
+## 环境和输入
+
+- 日期：
+- 仓库版本：
+- 命令或入口：
+- 样本文件：
+- 外部服务或依赖：
+
+## 请求、响应或文件结构
+
+记录关键请求参数、响应字段、文件结构、分页/分段格式、资源路径或错误格式。
+
+## 最小实验
+
+```bash
+# 可复现命令
+```
+
+## 观察结果
+
+- 成功路径：
+- 失败路径：
+- 性能/耗时/内存：
+- 输出文件：
+
+## 约束和风险
+
+- 对实施的约束：
+- 兼容性风险：
+- 回滚方式：
+
+## 结论
+
+- 是否建议进入实施：
+- 必须同步到哪个计划：
+- 后续验证命令：
+```
+
+### 阶段 2 验收步骤
+
+实施阶段 2 时执行：
+
+```bash
+test -d docs/reports
+test -f docs/reports/README.md
+test -f docs/reports/probe-template.md
+grep -c "触发条件" docs/reports/README.md
+grep -c "探针报告" docs/reports/probe-template.md
+python3 scripts/check_plan_governance.py .
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 2 完成条件
+
+- `docs/reports/README.md` 已定义目录职责、触发条件、命名规则和最低内容。
+- `docs/reports/probe-template.md` 可直接复制用于新探针报告。
+- `marker-feature-absorption` 阶段 2 状态更新为 `已完成`，并记录验收证据。
+- `PLAN_MAP.md` 同步当前阶段为阶段 3 或后续阶段。
+- 没有把历史草案、superpowers 记录或 README 重新设为事实源。
+
+### 阶段 2 完成证据（2026-06-30）
+
+- `docs/reports/README.md`：已定义目录职责、触发条件、命名规则、最低内容和与治理的关系。
+- `docs/reports/probe-template.md`：8 个标准章节模板，可直接复制用于新探针报告。
+- `docs/reports/` 目录已创建，与 marker-pdf-workflow 参考探针（`marker-demo5-probe.md`）结构对齐。
+- 文件验证：
+  - `test -d docs/reports` ✅
+  - `test -f docs/reports/README.md` ✅
+  - `test -f docs/reports/probe-template.md` ✅
+  - `grep -c "触发条件" docs/reports/README.md` → `1`
+  - `grep -c "探针报告" docs/reports/probe-template.md` → `1`
+- `check_plan_governance.py` 通过。GitNexus `detect_changes` 风险 low（纯文档新增）。
+- 无脚本、CLI 或 MCP 契约变更。
+
+### 后续衔接
+
+阶段 3（分步进度输出 + 耗时统计）可直接实施；如涉及外部监控或结构化日志协议，则需先写探针报告。
 
 ## 验证方式
 
