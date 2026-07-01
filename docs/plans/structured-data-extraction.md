@@ -249,9 +249,9 @@ scripts/pdf-extract-data pdf/demo5
 
 ```bash
 # 实施前影响分析（新增脚本首次实施时）
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target scripts/pdf-extract-data --direction upstream || true
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --direction upstream scripts/pdf-extract-data || true
 
-bash -n scripts/pdf-extract-data
+python3 -m py_compile scripts/pdf-extract-data
 
 scripts/pdf-extract-data pdf/demo20
 test -f pdf/demo20/data/quick_lookup_draft.csv
@@ -284,7 +284,7 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - demo5：`quick_lookup_draft.csv`（0 行，空 TOC 样本符合预期）、`verification.csv`、`fixtures_result.md`。
 - 幂等性：连续两次运行 demo20，表头和行数不变（3 行 / 8 行 diff 为空）。
 - CSV 表头与输出契约完全一致。
-- `bash -n`→`python3 -m py_compile`、`npm run build`、`check_plan_governance.py` 通过。
+- `python3 -m py_compile`、`npm run build`、`check_plan_governance.py` 通过。GitNexus `impact` 对新增脚本返回 `Target not found`，当前索引未包含该脚本符号；`detect_changes` 未发现受影响执行流。
 - `pdf-seg`、`pdf-auto`、MCP 契约无变更。
 
 ### 阶段 1 完成条件
@@ -301,7 +301,7 @@ git diff --check
 阶段 1：
 
 ```bash
-bash -n scripts/pdf-extract-data
+python3 -m py_compile scripts/pdf-extract-data
 scripts/pdf-extract-data pdf/demo20
 test -f pdf/demo20/data/quick_lookup_draft.csv
 test -f pdf/demo20/data/verification.csv
