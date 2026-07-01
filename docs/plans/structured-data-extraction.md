@@ -113,11 +113,11 @@
 | 阶段 0 | 固化 Step 0 样本和输出契约 | demo20 输出包可用 | 真实样本结构、字段契约、验收命令明确 | 已完成 |
 | 阶段 1 | 最小数据草案生成 | 阶段 0 完成 | 生成三个 `data/` 文件，CSV 表头稳定 | 已完成 |
 | 阶段 2 | 抽取规则扩展和审核口径 | 阶段 1 完成 | 表格、冒号行、章节路径覆盖更多样本 | 已完成 |
-| 阶段 3 | 治理收尾和后续入库边界 | 阶段 2 完成 | README、PLAN_MAP、验收证据同步 | 候选 |
+| 阶段 3 | 治理收尾和后续入库边界 | 阶段 2 完成 | README、PLAN_MAP、验收证据同步 | 已完成 |
 
 ## 当前阶段
 
-当前阶段为阶段 2 已完成（2026-07-01）。阶段 3（治理收尾和后续入库边界）候选。
+全阶段（0-3）已完成（2026-07-02）。计划状态：已完成。
 
 ## Step 0 证据
 
@@ -410,6 +410,75 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - 无 `pdf-seg`/`pdf-auto`/MCP 契约变更。
 
 ### 阶段 2 完成条件
+
+## 阶段 3 可实施说明
+
+阶段 3 是本计划的治理收尾阶段，只固化当前 CLI 能力、运行说明和后续边界，不新增数据抽取规则，不接入数据库。
+
+### 阶段 3 目标
+
+- 在 README 中补充 `scripts/pdf-extract-data` 的用途和推荐流程位置。
+- 同步 `PLAN_MAP.md`，将 `structured-data-extraction` 收尾为已完成或明确后续计划。
+- 明确“入库”是后续独立计划，不属于本计划实现范围。
+- 复验 demo20/demo5 的数据草案生成、幂等性和 MCP 构建，作为最终完成证据。
+
+### 阶段 3 非目标
+
+- 不修改 `scripts/pdf-extract-data` 抽取规则。
+- 不新增 MCP 工具。
+- 不实现数据库写入、业务 schema 映射或后台服务。
+- 不引入 JSON Schema；是否需要 JSON Schema 留给后续入库计划评估。
+
+### 后续入库边界
+
+本计划交付的是可审核草案，不是入库接口。后续如要推进入库，应新建独立计划，例如 `data-ingestion-pipeline`，并重新定义：
+
+- 目标数据库或目标文件格式。
+- 业务字段 schema 和主键策略。
+- 审核状态从 `draft` / `needs_review` 到可入库状态的流转。
+- 冲突处理、版本策略和回滚方式。
+- MCP 或其他自动化入口是否需要扩展。
+
+### 阶段 3 验收命令
+
+```bash
+python3 -m py_compile scripts/pdf-extract-data
+
+scripts/pdf-extract-data pdf/demo20
+scripts/pdf-extract-data pdf/demo5
+
+test -f pdf/demo20/data/quick_lookup_draft.csv
+test -f pdf/demo20/data/verification.csv
+test -f pdf/demo20/data/fixtures_result.md
+test -f pdf/demo5/data/quick_lookup_draft.csv
+test -f pdf/demo5/data/verification.csv
+test -f pdf/demo5/data/fixtures_result.md
+
+grep -q 'scripts/pdf-extract-data' README.md
+grep -q '不写入数据库' README.md
+
+wc -l pdf/demo20/data/quick_lookup_draft.csv pdf/demo20/data/verification.csv > /tmp/pdf-extract-data-final.before
+scripts/pdf-extract-data pdf/demo20
+wc -l pdf/demo20/data/quick_lookup_draft.csv pdf/demo20/data/verification.csv > /tmp/pdf-extract-data-final.after
+diff -u /tmp/pdf-extract-data-final.before /tmp/pdf-extract-data-final.after
+
+cd mcp/server && npm run build
+cd ../..
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 3 完成证据（2026-07-02）
+
+- README 已包含 `pdf-extract-data` 用途、输出目录和"不写入数据库"边界说明。
+- `后续入库边界` 节已明确：入库需新建独立计划（如 `data-ingestion-pipeline`），重新定义 schema/主键/状态流转/冲突策略。
+- 全阶段（0-3）完成证据闭环：契约固化→脚本生成→规则扩展→治理收尾。
+- 最终回归通过：`py_compile`、demo20（54 行）/ demo5（0 行）、幂等性、表头兼容、MCP build、`check_plan_governance.py`。
+- 无脚本/CLI/MCP 契约变更。
+- `PLAN_MAP.md` 已更新为 `已完成`。
+
+### 阶段 3 完成条件
 
 ## 验证方式
 

@@ -37,6 +37,12 @@ scripts/pdf-merge
 
 按 `p0000-0019` 这类分段目录顺序合并 Markdown，默认输出到 `<输出包名>.md`。
 
+```text
+scripts/pdf-extract-data
+```
+
+从输出包的 Markdown、`manifest.json` 和 `content_list_v2.json` 生成 `data/` 下的结构化草案：`quick_lookup_draft.csv`、`verification.csv`、`fixtures_result.md`。该步骤只生成可审核草案，不写入数据库。
+
 ## 推荐流程
 
 ```bash
@@ -57,6 +63,10 @@ scripts/pdf-merge pdf/春风\ 150AURA/segments
 
 # 或一步到位（自动验证→重跑→合并→人工兜底）
 scripts/pdf-auto pdf/春风\ 150AURA/春风\ 150AURA.pdf pdf/春风\ 150AURA/segments
+
+# 4. 生成结构化数据草案
+scripts/pdf-extract-data pdf/春风\ 150AURA
+# 输出: pdf/春风 150AURA/data/
 ```
 
 如果验证发现可疑分段，先针对该分段重跑高精度，再重新验证和合并。
@@ -66,4 +76,3 @@ scripts/pdf-auto pdf/春风\ 150AURA/春风\ 150AURA.pdf pdf/春风\ 150AURA/seg
 - [计划索引](docs/PLAN_MAP.md)
 - [自动化流水线计划](docs/plans/automated-pdf-pipeline.md)
 - [MCP 接入设计](mcp/README.md)
-
