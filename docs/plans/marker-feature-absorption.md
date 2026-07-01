@@ -682,7 +682,7 @@ grep -oE '!\[[^]]*\]\([^)]+\)' pdf/demo5/demo5.md | sort > /tmp/demo5-image-refs
 wc -l /tmp/demo5-images.before /tmp/demo5-image-refs.before
 ```
 
-如果样本当前没有图片文件或 Markdown 图片引用，应记录为“无图片样本，不足以验收图片幂等性”，并补充一个包含图片的真实 PDF 样本后再验收阶段 4。
+如果样本当前没有图片文件或 Markdown 图片引用，应在完成证据中记录为“无图片样本，仅覆盖空图片集合幂等性”；后续出现包含图片的真实 PDF 样本时，需要补充一次正向图片幂等性验收。
 
 ### 修改范围
 
@@ -788,10 +788,16 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 
 - 图片幂等性验收口径已同步到 `pdf-output-package-layout.md`（完成判定 > 图片幂等性）。
 - demo5 幂等性验证：连续两次 `pdf-auto` 运行，`images: 0→0`（无漂移）、`refs: 0→0`（无新增引用）、无缺失引用、无叠加式文件名。
-- demo5 当前为无图片 PDF 样本，空集稳定视为幂等通过；有图片样本留待后续补充。
-- `bash -n`、`npm run build`、`check_plan_governance.py` 通过。无脚本/CLI/MCP 变更。
+- demo5 当前为无图片 PDF 样本，本阶段已覆盖空图片集合幂等性；含图片正向样本未覆盖，作为后续测试缺口记录。
+- `bash -n scripts/pdf-auto`、`bash -n scripts/pdf-merge`、JSON needs_review/pass 回归、`npm run build`、`check_plan_governance.py`、`git diff --check`、GitNexus `detect_changes` 均通过。无脚本/CLI/MCP 变更。
 
 ### 阶段 4 完成条件
+
+- 图片幂等性验收口径已进入 `pdf-output-package-layout.md`，后续输出包验收有明确检查项。
+- 当前仓库样本连续两次运行未产生图片文件集合或 Markdown 图片引用漂移。
+- JSON/MCP 契约回归通过，阶段 4 没有引入脚本、CLI 或 MCP 行为变更。
+- `marker-feature-absorption` 阶段 4 状态为 `已完成`，`PLAN_MAP.md` 完成证据指向阶段 4。
+- 含图片真实样本的正向幂等性验证未覆盖，后续取得样本后补充验收记录。
 
 ### 阶段 4 完成后同步
 
@@ -894,7 +900,7 @@ git diff --check
 |------|----------|-----------------|------|
 | 段级汇总表的「页级分布」列格式  | 沿用 marker 的 `{status: count}` 字典格式，如 `passed:3, review_only:7` | 否 | 待确认 |
 | 探针报告是否加入治理检查脚本 | 初期不加入，先作为文档约定；后续可加入 `check_plan_governance.py` 做存在性检查 | 否 | 候选 |
-| 分步进度输出的步骤编号是否需要动态计算 | 根据实际执行分支决定步骤数（如无重跑则跳过第 2 步），但总步骤数在开始时声明 | 否 | 待实施时确认 |
+| 分步进度输出的步骤编号是否需要动态计算 | 根据实际执行分支决定步骤数（如无重跑则跳过第 2 步），但总步骤数在开始时声明 | 否 | 已确认 |
 | `--quiet` 是否需要单独参数 | 初期复用 `PDF_AUTO_JSON=1` 抑制进度输出，不新增参数 | 否 | 已确认 |
 
 ## 关联 ADR、迁移、spec 或 issue
