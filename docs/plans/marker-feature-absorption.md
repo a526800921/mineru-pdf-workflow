@@ -788,16 +788,16 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 
 - 图片幂等性验收口径已同步到 `pdf-output-package-layout.md`（完成判定 > 图片幂等性）。
 - demo5 幂等性验证：连续两次 `pdf-auto` 运行，`images: 0→0`（无漂移）、`refs: 0→0`（无新增引用）、无缺失引用、无叠加式文件名。
-- demo5 当前为无图片 PDF 样本，本阶段已覆盖空图片集合幂等性；含图片正向样本未覆盖，作为后续测试缺口记录。
+- demo20 含图片样本补验（2026-07-01）：`pdf-seg` 生成输出包后，连续两次 `pdf-auto` 运行，`images: 13→13`、`refs: 3→3`，无缺失引用、无叠加式文件名。
 - `bash -n scripts/pdf-auto`、`bash -n scripts/pdf-merge`、JSON needs_review/pass 回归、`npm run build`、`check_plan_governance.py`、`git diff --check`、GitNexus `detect_changes` 均通过。无脚本/CLI/MCP 变更。
 
 ### 阶段 4 完成条件
 
 - 图片幂等性验收口径已进入 `pdf-output-package-layout.md`，后续输出包验收有明确检查项。
 - 当前仓库样本连续两次运行未产生图片文件集合或 Markdown 图片引用漂移。
+- demo20 含图片样本已覆盖正向图片幂等性验证。
 - JSON/MCP 契约回归通过，阶段 4 没有引入脚本、CLI 或 MCP 行为变更。
 - `marker-feature-absorption` 阶段 4 状态为 `已完成`，`PLAN_MAP.md` 完成证据指向阶段 4。
-- 含图片真实样本的正向幂等性验证未覆盖，后续取得样本后补充验收记录。
 
 ### 阶段 4 完成后同步
 
