@@ -19,6 +19,7 @@
 | [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 已完成 | 阶段 8：PDF 输出包目录结构 | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [阶段 8 完成证据](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 已完成 | 无/有 API 双路径验收通过，`_api_arg[@]` 修复 | automated-pdf-pipeline、coverage-validation-optimization | [验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [structured-data-extraction](plans/structured-data-extraction.md) | 已完成 | 全阶段（0-3） | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 3 完成证据](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
+| [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 待实施 | 阶段 0 已完成（入库边界+候选契约），阶段 1 候選 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案 | [阶段 0 完成证据](plans/data-ingestion-pipeline.md#阶段-0-完成证据2026-07-02) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
@@ -32,7 +33,8 @@
 3. `coverage-validation-optimization`
 4. `marker-feature-absorption`
 5. `structured-data-extraction`
-6. `minimal-automation-runbook`
+6. `data-ingestion-pipeline`
+7. `minimal-automation-runbook`
 
 ## 依赖关系
 
@@ -47,6 +49,9 @@
 | structured-data-extraction | pdf-output-package-layout | 结构化草案输出到 `<package>/data/`，复用稳定输出包结构 |
 | structured-data-extraction | coverage-validation-optimization | 复用 `content_list_v2.json`、页面类型和质量判定经验 |
 | structured-data-extraction | demo20 输出包 | 阶段 0/1 需要真实含图文和 content_list 的样本 |
+| data-ingestion-pipeline | structured-data-extraction | 以 `quick_lookup_draft.csv`、`verification.csv` 和 `fixtures_result.md` 为输入边界 |
+| data-ingestion-pipeline | pdf-output-package-layout | 入库候选仍位于 `<package>/data/`，复用输出包目录结构 |
+| data-ingestion-pipeline | demo20 数据草案 | 阶段 0/1 使用真实草案样本验证字段和状态边界 |
 | marker-feature-absorption | pdf-output-package-layout | 段级汇总、进度输出和幂等验收基于输出包结构 |
 | marker-feature-absorption | automated-pdf-pipeline | 变更集中在 `pdf-auto`，属于流水线主脚本 |
 | minimal-automation-runbook | automated-pdf-pipeline | 执行手册描述流水线当前可用子集 |
