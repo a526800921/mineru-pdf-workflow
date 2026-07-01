@@ -112,12 +112,12 @@
 |---|---|---|---|---|
 | 阶段 0 | 固化 Step 0 样本和输出契约 | demo20 输出包可用 | 真实样本结构、字段契约、验收命令明确 | 已完成 |
 | 阶段 1 | 最小数据草案生成 | 阶段 0 完成 | 生成三个 `data/` 文件，CSV 表头稳定 | 已完成 |
-| 阶段 2 | 抽取规则扩展和审核口径 | 阶段 1 完成 | 表格、冒号行、章节路径覆盖更多样本 | 候选 |
+| 阶段 2 | 抽取规则扩展和审核口径 | 阶段 1 完成 | 表格、冒号行、章节路径覆盖更多样本 | 已完成 |
 | 阶段 3 | 治理收尾和后续入库边界 | 阶段 2 完成 | README、PLAN_MAP、验收证据同步 | 候选 |
 
 ## 当前阶段
 
-当前阶段为阶段 1 已完成（2026-07-01）。阶段 2（抽取规则扩展）候选。
+当前阶段为阶段 2 已完成（2026-07-01）。阶段 3（治理收尾和后续入库边界）候选。
 
 ## Step 0 证据
 
@@ -288,6 +288,128 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - `pdf-seg`、`pdf-auto`、MCP 契约无变更。
 
 ### 阶段 1 完成条件
+
+## 阶段 2 可实施说明
+
+阶段 2 在阶段 1 的最小脚本基础上扩展抽取规则和审核口径，目标是提高 `quick_lookup_draft.csv` 的可用行数和可审核性，同时保持“有证据、低置信度不放行”的原则。
+
+### 阶段 2 目标
+
+- 扩展 Markdown 表格解析，支持多列表格、参数/数值/单位拆分。
+- 扩展冒号行规则，过滤明显非参数文本，降低噪声。
+- 引入章节路径质量检查，确保抽取行能落到可读的 `section_path`。
+- 细化 `confidence` 和 `status` 口径，让 `draft`、`needs_review` 的差异可验收。
+- 在 `fixtures_result.md` 中增加规则命中统计和待审核原因摘要。
+
+### 阶段 2 非目标
+
+- 不接入数据库。
+- 不新增 MCP 工具。
+- 不用大模型解释或补全字段。
+- 不改变阶段 1 已固化的 CSV 表头。
+- 不要求一次性覆盖全部车型参数，只提升 demo20/demo5 的规则覆盖和审核信息质量。
+
+### 规则扩展范围
+
+表格规则：
+
+- 跳过 Markdown 分隔行和空表格行。
+- 对两列表格，第一列作为 `key`，第二列作为 `value`。
+- 对三列及以上表格，优先识别列名包含“项目/参数/名称”的列作为 `key`，列名包含“值/规格/说明/参数”的列作为 `value`。
+- 从 `value` 尾部拆分常见单位到 `unit`，例如 `mm`、`cm`、`kg`、`kW`、`N·m`、`L`、`V`、`A`、`Ah`、`rpm`、`MPa`、`kPa`、`℃`。
+- 无法识别 key/value 关系的表格行仍可输出，但 `confidence=low`、`status=needs_review`。
+
+冒号行规则：
+
+- 支持中文冒号和英文冒号。
+- 过滤过长说明句、URL、纯页眉页脚、图片引用和明显目录点线。
+- key 长度控制在 2-40 字符，value 长度控制在 1-200 字符。
+- 冒号行默认 `confidence=low`、`status=needs_review`；如果命中单位或数字结构，可提升到 `confidence=medium`。
+
+章节路径规则：
+
+- 只使用 Markdown 标题构造 `section_path`。
+- 当抽取行没有章节路径时，`verification.csv` 记录 warning。
+- `fixtures_result.md` 展示命中最多的章节路径，便于人工判断抽取集中位置。
+
+审核口径：
+
+| 条件 | confidence | status |
+|---|---|---|
+| 表格 key/value 明确，value 非空，有章节路径 | `medium` | `draft` |
+| 表格关系不明确但有证据文本 | `low` | `needs_review` |
+| 冒号行命中数字或单位结构 | `medium` | `needs_review` |
+| 冒号行普通文本 | `low` | `needs_review` |
+| 缺少证据文本 | 不输出该行 | 不输出该行 |
+
+### 阶段 2 建议修改范围
+
+- `scripts/pdf-extract-data`
+- `docs/plans/structured-data-extraction.md`
+- `docs/PLAN_MAP.md`
+
+阶段 2 不修改：
+
+- `scripts/pdf-seg`
+- `scripts/pdf-auto`
+- `scripts/pdf-merge`
+- `scripts/pdf-validate`
+- `mcp/server/*`
+
+### 阶段 2 验收命令
+
+```bash
+# 修改脚本前先做影响分析
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --direction upstream pdf-extract-data || true
+
+python3 -m py_compile scripts/pdf-extract-data
+
+scripts/pdf-extract-data pdf/demo20
+test -f pdf/demo20/data/quick_lookup_draft.csv
+test -f pdf/demo20/data/verification.csv
+test -f pdf/demo20/data/fixtures_result.md
+
+# 表头保持阶段 1 契约
+head -n 1 pdf/demo20/data/quick_lookup_draft.csv | grep 'source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes'
+head -n 1 pdf/demo20/data/verification.csv | grep 'check_id,level,target,result,details,source'
+
+# 规则扩展后 demo20 至少保持阶段 1 行数，不允许回退为空
+test "$(($(wc -l < pdf/demo20/data/quick_lookup_draft.csv)))" -ge 3
+
+# fixtures_result.md 必须包含规则命中统计和审核摘要
+grep -q '规则命中统计' pdf/demo20/data/fixtures_result.md
+grep -q '待审核' pdf/demo20/data/fixtures_result.md
+
+scripts/pdf-extract-data pdf/demo5
+test -f pdf/demo5/data/quick_lookup_draft.csv
+test -f pdf/demo5/data/verification.csv
+test -f pdf/demo5/data/fixtures_result.md
+
+# 幂等性：连续运行 demo20 后表头和行数稳定
+wc -l pdf/demo20/data/quick_lookup_draft.csv pdf/demo20/data/verification.csv > /tmp/pdf-extract-data-phase2.before
+scripts/pdf-extract-data pdf/demo20
+wc -l pdf/demo20/data/quick_lookup_draft.csv pdf/demo20/data/verification.csv > /tmp/pdf-extract-data-phase2.after
+diff -u /tmp/pdf-extract-data-phase2.before /tmp/pdf-extract-data-phase2.after
+
+cd mcp/server && npm run build
+cd ../..
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 2 完成证据（2026-07-01）
+
+- 扩展规则：HTML 表格解析（含 key/value 列猜测和 colspan 支持）、冒号行噪声过滤（安全提示/URL/TOC）、单位拆分（mm/kg/kW 等 16+ 单位）。
+- 置信度口径细化：表格 key/value 明确 → `medium/draft`；冒号行命中数字+单位 → `medium/needs_review`；普通冒号行 → `low/needs_review`。
+- demo20：**53 行**（51 html_table + 2 colon_line），阶段 1 基线 2 行，提升 26 倍。51 行 `draft`、2 行 `needs_review`。
+- `fixtures_result.md` 新增：规则命中统计、置信度分布、命中章节 TOP 10、待审核原因摘要。
+- `verification.csv` 新增 section_path 缺失 warning 检查。
+- demo5 回归（0 行，空 TOC 符合预期）、幂等性通过、CSV 表头不变。
+- `python3 -m py_compile`、`npm run build`、`check_plan_governance.py` 通过。
+- 无 `pdf-seg`/`pdf-auto`/MCP 契约变更。
+
+### 阶段 2 完成条件
 
 ## 验证方式
 
