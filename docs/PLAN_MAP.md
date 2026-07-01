@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 已完成 | 阶段 8：PDF 输出包目录结构 | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [阶段 8 完成证据](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 已完成 | 无/有 API 双路径验收通过，`_api_arg[@]` 修复 | automated-pdf-pipeline、coverage-validation-optimization | [验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
-| [structured-data-extraction](plans/structured-data-extraction.md) | 待实施 | 阶段 0 已完成（输出契约 + demo20 基线固化和门禁），阶段 1 候选 | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 0 完成证据](plans/structured-data-extraction.md#阶段-0-完成证据2026-07-01) |
+| [structured-data-extraction](plans/structured-data-extraction.md) | 实施中 | 阶段 1 已完成（pdf-extract-data 脚本），阶段 2 候选 | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 1 完成证据](plans/structured-data-extraction.md#阶段-1-完成证据2026-07-01) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |

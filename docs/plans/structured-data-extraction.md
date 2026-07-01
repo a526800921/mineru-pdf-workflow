@@ -111,13 +111,13 @@
 | 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
 |---|---|---|---|---|
 | 阶段 0 | 固化 Step 0 样本和输出契约 | demo20 输出包可用 | 真实样本结构、字段契约、验收命令明确 | 已完成 |
-| 阶段 1 | 最小数据草案生成 | 阶段 0 完成 | 生成三个 `data/` 文件，CSV 表头稳定 | 候选 |
+| 阶段 1 | 最小数据草案生成 | 阶段 0 完成 | 生成三个 `data/` 文件，CSV 表头稳定 | 已完成 |
 | 阶段 2 | 抽取规则扩展和审核口径 | 阶段 1 完成 | 表格、冒号行、章节路径覆盖更多样本 | 候选 |
 | 阶段 3 | 治理收尾和后续入库边界 | 阶段 2 完成 | README、PLAN_MAP、验收证据同步 | 候选 |
 
 ## 当前阶段
 
-当前阶段为阶段 0 已完成（2026-07-01）。阶段 1（最小数据草案生成）候选实施中。
+当前阶段为阶段 1 已完成（2026-07-01）。阶段 2（抽取规则扩展）候选。
 
 ## Step 0 证据
 
@@ -187,17 +187,107 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - `pdf-output-package-layout.md` 的 `data/` 未决项已指向本计划。
 - 阶段 1 的实施边界清楚：新增数据抽取脚本，不修改现有解析/验证/MCP 契约。
 
-## 阶段 1 候选实施方向
+## 阶段 1 可实施说明
 
-阶段 1 可以新增一个最小脚本，例如 `scripts/pdf-extract-data <package>`：
+阶段 1 新增一个最小脚本 `scripts/pdf-extract-data <package>`，只负责把已有输出包转换成可审核的数据草案。脚本失败不得修改原始 PDF、分段目录、合并 Markdown 或 MCP 契约。
+
+### 阶段 1 目标
+
+- 生成 `<package>/data/quick_lookup_draft.csv`、`<package>/data/verification.csv`、`<package>/data/fixtures_result.md`。
+- CSV 表头与本文档输出契约完全一致。
+- 输出可重复生成：同一输出包连续运行两次，三类 `data/` 文件的表头和行数稳定。
+- 所有草案行必须带 `evidence_text`、`status` 和 `confidence`，无法确认的行使用 `needs_review`。
+
+### 阶段 1 非目标
+
+- 不抽取完整车型参数表。
+- 不新增数据库、MCP 工具或外部依赖。
+- 不修改 `pdf-seg`、`pdf-auto`、`pdf-merge`、`pdf-validate`。
+- 不做大模型推断或字段补全。
+
+### 建议脚本接口
+
+```bash
+scripts/pdf-extract-data <package>
+```
+
+示例：
+
+```bash
+scripts/pdf-extract-data pdf/demo20
+scripts/pdf-extract-data pdf/demo5
+```
+
+参数规则：
+
+- `<package>` 必须是输出包目录。
+- 必须存在 `<package>/manifest.json`。
+- 必须存在 `<package>/<stem>.md`，其中 `<stem>` 优先来自 `manifest.json.files.markdown`。
+- 必须存在 `<package>/segments/`。
+- 脚本自动创建 `<package>/data/`。
+
+### 建议实现步骤
 
 1. 读取 `<package>/manifest.json`、`<package>/<stem>.md` 和 `segments/**/content_list_v2.json`。
-2. 生成稳定表头的 `data/quick_lookup_draft.csv`。
-3. 生成 `data/verification.csv`，记录输入文件存在性、行数、图片引用、content_list 数量等检查。
-4. 生成 `data/fixtures_result.md`，给人工验收使用。
-5. 对无法可靠抽取的字段输出 `needs_review`，不伪造高置信度结果。
+2. 从 Markdown 标题推导当前 `section_path`。
+3. 从 Markdown 表格行、冒号行和 `content_list_v2.json` 文本元素中生成最小 `quick_lookup_draft.csv` 草案。
+4. 生成 `verification.csv`，至少记录 manifest、Markdown、segments、content_list、images、输出文件写入这几类检查。
+5. 生成 `fixtures_result.md`，给人工验收使用。
+6. 对无法可靠归类的字段输出 `needs_review`，不伪造高置信度结果。
 
 阶段 1 不要求抽取完整业务字段；成功标准是输出文件稳定、可追溯、可重复生成。
+
+### 最小抽取规则
+
+- Markdown 标题行（`#`、`##`、`###`）更新 `section_path`，不直接生成草案行。
+- Markdown 表格行如能解析为两列或多列，第一列作为 `key`，其余列拼接为 `value`；置信度 `medium`，状态 `draft`。
+- 包含中文或英文冒号的短行可作为键值候选；置信度 `low`，状态 `needs_review`。
+- `content_list_v2.json` 只作为证据补充和检查来源；阶段 1 不要求从复杂嵌套结构完整抽取表格。
+- 图片引用不生成草案行，但进入 `verification.csv` 和 `fixtures_result.md` 摘要。
+
+### 阶段 1 验收命令
+
+```bash
+# 实施前影响分析（新增脚本首次实施时）
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target scripts/pdf-extract-data --direction upstream || true
+
+bash -n scripts/pdf-extract-data
+
+scripts/pdf-extract-data pdf/demo20
+test -f pdf/demo20/data/quick_lookup_draft.csv
+test -f pdf/demo20/data/verification.csv
+test -f pdf/demo20/data/fixtures_result.md
+head -n 1 pdf/demo20/data/quick_lookup_draft.csv | grep 'source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes'
+head -n 1 pdf/demo20/data/verification.csv | grep 'check_id,level,target,result,details,source'
+grep -q '可复现命令' pdf/demo20/data/fixtures_result.md
+
+scripts/pdf-extract-data pdf/demo5
+test -f pdf/demo5/data/quick_lookup_draft.csv
+test -f pdf/demo5/data/verification.csv
+test -f pdf/demo5/data/fixtures_result.md
+
+# 幂等性：连续运行 demo20 后表头和行数稳定
+wc -l pdf/demo20/data/quick_lookup_draft.csv pdf/demo20/data/verification.csv > /tmp/pdf-extract-data-counts.before
+scripts/pdf-extract-data pdf/demo20
+wc -l pdf/demo20/data/quick_lookup_draft.csv pdf/demo20/data/verification.csv > /tmp/pdf-extract-data-counts.after
+diff -u /tmp/pdf-extract-data-counts.before /tmp/pdf-extract-data-counts.after
+
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 1 完成证据（2026-07-01）
+
+- `scripts/pdf-extract-data` 已创建，纯 Python 实现，规则抽取冒号行和 Markdown 表格行。
+- demo20：`quick_lookup_draft.csv`（2 行 / 13 列）、`verification.csv`（7 项检查）、`fixtures_result.md`（含统计和可复现命令）。
+- demo5：`quick_lookup_draft.csv`（0 行，空 TOC 样本符合预期）、`verification.csv`、`fixtures_result.md`。
+- 幂等性：连续两次运行 demo20，表头和行数不变（3 行 / 8 行 diff 为空）。
+- CSV 表头与输出契约完全一致。
+- `bash -n`→`python3 -m py_compile`、`npm run build`、`check_plan_governance.py` 通过。
+- `pdf-seg`、`pdf-auto`、MCP 契约无变更。
+
+### 阶段 1 完成条件
 
 ## 验证方式
 
@@ -208,7 +298,7 @@ python3 scripts/check_plan_governance.py .
 git diff --check
 ```
 
-阶段 1 候选：
+阶段 1：
 
 ```bash
 bash -n scripts/pdf-extract-data
