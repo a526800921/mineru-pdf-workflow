@@ -18,6 +18,7 @@
 |---|---|---|---|---|
 | [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 已完成 | 阶段 8：PDF 输出包目录结构 | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [阶段 8 完成证据](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 已完成 | 无/有 API 双路径验收通过，`_api_arg[@]` 修复 | automated-pdf-pipeline、coverage-validation-optimization | [验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
+| [modelpad-pdf-service-lifecycle](plans/modelpad-pdf-service-lifecycle.md) | 待实施 | 阶段 1：移除脚本服务管理副作用 | ModelPad app、automated-pdf-pipeline、pdf-output-package-layout | [阶段 1 可实施设计](plans/modelpad-pdf-service-lifecycle.md#阶段-1可实施设计) |
 | [structured-data-extraction](plans/structured-data-extraction.md) | 已完成 | 全阶段（0-3） | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 3 完成证据](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
 | [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 已完成 | 阶段 3：实际入库接口或外部系统边界 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案 | [阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
@@ -31,10 +32,11 @@
 1. `automated-pdf-pipeline`
 2. `pdf-output-package-layout`
 3. `coverage-validation-optimization`
-4. `marker-feature-absorption`
-5. `structured-data-extraction`
-6. `data-ingestion-pipeline`
-7. `minimal-automation-runbook`
+4. `modelpad-pdf-service-lifecycle`
+5. `marker-feature-absorption`
+6. `structured-data-extraction`
+7. `data-ingestion-pipeline`
+8. `minimal-automation-runbook`
 
 ## 依赖关系
 
@@ -46,6 +48,9 @@
 | pdf-output-package-layout | coverage-validation-optimization | 沿用 `review_only`、TOC 修复和 review 生成结果 |
 | coverage-validation-optimization | automated-pdf-pipeline | 作为自动化流水线阶段 7，优化验证和重跑策略 |
 | coverage-validation-optimization | `content_list_v2.json` | 页面类型识别和结构化文本提取依赖 MinerU 中间结构 |
+| modelpad-pdf-service-lifecycle | ModelPad app | PDF 服务生命周期由 `/Users/jafish/Documents/work/ModelPad` 托管 |
+| modelpad-pdf-service-lifecycle | automated-pdf-pipeline | 收敛 `pdf-seg`、`pdf-auto`、`pdf-rerun` 的服务管理副作用 |
+| modelpad-pdf-service-lifecycle | pdf-output-package-layout | 保持输出包目录结构不变，只调整服务和临时目录边界 |
 | structured-data-extraction | pdf-output-package-layout | 结构化草案输出到 `<package>/data/`，复用稳定输出包结构 |
 | structured-data-extraction | coverage-validation-optimization | 复用 `content_list_v2.json`、页面类型和质量判定经验 |
 | structured-data-extraction | demo20 输出包 | 阶段 0/1 需要真实含图文和 content_list 的样本 |
@@ -75,6 +80,9 @@
 | 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复 Python 分支 + bash `needs_review` 处理分支，复验返回 `needs_review` 并生成 `<package>/review.md` | `pdf-auto` | 否 | 已解决 |
 | 真实样本 `pdf-seg` 环境依赖未满足 | 根因 `transformers 5.x` 不兼容；已创建隔离 venv（`~/Documents/models/.venv`, `transformers 4.57.6`），scripts 自动检测优先使用 | Phase 8 端到端验收 | 否 | 已解决 |
 | 未检测到 MinerU API 时 `pdf-seg` 因 `_api_arg[@]` 未绑定失败 | 已修复：`if/else` 分支替代空数组 `set -u` 展开，无 API 时自动启动临时服务 | Phase 8 端到端验收、无 API 服务启动路径 | 否 | 已解决 |
+| `pdf-auto` 重跑失败路径可能被 `set -e` 提前中断 | 后续修复为条件式捕获 `mineru` 退出码，并补模拟失败回归；当前先按风险记录，不改变已完成计划状态 | `pdf-auto` 自动重跑、MCP `run_pdf_auto` 失败诊断 | 否 | 已记录 |
+| `pdf-merge` 图片同名冲突可能被静默跳过 | 后续在图片收集阶段增加内容哈希校验、冲突重命名或失败提示；当前 demo5/demo20 幂等样本未暴露该问题 | 输出包 `images/`、合并 Markdown 图片引用 | 否 | 已记录 |
+| PDF 服务生命周期将由 ModelPad app 托管 | 新计划 `modelpad-pdf-service-lifecycle` 阶段 1 已设计到可实施状态：完全依赖 ModelPad 服务运行，移除脚本停止服务和项目 `output/` 清理副作用；未探测到服务时明确失败，不走 MinerU 默认本地启动或降级路径 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 待实施 |
 
 ## 完成证据
 

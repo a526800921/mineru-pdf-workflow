@@ -213,6 +213,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 | 可疑段重跑覆盖原目录还是写入 `rerun-high/` | 写入独立 `-rerun/` 目录，合并前覆盖原始 .md | 否 | 已确认 |
 | `pdf-auto` 暂无 JSON summary | 阶段 4 优先补 `PDF_AUTO_JSON=1`，再实现 MCP server | 否 | 已完成 |
 | MCP server 尚未实现 | 阶段 5 已实现，`mcp/server/` 项目已就绪 | 否 | 已解决 |
+| `pdf-auto` 重跑分支在 `set -e` 下可能无法进入失败兜底 | 将 `mineru` 重跑调用改为 `if mineru ...; then ... else ... fi` 或局部关闭 `errexit` 后读取退出码，并补一个模拟 `mineru` 非 0 的回归验证 | 否 | 已记录 |
 
 ## 风险和回滚
 
@@ -223,6 +224,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 - MinerU 中间输出结构可能随版本变化。
 - 分段合并可能在跨页表格、跨页段落处产生断裂。
 - 页面类型分类如果过于激进，可能把真实解析缺失误归为人工复核问题。
+- `pdf-auto` 重跑分支当前在 `set -e` 下直接执行 `mineru` 后再读取 `$?`。如果 `mineru` 返回非 0，脚本可能在记录失败、保留原始结果和生成兜底清单前直接退出；后续修复应补充失败路径回归验证。
 
 回滚：
 
