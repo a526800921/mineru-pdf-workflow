@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""生成入库候选文件 ingest_ready.csv。
+
+用法:
+  scripts/pdf-prepare-ingest <package>
+
+输入:
+  <package>/data/quick_lookup_draft.csv
+
+输出:
+  <package>/data/ingest_ready.csv
+
+不写入数据库，不修改原草案文件。
+"""
+
+import csv
+import hashlib
+import sys
+from pathlib import Path
+
+
+INGEST_FIELDS = [
+    "record_id", "source_pdf", "model", "section_path", "key", "value", "unit",
+    "evidence_text", "confidence", "review_status", "ingest_status",
+    "source_row_hash", "created_at", "notes",
+]
+
+DRAFT_FIELDS = [
+    "source_pdf", "model", "section_path", "key", "value", "unit",
+    "page_start", "page_end", "evidence_text", "confidence", "status", "notes",
+]
+
+STATUS_MAP = {
+    "draft": ("draft", "not_ready"),
+    "needs_review": ("needs_review", "not_ready"),
+    "rejected": ("rejected", "skipped"),
+}
+
+
+def sha256(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def compute_source_row_hash(row: dict) -> str:
+    """规范化整行内容计算 SHA-256."""
+    normalized = "|".join(row.get(f, "") for f in DRAFT_FIELDS)
+    return sha256(normalized)
+
+
+def compute_record_id(source_pdf: str, model: str, section_path: str,
+                      key: str, value: str, unit: str, source_row_hash: str) -> str:
+    raw = f"{source_pdf}|{model}|{section_path}|{key}|{value}|{unit}|{source_row_hash}"
+    return sha256(raw)
+
+
+def read_draft(path: Path) -> list[dict]:
+    if not path.exists():
+        sys.exit(f"错误：找不到草案文件: {path}")
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        return list(reader)
+
+
+def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
+    rows = []
+    for dr in draft_rows:
+        source_row_hash = compute_source_row_hash(dr)
+        review_status, ingest_status = STATUS_MAP.get(
+            dr.get("status", "draft"), ("draft", "not_ready")
+        )
+        row = {
+            "source_pdf": dr.get("source_pdf", ""),
+            "model": dr.get("model", ""),
+            "section_path": dr.get("section_path", ""),
+            "key": dr.get("key", ""),
+            "value": dr.get("value", ""),
+            "unit": dr.get("unit", ""),
+            "evidence_text": dr.get("evidence_text", ""),
+            "confidence": dr.get("confidence", ""),
+            "review_status": review_status,
+            "ingest_status": ingest_status,
+            "source_row_hash": source_row_hash,
+            "created_at": "",
+            "notes": dr.get("notes", ""),
+        }
+        row["record_id"] = compute_record_id(
+            row["source_pdf"], row["model"], row["section_path"],
+            row["key"], row["value"], row["unit"], row["source_row_hash"],
+        )
+        rows.append(row)
+    return rows
+
+
+def detect_conflicts(rows: list[dict]):
+    """检测同 model+section_path+key 多值冲突."""
+    groups: dict[tuple, list[int]] = {}
+    for i, r in enumerate(rows):
+        pk = (r["model"], r["section_path"], r["key"])
+        groups.setdefault(pk, []).append(i)
+
+    for pk, indices in groups.items():
+        values = {rows[i]["value"] for i in indices}
+        if len(values) > 1:
+            for i in indices:
+                if rows[i]["ingest_status"] != "skipped":
+                    rows[i]["ingest_status"] = "not_ready"
+                    existing = rows[i]["notes"]
+                    rows[i]["notes"] = (existing + "; " if existing else "") + "conflict:同一key多值"
+
+
+def validate_rows(rows: list[dict]):
+    """确保低置信度、缺证据的记录不能进入 ready."""
+    for r in rows:
+        if r["ingest_status"] == "skipped":
+            continue
+        issues = []
+        if not r["evidence_text"]:
+            issues.append("missing_evidence")
+        if not r["key"]:
+            issues.append("missing_key")
+        if not r["value"]:
+            issues.append("missing_value")
+        if r["confidence"] == "low" and r["review_status"] in ("draft", "needs_review"):
+            issues.append("low_confidence_block")
+        if r["review_status"] not in ("approved",):
+            issues.append("not_approved")
+        if issues:
+            r["ingest_status"] = "not_ready"
+            existing = r["notes"]
+            r["notes"] = (existing + "; " if existing else "") + "; ".join(issues)
+
+
+def write_ingest(path: Path, rows: list[dict]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=INGEST_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("用法: scripts/pdf-prepare-ingest <package>", file=sys.stderr)
+        print("示例: scripts/pdf-prepare-ingest pdf/demo20", file=sys.stderr)
+        sys.exit(1)
+
+    pkg = Path(sys.argv[1]).resolve()
+    draft_path = pkg / "data" / "quick_lookup_draft.csv"
+    ingest_path = pkg / "data" / "ingest_ready.csv"
+
+    draft_rows = read_draft(draft_path)
+    ingest_rows = generate_ingest_rows(draft_rows)
+    detect_conflicts(ingest_rows)
+    validate_rows(ingest_rows)
+    write_ingest(ingest_path, ingest_rows)
+
+    not_ready = sum(1 for r in ingest_rows if r["ingest_status"] == "not_ready")
+    skipped = sum(1 for r in ingest_rows if r["ingest_status"] == "skipped")
+    print(f"入库准备完成: {ingest_path}")
+    print(f"  总行数: {len(ingest_rows)}")
+    print(f"  not_ready: {not_ready}")
+    print(f"  skipped: {skipped}")
+
+
+if __name__ == "__main__":
+    main()

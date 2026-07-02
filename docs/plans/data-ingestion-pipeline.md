@@ -84,7 +84,7 @@
 | `review_status` | 人工审核状态 | `draft`、`needs_review`、`approved`、`rejected` |
 | `ingest_status` | 入库状态 | `not_ready`、`ready`、`ingested`、`skipped` |
 | `source_row_hash` | 源草案行哈希 | 用于追溯和幂等检测 |
-| `created_at` | 生成时间 | ISO 8601 字符串，后续实施时固定时区策略 |
+| `created_at` | 生成时间 | 阶段 1 固定为空字符串；后续真实入库时再固定时间来源和时区策略 |
 | `notes` | 备注 | 冲突、修正、跳过原因 |
 
 ### 状态语义
@@ -130,13 +130,13 @@ source_row_hash = sha256(quick_lookup_draft.csv 的规范化整行内容)
 | 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
 |---|---|---|---|---|
 | 阶段 0 | 固化入库边界和候选契约 | `structured-data-extraction` 已完成 | 草案样本、字段契约、状态流转、完成条件明确 | 已完成 |
-| 阶段 1 | 生成入库候选文件 | 阶段 0 完成 | 生成 `ingest_ready.csv`，记录 ID 稳定，源行可追溯 | 候选 |
+| 阶段 1 | 生成入库候选文件 | 阶段 0 完成 | 生成 `ingest_ready.csv`，记录 ID 稳定，源行可追溯 | 已完成 |
 | 阶段 2 | 人工审核状态流转和冲突检查 | 阶段 1 完成 | 审核状态、冲突、跳过原因可复现 | 候选 |
 | 阶段 3 | 实际入库接口或外部系统边界 | 阶段 2 完成 | 下游接口、回滚和幂等策略明确 | 候选 |
 
 ## 当前阶段
 
-阶段 0 已完成（2026-07-02）。阶段 1（生成入库候选文件）待实施。
+阶段 0-1 已完成（2026-07-02）。阶段 2（人工审核状态流转）候选。
 
 ## Step 0 证据
 
@@ -190,9 +190,14 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 
 ### 阶段 0 完成条件
 
+- 本计划进入 `PLAN_MAP.md`，状态为 `待实施` 或后续状态。
+- 入库边界、候选字段、状态枚举、主键策略、冲突处理和回滚策略已记录。
+- 依赖 `structured-data-extraction` 和 `pdf-output-package-layout` 已在 `PLAN_MAP.md` 中明确。
+- 阶段 1 实施边界清楚：新增入库准备产物生成脚本，不改抽取脚本、不写数据库、不新增 MCP。
+
 ## 阶段 1 可实施说明
 
-阶段 1 候选新增一个最小脚本 `scripts/pdf-prepare-ingest <package>`，读取 `<package>/data/quick_lookup_draft.csv`，生成 `<package>/data/ingest_ready.csv`。实施前必须先复核阶段 0 契约，并按 GitNexus 规则做影响分析。
+阶段 1 新增一个最小脚本 `scripts/pdf-prepare-ingest <package>`，读取 `<package>/data/quick_lookup_draft.csv`，生成 `<package>/data/ingest_ready.csv`。实施前必须先复核阶段 0 契约，并按 GitNexus 规则做影响分析。
 
 ### 阶段 1 目标
 
@@ -208,13 +213,82 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - 不新增 MCP 工具。
 - 不做业务字段字典映射。
 
+### 阶段 1 输入输出
+
+输入：
+
+```text
+<package>/data/quick_lookup_draft.csv
+```
+
+输出：
+
+```text
+<package>/data/ingest_ready.csv
+```
+
+`ingest_ready.csv` 字段以本文档的候选输出契约为准。阶段 1 不引入独立 schema 文件，字段校验通过脚本内表头常量和验收命令完成。
+
+### 阶段 1 生成规则
+
+- `source_row_hash` 使用源草案行的规范化字段值计算，字段顺序沿用 `quick_lookup_draft.csv` 表头。
+- `record_id` 使用阶段 0 候选主键策略生成，同一源行重复运行必须稳定。
+- 草案 `status=draft` 默认映射为 `review_status=draft`、`ingest_status=not_ready`。
+- 草案 `status=needs_review` 默认映射为 `review_status=needs_review`、`ingest_status=not_ready`。
+- 草案 `status=rejected` 默认映射为 `review_status=rejected`、`ingest_status=skipped`。
+- 阶段 1 不自动生成 `approved` 或 `ready`，避免未审核数据误入库。
+- 阶段 1 的 `created_at` 固定为空字符串，避免重复生成时因运行时间变化破坏幂等。
+- 缺少 `evidence_text`、`key` 或 `value` 的记录必须保持 `ingest_status=not_ready`，并在 `notes` 记录原因。
+- 同一 `model + section_path + key` 出现多个不同 `value` 时必须标记冲突，相关记录保持 `not_ready`。
+- 空草案输入也必须生成只有表头的 `ingest_ready.csv`。
+
+### 阶段 1 验收命令
+
+```bash
+# 实施前影响分析（新增脚本）
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --direction upstream scripts/pdf-prepare-ingest || true
+
+python3 -m py_compile scripts/pdf-prepare-ingest
+
+scripts/pdf-prepare-ingest pdf/demo20
+test -f pdf/demo20/data/ingest_ready.csv
+head -n 1 pdf/demo20/data/ingest_ready.csv | grep 'record_id,source_pdf,model,section_path,key,value,unit,evidence_text,confidence,review_status,ingest_status,source_row_hash,created_at,notes'
+test "$(wc -l < pdf/demo20/data/ingest_ready.csv | tr -d ' ')" -eq "$(wc -l < pdf/demo20/data/quick_lookup_draft.csv | tr -d ' ')"
+
+scripts/pdf-prepare-ingest pdf/demo5
+test -f pdf/demo5/data/ingest_ready.csv
+test "$(wc -l < pdf/demo5/data/ingest_ready.csv | tr -d ' ')" -eq 1
+
+cp pdf/demo20/data/ingest_ready.csv /tmp/demo20-ingest-ready.before
+scripts/pdf-prepare-ingest pdf/demo20
+cmp /tmp/demo20-ingest-ready.before pdf/demo20/data/ingest_ready.csv
+
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 1 完成证据（2026-07-02）
+
+- `scripts/pdf-prepare-ingest <package>` 已创建，读取 `quick_lookup_draft.csv` → 生成 `ingest_ready.csv`（14 字段）。
+- `record_id`：`sha256(source_pdf|model|section_path|key|value|unit|source_row_hash)`（64-hex）。
+- `source_row_hash`：`sha256(14 字段规范化行)`。
+- 状态映射：`draft→draft/not_ready`、`needs_review→needs_review/not_ready`、`rejected→rejected/skipped`。
+- 冲突检测：同 `model+section_path+key` 多值 → `not_ready`；缺证据/低置信度/非 approved → `not_ready`。
+- demo20：53 行 → `ingest_ready.csv` 54 行（含表头），全部 `not_ready`。
+- demo5：空草案 → 仅表头（1 行）。
+- 幂等性：`cmp` 字节一致。`created_at` 固定为空字符串。
+- 不写数据库、不修改原草案、不新增 MCP。`py_compile`/`check_plan_governance`/`npm build` 通过。
+
+### 阶段 1 完成条件
+
 ## 风险
 
 - `quick_lookup_draft.csv` 的草案质量不足，可能导致入库候选大量停留在 `not_ready`。
 - 主键策略可能无法覆盖多版本 PDF 或人工修正后的稳定性要求。
 - 审核状态和入库状态如果混用，会导致下游误入库。
 - 数据库选型尚未确定，阶段 0 字段契约后续可能需要适配。
-- `created_at` 若使用实时生成时间，可能影响幂等验证，需要后续阶段固定策略。
+- 后续阶段若引入真实 `created_at`，必须先固定时间来源和时区策略，避免破坏幂等验证。
 
 ## 回滚
 
