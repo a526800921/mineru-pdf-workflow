@@ -114,9 +114,10 @@ echo "每段页数: $segment_size"
 echo "输出根目录: $root_output_dir"
 echo "后端: $backend, method: $method, effort: $effort, lang: $lang"
 if [[ -n "$api_url" ]]; then
-  echo "API 服务: $api_url"
+	echo "API 服务: $api_url"
 else
-  echo "API 服务: 未检测到，将启动临时服务"
+	echo "错误：未检测到 MinerU API 服务。请先启动 ModelPad PDF 服务。" >&2
+	exit 1
 fi
 echo
 
@@ -137,13 +138,7 @@ while [[ "$start" -lt "$pages" ]]; do
     printf '页码范围: %s-%s\n' "$start" "$end"
     printf '输出目录: %s\n\n' "$segment_output_dir"
 
-    _api_arg=()
-    if [[ -n "$api_url" ]]; then
-      _api_arg=(--api-url "$api_url")
-    fi
-
-    if [[ -n "$api_url" ]]; then
-      mineru \
+    mineru \
         -p "$pdf_path" \
         -o "$segment_output_dir" \
         -b "$backend" \
@@ -153,17 +148,6 @@ while [[ "$start" -lt "$pages" ]]; do
         -s "$start" \
         -e "$end" \
         --api-url "$api_url"
-    else
-      mineru \
-        -p "$pdf_path" \
-        -o "$segment_output_dir" \
-        -b "$backend" \
-        -m "$method" \
-        --effort "$effort" \
-        -l "$lang" \
-        -s "$start" \
-        -e "$end"
-    fi
   } 2>&1
 
   echo "✓ 分段完成: $segment_name"
@@ -213,32 +197,3 @@ echo "全部分段完成。"
 echo "输出包根目录: $pdf_dir"
 echo "  segments: $root_output_dir"
 echo "  manifest: $manifest_path"
-
-# --- 重启 mineru-api 释放 VLM 累积内存 ---
-_restart="${MINERU_API_RESTART:-1}"
-if [[ "$_restart" == "1" ]]; then
-  set +e
-  _api_pid="$(lsof -i ":${MINERU_API_BASE_PORT:-9000}" -sTCP:LISTEN -t 2>/dev/null | head -1)"
-  if [[ -n "$_api_pid" ]]; then
-    _api_port="${MINERU_API_BASE_PORT:-9000}"
-    echo
-    echo "=== 重启 mineru-api（释放内存） ==="
-    kill "$_api_pid" 2>/dev/null
-    for _i in $(seq 1 30); do
-      if ! lsof -i ":$_api_port" -sTCP:LISTEN >/dev/null 2>&1; then
-        break
-      fi
-      sleep 0.5
-    done
-    sleep 1
-    echo "mineru-api 已停，请在终端输入 pdf 重启服务"
-  fi
-  # 清理 mineru-api 临时产物
-  _script_dir="$(cd "$(dirname "$0")" && pwd)"
-  _project_root="$(dirname "$_script_dir")"
-  if [[ -d "$_project_root/output" ]]; then
-    rm -rf "$_project_root/output"
-    echo "已清理 mineru-api 临时目录"
-  fi
-  set -e
-fi

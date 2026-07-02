@@ -48,7 +48,7 @@
 | 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
 |---|---|---|---|---|
 | 阶段 0 | 固化服务生命周期边界和现状证据 | ModelPad 托管服务约束明确 | 文档和 PLAN_MAP 同步 | 已完成 |
-| 阶段 1 | 移除脚本服务管理副作用 | 阶段 0 完成 | 脚本不启动/重启/关闭服务，不清理共享运行目录 | 待实施 |
+| 阶段 1 | 移除脚本服务管理副作用 | 阶段 0 完成 | 脚本不启动/重启/关闭服务，不清理共享运行目录 | 已完成 |
 | 阶段 2 | 修复自动重跑失败兜底 | 阶段 1 完成 | 模拟 `mineru` 非 0 后仍生成诊断或 review | 候选 |
 | 阶段 3 | 图片冲突检测和运行手册同步 | 阶段 2 完成 | 同名不同内容图片不静默错配，运行手册可复现 | 候选 |
 
@@ -119,6 +119,15 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 - 所有实际解析或重跑的 MinerU 调用都使用 ModelPad 服务 URL。
 - 输出包结构不变：`manifest.json`、`segments/`、`images/`、`data/` 仍由既有流程生成或复用。
 - 治理检查通过，`detect_changes` 结果被记录。
+
+### 阶段 1 完成证据（2026-07-03）
+
+- `scripts/pdf-seg`：移除 `MINERU_API_RESTART` 整段（kill + output/ 清理 + "mineru-api 已停" 提示）；`_api_arg` 和 `if/else` 分支合并为单一 `mineru --api-url "$api_url"` 调用；无 API 时明确报错退出。
+- `scripts/pdf-auto`：两处 `trap` 改为只清理 `mktemp` 文件和 `_rerun_names_file`，不再触碰项目 `output/`；重跑 `mineru` 调用合并为单一 `--api-url` 路径；无 API 时输出 JSON 错误（`PDF_AUTO_JSON=1`）或文本日志并退出。
+- `scripts/pdf-rerun`：移除项目 `output/` 清理段落；`_api_arg` 改为无条件设置 `--api-url`；无 API 时明确报错退出。
+- 三个脚本均通过 `bash -n`；`MINERU_API_RESTART`、`mineru-api 已停`、`kill.*_api_pid`、`rm -rf.*output` 全部零残留。
+- 治理检查通过（`python3 scripts/check_plan_governance.py .`）；`git diff --check` 通过。
+- 净变更：3 文件，+22 / -72 行。
 
 ## 验证方式
 

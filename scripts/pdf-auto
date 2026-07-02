@@ -215,6 +215,14 @@ for ((_p=0; _p<3; _p++)); do
   fi
 done
 
+if [[ -z "$api_url" ]]; then
+  log "错误：未检测到 MinerU API 服务。请先启动 ModelPad PDF 服务。"
+  if [[ "${PDF_AUTO_JSON:-0}" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","reason":"no_api","message":"未检测到 MinerU API 服务。请先启动 ModelPad PDF 服务。"}, sys.stdout)'
+  fi
+  exit 1
+fi
+
 log "pdf-auto: $pdf_path"
 log "分段目录: $segments_dir"
 log "阈值: $threshold"
@@ -235,7 +243,7 @@ step_start 2 "验证分段覆盖率"
 
 # 临时文件保存 pdf-validate 的 JSON 输出
 validate_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$_rerun_names_file"; _d="$(cd "$(dirname "$0")" && pwd)"; rm -rf "$(dirname "$_d")/output"' EXIT
+trap 'rm -f "$validate_tmp" "$_rerun_names_file"' EXIT
 
 # JSON 模式：stdout=JSON, stderr=人可读
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
@@ -871,8 +879,7 @@ for s in report['segments']:
     # 标记此段是否成功
     segment_ok=true
 
-    if [[ -n "$api_url" ]]; then
-      mineru \
+    mineru \
         -p "$pdf_path" \
         -o "$rerun_dir" \
         -b "$backend" \
@@ -882,17 +889,6 @@ for s in report['segments']:
         -s "$start_page" \
         -e "$end_page" \
         --api-url "$api_url" >"$_subprocess_stdout" 2>&1
-    else
-      mineru \
-        -p "$pdf_path" \
-        -o "$rerun_dir" \
-        -b "$backend" \
-        -m "$method" \
-        --effort "$rerun_effort" \
-        -l "$lang" \
-        -s "$start_page" \
-        -e "$end_page" >"$_subprocess_stdout" 2>&1
-    fi
     mineru_rc=$?
     if [[ "$mineru_rc" -eq 0 ]]; then
       log "    ✓ 完成"
@@ -925,7 +921,7 @@ log
 step_start "$_step_total" "二次验证"
 
 validate2_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"; _d="$(cd "$(dirname "$0")" && pwd)"; rm -rf "$(dirname "$_d")/output"' EXIT
+trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"' EXIT
 
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
 

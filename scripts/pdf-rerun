@@ -78,6 +78,11 @@ for ((_p=0; _p<3; _p++)); do
   fi
 done
 
+if [[ -z "$api_url" ]]; then
+  echo "错误：未检测到 MinerU API 服务。请先启动 ModelPad PDF 服务。" >&2
+  exit 1
+fi
+
 echo "PDF: $pdf_path"
 echo "分段目录: $segments_dir"
 echo "精度: $effort, 后端: $backend"
@@ -129,8 +134,7 @@ for target in "$@"; do
   rm -rf "$seg_dir"
   mkdir -p "$seg_dir"
 
-  _api_arg=()
-  [[ -n "$api_url" ]] && _api_arg=(--api-url "$api_url")
+  _api_arg=(--api-url "$api_url")
 
   # mineru uses 0-based page indices
   if mineru \
@@ -160,13 +164,6 @@ done
 echo
 echo "重跑完成: $rerun_count 段"
 
-# 清理 mineru-api 临时产物
-_script_dir="$(cd "$(dirname "$0")" && pwd)"
-_project_root="$(dirname "$_script_dir")"
-if [[ -d "$_project_root/output" ]]; then
-  rm -rf "$_project_root/output"
-  echo "已清理 mineru-api 临时目录"
-fi
 
 # 自动合并
 echo
