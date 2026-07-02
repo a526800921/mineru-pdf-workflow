@@ -132,11 +132,11 @@ source_row_hash = sha256(quick_lookup_draft.csv 的规范化整行内容)
 | 阶段 0 | 固化入库边界和候选契约 | `structured-data-extraction` 已完成 | 草案样本、字段契约、状态流转、完成条件明确 | 已完成 |
 | 阶段 1 | 生成入库候选文件 | 阶段 0 完成 | 生成 `ingest_ready.csv`，记录 ID 稳定，源行可追溯 | 已完成 |
 | 阶段 2 | 人工审核状态流转和冲突检查 | 阶段 1 完成 | 审核状态、冲突、跳过原因可复现 | 已完成 |
-| 阶段 3 | 实际入库接口或外部系统边界 | 阶段 2 完成 | 下游接口、回滚和幂等策略明确 | 候选 |
+| 阶段 3 | 实际入库接口或外部系统边界 | 阶段 2 完成 | 下游接口、回滚和幂等策略明确 | 已完成 |
 
 ## 当前阶段
 
-阶段 0-2 已完成（2026-07-02）。阶段 3（实际入库接口）候选。
+阶段 0-3 已完成（2026-07-02）。当前阶段已完成。计划状态：已完成。
 
 ## Step 0 证据
 
@@ -448,6 +448,196 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - README 或等价运行说明已补充人工审核文件用法和“不写入数据库”边界。
 - 治理文档、PLAN_MAP、验证证据和 GitNexus `detect_changes` 已同步。
 
+## 阶段 3 可实施说明
+
+阶段 3 在阶段 2 的 `ready` 记录基础上固化外部系统交付边界。第一版不直接写业务数据库，而是生成可移交、可审计、可回滚的入库批次文件；如果后续要直连数据库，需要另建迁移或 ADR 固化目标库、事务、权限和回滚策略。
+
+### 阶段 3 目标
+
+- 只导出 `ingest_status=ready` 的记录，生成可交付给下游系统的批次产物。
+- 固定批次 ID、输入哈希、记录数、来源包路径和生成命令，便于审计和幂等。
+- 明确外部系统接收契约和失败边界：本项目只生成批次，不确认入库成功。
+- 为后续数据库直连或 MCP 暴露保留边界，不在阶段 3 直接扩大运行时权限。
+- 保持阶段 1-2 的原始草案、审核文件和入库候选文件不被破坏。
+
+### 阶段 3 非目标
+
+- 不直连业务数据库。
+- 不新增 MCP 工具。
+- 不自动把 `ready` 改成 `ingested`。
+- 不修改 `quick_lookup_draft.csv`、`review_overrides.csv` 或人工审核结论。
+- 不引入外部服务依赖。
+
+### 阶段 3 输入输出
+
+输入：
+
+```text
+<package>/data/ingest_ready.csv
+<package>/data/conflicts.csv
+```
+
+输出：
+
+```text
+<package>/data/ingest_batch.jsonl
+<package>/data/ingest_manifest.json
+```
+
+### ingest_batch.jsonl
+
+每行一条 JSON 记录，对应一条 `ready` 记录。字段来自 `ingest_ready.csv`，阶段 3 不重命名、不丢弃追溯字段。
+
+最低字段：
+
+| 字段 | 规则 |
+|---|---|
+| `record_id` | 继承 `ingest_ready.csv.record_id` |
+| `source_pdf` | 继承源 PDF |
+| `model` | 继承车型或文档名 |
+| `section_path` | 继承章节路径 |
+| `key` | 继承字段名 |
+| `value` | 继承字段值 |
+| `unit` | 继承单位 |
+| `evidence_text` | 必填 |
+| `confidence` | 继承置信度 |
+| `review_status` | 必须为 `approved` |
+| `ingest_status` | 必须为 `ready` |
+| `source_row_hash` | 必填 |
+| `notes` | 继承备注 |
+
+### ingest_manifest.json
+
+用于批次审计和幂等校验。
+
+最低字段：
+
+| 字段 | 规则 |
+|---|---|
+| `batch_id` | 稳定 ID，建议由包路径、`ingest_ready.csv` hash、ready 记录 ID 列表计算 |
+| `package` | 输出包路径 |
+| `source_files` | 至少包含 `ingest_ready.csv`、`conflicts.csv` |
+| `record_count` | `ingest_batch.jsonl` 行数 |
+| `ready_record_count` | ready 记录数 |
+| `skipped_record_count` | skipped 记录数 |
+| `not_ready_record_count` | not_ready 记录数 |
+| `input_hashes` | 输入文件 SHA-256 |
+| `generated_at` | 阶段 3 为保证幂等，固定为空字符串或由显式环境变量提供 |
+| `status` | `exported` |
+| `notes` | 固定说明：未写入数据库 |
+
+### 阶段 3 建议脚本接口
+
+阶段 3 可新增独立脚本，避免扩大 `pdf-prepare-ingest` 的职责：
+
+```bash
+scripts/pdf-export-ingest <package>
+```
+
+脚本行为：
+
+- 读取 `<package>/data/ingest_ready.csv` 和 `<package>/data/conflicts.csv`。
+- 只导出 `ingest_status=ready` 且 `review_status=approved` 的记录。
+- 如果存在未解决冲突，仍可导出未受冲突影响的 ready 记录，但 manifest 必须记录冲突数量。
+- 如果 ready 记录数为 0，也必须生成空 `ingest_batch.jsonl` 和 manifest，便于自动化流程判断。
+- 不修改 `ingest_ready.csv`、`conflicts.csv`、`review_overrides.csv` 或草案文件。
+
+### 阶段 3 验收命令
+
+```bash
+# 实施前影响分析（新增脚本）
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --direction upstream scripts/pdf-export-ingest || true
+
+python3 -m py_compile scripts/pdf-export-ingest
+
+# 无 ready 记录时生成空批次和 manifest
+rm -f pdf/demo20/data/review_overrides.csv
+scripts/pdf-prepare-ingest pdf/demo20
+scripts/pdf-export-ingest pdf/demo20
+test -f pdf/demo20/data/ingest_batch.jsonl
+test -f pdf/demo20/data/ingest_manifest.json
+test "$(wc -l < pdf/demo20/data/ingest_batch.jsonl | tr -d ' ')" -eq 0
+python3 - <<'PY'
+import json
+from pathlib import Path
+m = json.loads(Path("pdf/demo20/data/ingest_manifest.json").read_text(encoding="utf-8"))
+assert m["status"] == "exported"
+assert m["record_count"] == 0
+assert "ingest_ready.csv" in m["source_files"]
+PY
+
+# 构造一条 approved/ready 记录后可导出 1 行 JSONL
+python3 - <<'PY'
+import csv
+from pathlib import Path
+ingest = Path("pdf/demo20/data/ingest_ready.csv")
+override = Path("pdf/demo20/data/review_overrides.csv")
+with ingest.open(newline="", encoding="utf-8") as f:
+    row = next(csv.DictReader(f))
+with override.open("w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=["record_id", "review_status", "notes"])
+    w.writeheader()
+    w.writerow({"record_id": row["record_id"], "review_status": "approved", "notes": "phase3 fixture"})
+PY
+scripts/pdf-prepare-ingest pdf/demo20
+scripts/pdf-export-ingest pdf/demo20
+test "$(wc -l < pdf/demo20/data/ingest_batch.jsonl | tr -d ' ')" -eq 1
+python3 - <<'PY'
+import json
+from pathlib import Path
+line = Path("pdf/demo20/data/ingest_batch.jsonl").read_text(encoding="utf-8").strip()
+record = json.loads(line)
+assert record["review_status"] == "approved"
+assert record["ingest_status"] == "ready"
+manifest = json.loads(Path("pdf/demo20/data/ingest_manifest.json").read_text(encoding="utf-8"))
+assert manifest["record_count"] == 1
+assert manifest["ready_record_count"] >= 1
+PY
+
+# 幂等性
+cp pdf/demo20/data/ingest_batch.jsonl /tmp/demo20-ingest-batch.phase3.before
+cp pdf/demo20/data/ingest_manifest.json /tmp/demo20-ingest-manifest.phase3.before
+scripts/pdf-export-ingest pdf/demo20
+cmp /tmp/demo20-ingest-batch.phase3.before pdf/demo20/data/ingest_batch.jsonl
+cmp /tmp/demo20-ingest-manifest.phase3.before pdf/demo20/data/ingest_manifest.json
+
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 3 完成条件
+
+- `scripts/pdf-export-ingest <package>` 可生成 `ingest_batch.jsonl` 和 `ingest_manifest.json`。
+- 无 ready 记录时也生成可审计的空批次。
+- 有 ready 记录时只导出 `approved/ready` 记录。
+- manifest 记录输入文件、输入 hash、记录数、状态和“不写入数据库”说明。
+- 同一输入重复运行 `ingest_batch.jsonl` 和 `ingest_manifest.json` 字节一致。
+- README 或等价运行说明已补充批次导出用法和”不确认数据库入库成功”边界。
+- 治理文档、PLAN_MAP、验证证据和 GitNexus `detect_changes` 已同步。
+
+### 阶段 3 完成证据（2026-07-02）
+
+- `scripts/pdf-export-ingest <package>` 已创建，读取 `ingest_ready.csv` + `conflicts.csv` → 生成 `ingest_batch.jsonl` + `ingest_manifest.json`。
+- 只导出 `review_status=approved` 且 `ingest_status=ready` 的记录。
+- `ingest_batch.jsonl`：每行一条完整 JSON 记录，保留 ingest_ready.csv 全部字段，不丢弃追溯字段。
+- `ingest_manifest.json`：batch_id（sha256 稳定）、package、source_files、record_count、ready/skipped/not_ready 计数、total_conflicts、unresolved_conflicts、input_hashes（SHA-256）、generated_at（空）、status（exported）、notes（未写入数据库）。
+- demo20 无 ready（无审核覆盖）：空 JSONL（0 行）+ manifest（record_count=0、total_conflicts=1、unresolved_conflicts=1）。
+- demo20 有 1 条 approved/ready（审核覆盖生效后）：JSONL 1 行 + manifest（record_count=1、ready_record_count=1）。
+- 幂等性：`ingest_batch.jsonl` 和 `ingest_manifest.json` 均 `cmp` 字节一致。
+- `py_compile`/`check_plan_governance`/`npm build` 通过。不改草案/不写数据库/不新增 MCP/不确认下游入库成功。
+- 未解决冲突存在时仍导出不受影响的 ready 记录，manifest 记录冲突数量并输出警告。
+
+## 验证方式
+
+各阶段验收通过以下命令验证，具体参数和期望结果见对应阶段的验收命令章节：
+
+- 阶段 0：文档契约、状态枚举、主键策略和冲突处理规则是否在 PLAN_MAP 中登记完整。
+- 阶段 1：`scripts/pdf-prepare-ingest` 生成 `ingest_ready.csv`，验证行数一致、record_id 稳定、幂等输出。
+- 阶段 2：`review_overrides.csv` 审核覆盖 + `conflicts.csv` 冲突报告，验证状态流转规则和幂等性。
+- 阶段 3：`scripts/pdf-export-ingest` 生成 `ingest_batch.jsonl` + `ingest_manifest.json`，验证空批次、有 ready 记录导出、字段完整性和幂等输出。
+- 所有阶段：`python3 scripts/check_plan_governance.py .`、`git diff --check`、`node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow`。
+
 ## 风险
 
 - `quick_lookup_draft.csv` 的草案质量不足，可能导致入库候选大量停留在 `not_ready`。
@@ -457,6 +647,7 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - 后续阶段若引入真实 `created_at`，必须先固定时间来源和时区策略，避免破坏幂等验证。
 - 阶段 2 的审核覆盖只允许改状态和备注；如果人工需要改值，必须另行定义数据修正流程，否则会破坏源行追溯。
 - 冲突解除策略如果过早自动化，可能让错误值进入 `ready`，阶段 2 默认保守处理。
+- 阶段 3 只导出批次，不确认下游数据库成功；如果外部系统回写状态，需要另行定义 `ingested` 状态来源。
 
 ## 回滚
 

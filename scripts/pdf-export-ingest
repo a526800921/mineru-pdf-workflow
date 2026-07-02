@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""导出可入库批次文件 ingest_batch.jsonl + ingest_manifest.json。
+
+用法:
+  scripts/pdf-export-ingest <package>
+
+输入:
+  <package>/data/ingest_ready.csv
+  <package>/data/conflicts.csv
+
+输出:
+  <package>/data/ingest_batch.jsonl
+  <package>/data/ingest_manifest.json
+
+只导出 ingest_status=ready 且 review_status=approved 的记录。
+不写入数据库，不修改输入文件。
+"""
+
+import csv
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+def sha256(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    """计算文件内容的 SHA-256。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_ingest(path: Path) -> list[dict]:
+    """读取 ingest_ready.csv，返回行列表。"""
+    if not path.exists():
+        sys.exit(f"错误：找不到 ingest_ready.csv: {path}")
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def read_conflicts(path: Path) -> list[dict]:
+    """读取 conflicts.csv，返回行列表。"""
+    if not path.exists():
+        sys.exit(f"错误：找不到 conflicts.csv: {path}")
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def filter_ready(rows: list[dict]) -> list[dict]:
+    """只保留 review_status=approved 且 ingest_status=ready 的记录。"""
+    return [r for r in rows
+            if r.get("review_status") == "approved"
+            and r.get("ingest_status") == "ready"]
+
+
+def compute_batch_id(package_path: str, ingest_hash: str,
+                     ready_ids: list[str]) -> str:
+    """生成稳定批次 ID。"""
+    raw = f"{package_path}|{ingest_hash}|{','.join(sorted(ready_ids))}"
+    return sha256(raw)
+
+
+def build_manifest(package_path: Path, ingest_rows: list[dict],
+                   ready_rows: list[dict], conflicts: list[dict],
+                   ingest_hash: str, conflicts_hash: str) -> dict:
+    """生成 ingest_manifest.json 内容。"""
+    ready_ids = [r["record_id"] for r in ready_rows]
+    batch_id = compute_batch_id(str(package_path), ingest_hash, ready_ids)
+
+    skipped = sum(1 for r in ingest_rows if r.get("ingest_status") == "skipped")
+    not_ready = sum(1 for r in ingest_rows if r.get("ingest_status") == "not_ready")
+    unresolved = sum(1 for c in conflicts
+                     if c.get("resolution_status") == "unresolved")
+
+    return {
+        "batch_id": batch_id,
+        "package": str(package_path),
+        "source_files": ["ingest_ready.csv", "conflicts.csv"],
+        "record_count": len(ready_rows),
+        "ready_record_count": len(ready_rows),
+        "skipped_record_count": skipped,
+        "not_ready_record_count": not_ready,
+        "total_conflicts": len(conflicts),
+        "unresolved_conflicts": unresolved,
+        "input_hashes": {
+            "ingest_ready.csv": ingest_hash,
+            "conflicts.csv": conflicts_hash,
+        },
+        "generated_at": "",
+        "status": "exported",
+        "notes": "未写入数据库",
+    }
+
+
+def write_jsonl(path: Path, rows: list[dict]):
+    """将记录写入 JSONL 文件，每行一个 JSON 对象。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def write_manifest(path: Path, manifest: dict):
+    """写入 manifest JSON 文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("用法: scripts/pdf-export-ingest <package>", file=sys.stderr)
+        print("示例: scripts/pdf-export-ingest pdf/demo20", file=sys.stderr)
+        sys.exit(1)
+
+    pkg = Path(sys.argv[1]).resolve()
+    ingest_path = pkg / "data" / "ingest_ready.csv"
+    conflicts_path = pkg / "data" / "conflicts.csv"
+    batch_path = pkg / "data" / "ingest_batch.jsonl"
+    manifest_path = pkg / "data" / "ingest_manifest.json"
+
+    # Read inputs
+    ingest_rows = read_ingest(ingest_path)
+    conflicts = read_conflicts(conflicts_path)
+
+    # Compute input hashes before any filtering
+    ingest_hash = file_sha256(ingest_path)
+    conflicts_hash = file_sha256(conflicts_path)
+
+    # Filter ready records
+    ready_rows = filter_ready(ingest_rows)
+
+    # Build manifest
+    manifest = build_manifest(pkg, ingest_rows, ready_rows, conflicts,
+                              ingest_hash, conflicts_hash)
+
+    # Write outputs
+    write_jsonl(batch_path, ready_rows)
+    write_manifest(manifest_path, manifest)
+
+    total = len(ingest_rows)
+    unresolved = manifest["unresolved_conflicts"]
+    print(f"批次导出完成: {pkg}/data/")
+    print(f"  ingest_batch.jsonl: {len(ready_rows)} 条 ready 记录 (共 {total} 条)")
+    print(f"  ingest_manifest.json: batch_id={manifest['batch_id'][:16]}...")
+    if unresolved:
+        print(f"  警告: 存在 {unresolved} 组未解决冲突，已导出的 ready 记录不受影响")
+
+
+if __name__ == "__main__":
+    main()
