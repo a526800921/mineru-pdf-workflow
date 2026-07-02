@@ -160,10 +160,10 @@ wc -l pdf/demo20/data/verification.csv
 head -n 1 pdf/demo20/data/quick_lookup_draft.csv
 ```
 
-### 当前缺口
+### 阶段 1 前缺口
 
-- 尚无 `ingest_ready.csv` 或等价入库候选产物。
-- 尚无正式入库状态流转脚本。
+- 阶段 1 前尚无 `ingest_ready.csv` 或等价入库候选产物；阶段 1 已补齐。
+- 阶段 1 前尚无正式入库状态流转脚本；阶段 1 已实现草案状态到入库准备状态的最小映射。
 - 尚无业务数据库、SQLite、JSONL 或外部系统选型。
 - 尚无跨 PDF 版本的主键冲突样本。
 
@@ -281,6 +281,14 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - 不写数据库、不修改原草案、不新增 MCP。`py_compile`/`check_plan_governance`/`npm build` 通过。
 
 ### 阶段 1 完成条件
+
+- `scripts/pdf-prepare-ingest <package>` 可生成 `ingest_ready.csv`。
+- demo20 生成行数与 `quick_lookup_draft.csv` 保持一致，表头稳定。
+- demo5 空草案生成只有表头的 `ingest_ready.csv`。
+- 同一输入重复运行输出完全一致。
+- 阶段 1 不写数据库、不修改原草案、不新增 MCP。
+- 脚本帮助文本和本文档已记录用法和“不写入数据库”边界。
+- 治理文档、PLAN_MAP、验证证据和 GitNexus `detect_changes` 已同步。
 
 ## 风险
 
