@@ -131,12 +131,12 @@ source_row_hash = sha256(quick_lookup_draft.csv 的规范化整行内容)
 |---|---|---|---|---|
 | 阶段 0 | 固化入库边界和候选契约 | `structured-data-extraction` 已完成 | 草案样本、字段契约、状态流转、完成条件明确 | 已完成 |
 | 阶段 1 | 生成入库候选文件 | 阶段 0 完成 | 生成 `ingest_ready.csv`，记录 ID 稳定，源行可追溯 | 已完成 |
-| 阶段 2 | 人工审核状态流转和冲突检查 | 阶段 1 完成 | 审核状态、冲突、跳过原因可复现 | 候选 |
+| 阶段 2 | 人工审核状态流转和冲突检查 | 阶段 1 完成 | 审核状态、冲突、跳过原因可复现 | 已完成 |
 | 阶段 3 | 实际入库接口或外部系统边界 | 阶段 2 完成 | 下游接口、回滚和幂等策略明确 | 候选 |
 
 ## 当前阶段
 
-阶段 0-1 已完成（2026-07-02）。阶段 2（人工审核状态流转）候选。
+阶段 0-2 已完成（2026-07-02）。阶段 3（实际入库接口）候选。
 
 ## Step 0 证据
 
@@ -290,6 +290,164 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - 脚本帮助文本和本文档已记录用法和“不写入数据库”边界。
 - 治理文档、PLAN_MAP、验证证据和 GitNexus `detect_changes` 已同步。
 
+## 阶段 2 可实施说明
+
+阶段 2 在阶段 1 的 `ingest_ready.csv` 基础上增加人工审核输入和冲突检查结果。目标是让审核人员可以显式批准或拒绝候选记录，并让脚本在不写数据库的前提下生成可放行的 `ready` 记录。
+
+### 阶段 2 目标
+
+- 定义人工审核输入文件，避免直接编辑 `ingest_ready.csv` 作为唯一审核来源。
+- 支持按 `record_id` 覆盖 `review_status` 和 `notes`。
+- 生成冲突报告，列出同 `model + section_path + key` 多值记录。
+- 仅当记录已 `approved`、无冲突、证据完整、字段完整时，将 `ingest_status` 从 `not_ready` 推进到 `ready`。
+- 保持阶段 1 的幂等性：同一草案和同一审核输入重复运行输出完全一致。
+
+### 阶段 2 非目标
+
+- 不写入数据库。
+- 不新增 MCP 工具。
+- 不实现 Web 审核界面。
+- 不自动推断 `approved`。
+- 不修改 `quick_lookup_draft.csv`。
+- 不改变阶段 1 已固化的 `ingest_ready.csv` 表头。
+
+### 阶段 2 输入输出
+
+新增审核输入：
+
+```text
+<package>/data/review_overrides.csv
+```
+
+更新或生成：
+
+```text
+<package>/data/ingest_ready.csv
+<package>/data/conflicts.csv
+```
+
+### review_overrides.csv
+
+| 字段 | 含义 | 规则 |
+|---|---|---|
+| `record_id` | 目标记录 ID | 必须匹配 `ingest_ready.csv.record_id` |
+| `review_status` | 审核状态 | 只允许 `approved`、`rejected`、`needs_review` |
+| `notes` | 审核备注 | 可为空；写入或追加到目标记录备注 |
+
+阶段 2 不允许通过审核文件修改 `key`、`value`、`unit` 或 `evidence_text`。需要修正内容时，应回到草案抽取或另建数据清洗计划。
+
+### conflicts.csv
+
+| 字段 | 含义 |
+|---|---|
+| `conflict_id` | 稳定冲突 ID |
+| `model` | 车型或文档名 |
+| `section_path` | 章节路径 |
+| `key` | 字段名 |
+| `record_ids` | 涉及记录 ID，使用 `;` 分隔 |
+| `values` | 涉及值，使用 `;` 分隔 |
+| `resolution_status` | `unresolved`、`resolved` |
+| `notes` | 说明 |
+
+### 阶段 2 状态流转规则
+
+- 未出现在 `review_overrides.csv` 的记录保持阶段 1 生成结果。
+- `review_status=approved` 且证据、`key`、`value` 完整，且不在未解决冲突组内，才可设置 `ingest_status=ready`。
+- `review_status=rejected` 必须设置 `ingest_status=skipped`。
+- `review_status=needs_review` 必须设置 `ingest_status=not_ready`。
+- 低置信度记录即使被 `approved`，也必须保留原始 `confidence`，但允许在证据完整且无冲突时进入 `ready`。
+- 未知 `record_id`、非法 `review_status` 或重复覆盖同一 `record_id` 时，脚本必须失败，不生成部分成功的输出。
+- 冲突组内记录默认 `not_ready`；只有冲突解除后才能进入 `ready`。
+
+### 阶段 2 建议脚本接口
+
+阶段 2 继续扩展阶段 1 脚本，保持单入口：
+
+```bash
+scripts/pdf-prepare-ingest <package>
+```
+
+脚本行为：
+
+- 若 `review_overrides.csv` 不存在，按阶段 1 行为生成 `ingest_ready.csv`，并生成空表头或冲突明细的 `conflicts.csv`。
+- 若 `review_overrides.csv` 存在，先校验审核文件，再应用覆盖并重新计算 `ingest_status`。
+- 输出仍不写数据库，不修改 `quick_lookup_draft.csv` 和 `review_overrides.csv`。
+
+### 阶段 2 验收命令
+
+```bash
+# 实施前影响分析
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --direction upstream scripts/pdf-prepare-ingest || true
+
+python3 -m py_compile scripts/pdf-prepare-ingest
+
+# 无审核文件时兼容阶段 1
+rm -f pdf/demo20/data/review_overrides.csv
+scripts/pdf-prepare-ingest pdf/demo20
+test -f pdf/demo20/data/ingest_ready.csv
+test -f pdf/demo20/data/conflicts.csv
+head -n 1 pdf/demo20/data/conflicts.csv | grep 'conflict_id,model,section_path,key,record_ids,values,resolution_status,notes'
+
+# 审核通过单条记录后，仅满足条件的记录进入 ready
+python3 - <<'PY'
+import csv
+from pathlib import Path
+ingest = Path("pdf/demo20/data/ingest_ready.csv")
+override = Path("pdf/demo20/data/review_overrides.csv")
+with ingest.open(newline="", encoding="utf-8") as f:
+    row = next(csv.DictReader(f))
+with override.open("w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=["record_id", "review_status", "notes"])
+    w.writeheader()
+    w.writerow({"record_id": row["record_id"], "review_status": "approved", "notes": "phase2 fixture"})
+PY
+scripts/pdf-prepare-ingest pdf/demo20
+grep ',approved,ready,' pdf/demo20/data/ingest_ready.csv
+
+# 非法审核状态必须失败
+python3 - <<'PY'
+import csv
+from pathlib import Path
+ingest = Path("pdf/demo20/data/ingest_ready.csv")
+override = Path("pdf/demo20/data/review_overrides.csv")
+with ingest.open(newline="", encoding="utf-8") as f:
+    row = next(csv.DictReader(f))
+with override.open("w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=["record_id", "review_status", "notes"])
+    w.writeheader()
+    w.writerow({"record_id": row["record_id"], "review_status": "invalid", "notes": "bad status"})
+PY
+! scripts/pdf-prepare-ingest pdf/demo20
+
+# 幂等性
+rm -f pdf/demo20/data/review_overrides.csv
+scripts/pdf-prepare-ingest pdf/demo20
+cp pdf/demo20/data/ingest_ready.csv /tmp/demo20-ingest-ready.phase2.before
+cp pdf/demo20/data/conflicts.csv /tmp/demo20-conflicts.phase2.before
+scripts/pdf-prepare-ingest pdf/demo20
+cmp /tmp/demo20-ingest-ready.phase2.before pdf/demo20/data/ingest_ready.csv
+cmp /tmp/demo20-conflicts.phase2.before pdf/demo20/data/conflicts.csv
+
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 2 完成证据（2026-07-02）
+
+- `review_overrides.csv` 契约：`record_id`（匹配校验）+ `review_status`（approved/rejected/needs_review）+ `notes`。
+- 校验：未知 record_id→失败、非法状态→失败、重复覆盖→失败、禁止字段（key/value 等）→失败。
+- `conflicts.csv`（8 字段）：demo20 检测到 1 组冲突（同 key 多值），`conflict_id` 稳定（sha256）。
+- 状态流转：`approved`+证据完整+无冲突→`ready`（demo20 验证 1 条）、`rejected`→`skipped`、`needs_review/draft`→`not_ready`。
+- 幂等性：`ingest_ready.csv` + `conflicts.csv` 均 `cmp` 字节一致。
+- `py_compile`/`check_plan_governance`/`npm build` 通过。不改草案/不写数据库/不新增 MCP。
+
+### 阶段 2 完成条件
+- 无审核文件时兼容阶段 1 行为。
+- 同一输入重复运行 `ingest_ready.csv` 和 `conflicts.csv` 字节一致。
+- README 或等价运行说明已补充人工审核文件用法和“不写入数据库”边界。
+- 治理文档、PLAN_MAP、验证证据和 GitNexus `detect_changes` 已同步。
+
 ## 风险
 
 - `quick_lookup_draft.csv` 的草案质量不足，可能导致入库候选大量停留在 `not_ready`。
@@ -297,6 +455,8 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - 审核状态和入库状态如果混用，会导致下游误入库。
 - 数据库选型尚未确定，阶段 0 字段契约后续可能需要适配。
 - 后续阶段若引入真实 `created_at`，必须先固定时间来源和时区策略，避免破坏幂等验证。
+- 阶段 2 的审核覆盖只允许改状态和备注；如果人工需要改值，必须另行定义数据修正流程，否则会破坏源行追溯。
+- 冲突解除策略如果过早自动化，可能让错误值进入 `ready`，阶段 2 默认保守处理。
 
 ## 回滚
 

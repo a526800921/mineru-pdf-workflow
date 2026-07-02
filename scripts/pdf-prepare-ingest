@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""生成入库候选文件 ingest_ready.csv。
+"""生成入库候选文件 ingest_ready.csv + conflicts.csv。
 
 用法:
   scripts/pdf-prepare-ingest <package>
 
 输入:
   <package>/data/quick_lookup_draft.csv
+  <package>/data/review_overrides.csv    (可选; 阶段 2 人工审核输入)
 
 输出:
   <package>/data/ingest_ready.csv
+  <package>/data/conflicts.csv
 
 不写入数据库，不修改原草案文件。
 """
@@ -16,6 +18,7 @@
 import csv
 import hashlib
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 
@@ -30,6 +33,14 @@ DRAFT_FIELDS = [
     "page_start", "page_end", "evidence_text", "confidence", "status", "notes",
 ]
 
+CONFLICT_FIELDS = [
+    "conflict_id", "model", "section_path", "key",
+    "record_ids", "values", "resolution_status", "notes",
+]
+
+OVERRIDE_FIELDS = ["record_id", "review_status", "notes"]
+VALID_REVIEW_STATUSES = {"approved", "rejected", "needs_review"}
+
 STATUS_MAP = {
     "draft": ("draft", "not_ready"),
     "needs_review": ("needs_review", "not_ready"),
@@ -42,7 +53,6 @@ def sha256(s: str) -> str:
 
 
 def compute_source_row_hash(row: dict) -> str:
-    """规范化整行内容计算 SHA-256."""
     normalized = "|".join(row.get(f, "") for f in DRAFT_FIELDS)
     return sha256(normalized)
 
@@ -57,8 +67,42 @@ def read_draft(path: Path) -> list[dict]:
     if not path.exists():
         sys.exit(f"错误：找不到草案文件: {path}")
     with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def read_overrides(path: Path) -> dict[str, dict]:
+    """读取审核覆盖文件，返回 {record_id: {review_status, notes}}.
+    校验：字段合法、状态合法、无重复 record_id、不允许修改 key/value/unit/evidence_text。
+    """
+    if not path.exists():
+        return {}
+    with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        return list(reader)
+        if reader.fieldnames is None:
+            return {}
+        reader.fieldnames = [fn.strip() for fn in reader.fieldnames]
+        for fn in OVERRIDE_FIELDS:
+            if fn not in reader.fieldnames:
+                sys.exit(f"错误：review_overrides.csv 缺少字段: {fn}")
+        for fn in reader.fieldnames:
+            if fn not in OVERRIDE_FIELDS:
+                sys.exit(f"错误：review_overrides.csv 包含禁止字段: {fn}。只允许 {OVERRIDE_FIELDS}")
+        overrides = {}
+        rows = list(reader)
+        for r in rows:
+            rid = r.get("record_id", "").strip()
+            if not rid:
+                sys.exit("错误：review_overrides.csv 存在空 record_id")
+            if rid in overrides:
+                sys.exit(f"错误：review_overrides.csv 存在重复 record_id: {rid}")
+            rs = r.get("review_status", "").strip()
+            if rs not in VALID_REVIEW_STATUSES:
+                sys.exit(f"错误：非法 review_status: '{rs}'。允许: {sorted(VALID_REVIEW_STATUSES)}")
+            overrides[rid] = {
+                "review_status": rs,
+                "notes": r.get("notes", "").strip(),
+            }
+        return overrides
 
 
 def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
@@ -91,49 +135,96 @@ def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
     return rows
 
 
-def detect_conflicts(rows: list[dict]):
-    """检测同 model+section_path+key 多值冲突."""
-    groups: dict[tuple, list[int]] = {}
-    for i, r in enumerate(rows):
-        pk = (r["model"], r["section_path"], r["key"])
-        groups.setdefault(pk, []).append(i)
+def apply_overrides(rows: list[dict], overrides: dict[str, dict]):
+    """应用审核覆盖，校验所有 record_id 必须存在."""
+    valid_ids = {r["record_id"] for r in rows}
+    for rid in overrides:
+        if rid not in valid_ids:
+            sys.exit(f"错误：review_overrides.csv 包含未知 record_id: {rid}")
 
-    for pk, indices in groups.items():
-        values = {rows[i]["value"] for i in indices}
-        if len(values) > 1:
-            for i in indices:
-                if rows[i]["ingest_status"] != "skipped":
-                    rows[i]["ingest_status"] = "not_ready"
-                    existing = rows[i]["notes"]
-                    rows[i]["notes"] = (existing + "; " if existing else "") + "conflict:同一key多值"
-
-
-def validate_rows(rows: list[dict]):
-    """确保低置信度、缺证据的记录不能进入 ready."""
     for r in rows:
-        if r["ingest_status"] == "skipped":
+        rid = r["record_id"]
+        if rid in overrides:
+            ov = overrides[rid]
+            r["review_status"] = ov["review_status"]
+            if ov["notes"]:
+                existing = r["notes"]
+                r["notes"] = (existing + "; " if existing else "") + ov["notes"]
+
+
+def build_conflicts(rows: list[dict]) -> list[dict]:
+    """检测同 model+section_path+key 多值冲突，生成 conflicts.csv."""
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        pk = (r["model"], r["section_path"], r["key"])
+        groups[pk].append(r)
+
+    conflicts = []
+    for pk, members in groups.items():
+        values = list({m["value"] for m in members})
+        if len(values) <= 1:
             continue
+        cid = sha256(f"conflict|{pk[0]}|{pk[1]}|{pk[2]}|{'|'.join(sorted(values))}")
+        conflicts.append({
+            "conflict_id": cid,
+            "model": pk[0],
+            "section_path": pk[1],
+            "key": pk[2],
+            "record_ids": ";".join(m["record_id"] for m in members),
+            "values": ";".join(sorted(values)),
+            "resolution_status": "unresolved",
+            "notes": f"conflicting values from {len(members)} rows",
+        })
+    return conflicts
+
+
+def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
+    """阶段 2 状态流转：approved+完整+无冲突→ready."""
+    # Build set of record_ids in unresolved conflicts
+    unresolved_ids: set[str] = set()
+    for c in conflicts:
+        if c["resolution_status"] == "unresolved":
+            for rid in c["record_ids"].split(";"):
+                unresolved_ids.add(rid.strip())
+
+    for r in rows:
+        rs = r["review_status"]
+        # rejected → skipped
+        if rs == "rejected":
+            r["ingest_status"] = "skipped"
+            continue
+        # needs_review → not_ready
+        if rs == "needs_review":
+            r["ingest_status"] = "not_ready"
+            continue
+        # draft → not_ready (no override applied)
+        if rs == "draft":
+            r["ingest_status"] = "not_ready"
+            continue
+
+        # approved: check if can go to ready
         issues = []
-        if not r["evidence_text"]:
+        if not r.get("evidence_text"):
             issues.append("missing_evidence")
-        if not r["key"]:
+        if not r.get("key"):
             issues.append("missing_key")
-        if not r["value"]:
+        if not r.get("value"):
             issues.append("missing_value")
-        if r["confidence"] == "low" and r["review_status"] in ("draft", "needs_review"):
-            issues.append("low_confidence_block")
-        if r["review_status"] not in ("approved",):
-            issues.append("not_approved")
+        if r["record_id"] in unresolved_ids:
+            issues.append("unresolved_conflict")
+
         if issues:
             r["ingest_status"] = "not_ready"
             existing = r["notes"]
             r["notes"] = (existing + "; " if existing else "") + "; ".join(issues)
+        else:
+            r["ingest_status"] = "ready"
 
 
-def write_ingest(path: Path, rows: list[dict]):
+def write_csv(path: Path, fieldnames: list[str], rows: list[dict]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=INGEST_FIELDS, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
 
@@ -146,20 +237,37 @@ def main():
 
     pkg = Path(sys.argv[1]).resolve()
     draft_path = pkg / "data" / "quick_lookup_draft.csv"
+    override_path = pkg / "data" / "review_overrides.csv"
     ingest_path = pkg / "data" / "ingest_ready.csv"
+    conflict_path = pkg / "data" / "conflicts.csv"
 
     draft_rows = read_draft(draft_path)
     ingest_rows = generate_ingest_rows(draft_rows)
-    detect_conflicts(ingest_rows)
-    validate_rows(ingest_rows)
-    write_ingest(ingest_path, ingest_rows)
 
+    # Apply review overrides if present
+    has_overrides = override_path.exists()
+    if has_overrides:
+        overrides = read_overrides(override_path)
+        apply_overrides(ingest_rows, overrides)
+
+    # Build conflicts
+    conflicts = build_conflicts(ingest_rows)
+
+    # Compute ingest status
+    compute_ingest_status(ingest_rows, conflicts)
+
+    # Write outputs
+    write_csv(ingest_path, INGEST_FIELDS, ingest_rows)
+    write_csv(conflict_path, CONFLICT_FIELDS, conflicts)
+
+    ready = sum(1 for r in ingest_rows if r["ingest_status"] == "ready")
     not_ready = sum(1 for r in ingest_rows if r["ingest_status"] == "not_ready")
     skipped = sum(1 for r in ingest_rows if r["ingest_status"] == "skipped")
-    print(f"入库准备完成: {ingest_path}")
-    print(f"  总行数: {len(ingest_rows)}")
-    print(f"  not_ready: {not_ready}")
-    print(f"  skipped: {skipped}")
+    print(f"入库准备完成: {pkg}/data/")
+    print(f"  ingest_ready.csv: {len(ingest_rows)} 行 (ready: {ready}, not_ready: {not_ready}, skipped: {skipped})")
+    print(f"  conflicts.csv: {len(conflicts)} 组冲突")
+    if has_overrides:
+        print(f"  review_overrides 已应用")
 
 
 if __name__ == "__main__":
