@@ -56,9 +56,9 @@
 | 阶段 0 | 固化编排契约和边界 | ModelPad API 和 pdf 模型 id 已确认 | 文档与 PLAN_MAP 同步 | 已完成 |
 | 阶段 1 | 封装 ModelPad 启停辅助逻辑 | 阶段 0 完成 | 可探测服务、启动服务、等待端口、按需停止 | 已完成 |
 | 阶段 2 | 接入 `pdf-seg` / `pdf-auto` / `pdf-rerun` | 阶段 1 完成 | 三个入口无服务时可按需启动，结束后停止本次启动的服务 | 已完成 |
-| 阶段 3 | 真实样本和失败路径验收 | 阶段 2 完成 | ModelPad 在线、API 不可用、启动失败、运行失败路径均可诊断 | 候选 |
+| 阶段 3 | 真实样本和失败路径验收 | 阶段 2 完成 | ModelPad 在线、API 不可用、启动失败、运行失败路径均可诊断 | 已完成 |
 
-## 阶段 0 证据
+## Step 0 证据
 
 - ModelPad 设计文档列出 `POST /api/models/:id/start`、`POST /api/models/:id/stop` 和 `GET /api/health`。
 - ModelPad PDF 模型优化计划记录 `pdf` 模型 id：`40621169-461C-4018-974E-9FAC92A542E7`。
@@ -147,6 +147,17 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
   - 无服务时：ModelPad start → 等待端口 → 解析 → ModelPad stop → 9000 释放 ✅
   - 有服务时：检测到已有服务 → 复用不启动 → 解析 → 不停止 → 9000 仍在 ✅
 - 三个脚本 `bash -n` 通过。
+
+## 阶段 3 完成证据（2026-07-04）
+
+- 静态验收：`bash -n scripts/pdf-seg scripts/pdf-auto scripts/pdf-rerun scripts/pdf-merge scripts/lib/modelpad-pdf-service` 通过。
+- 治理验收：`python3 scripts/check_plan_governance.py .` 通过；`git diff --check` 通过。
+- ModelPad API 健康检查：`GET http://127.0.0.1:9786/api/health` 返回 `ok: true`。
+- helper mock 验收：
+  - 无已存在 PDF 服务时，`ensure_pdf_api` 调用 `POST /api/models/40621169-461C-4018-974E-9FAC92A542E7/start`，随后 `modelpad_stop_pdf_if_started` 调用 `POST .../stop`。
+  - 已有 PDF 服务时，`ensure_pdf_api` 只复用端口，不调用 start；`modelpad_stop_pdf_if_started` 不调用 stop。
+  - ModelPad start 返回 `ok:false` 时，helper 非 0 失败并输出明确诊断。
+- GitNexus `detect_changes(scope=all)` 返回 `No changes detected`。
 
 ## 未决问题
 
