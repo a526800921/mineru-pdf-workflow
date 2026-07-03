@@ -94,3 +94,4 @@ scripts/pdf-extract-data pdf/春风\ 150AURA
 - [计划索引](docs/PLAN_MAP.md)
 - [自动化流水线计划](docs/plans/automated-pdf-pipeline.md)
 - [MCP 接入设计](mcp/README.md)
+- [Claude Code pdf2md skill 源文件](skills/pdf2md/SKILL.md)
