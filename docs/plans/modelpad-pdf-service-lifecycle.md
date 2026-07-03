@@ -50,7 +50,7 @@
 | 阶段 0 | 固化服务生命周期边界和现状证据 | ModelPad 托管服务约束明确 | 文档和 PLAN_MAP 同步 | 已完成 |
 | 阶段 1 | 移除脚本服务管理副作用 | 阶段 0 完成 | 脚本不启动/重启/关闭服务，不清理共享运行目录 | 已完成 |
 | 阶段 2 | 修复自动重跑失败兜底 | 阶段 1 完成 | 模拟 `mineru` 非 0 后仍生成诊断或 review | 已完成 |
-| 阶段 3 | 图片冲突检测和运行手册同步 | 阶段 2 完成 | 同名不同内容图片不静默错配，运行手册可复现 | 候选 |
+| 阶段 3 | 图片冲突检测和运行手册同步 | 阶段 2 完成 | 同名不同内容图片不静默错配，运行手册可复现 | 已完成 |
 
 ## 阶段 1：可实施设计
 
@@ -136,6 +136,95 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 - 模拟测试验证：mineru 成功（`rc=0`→成功路径）和 mineru 失败（`rc=1`→失败兜底）均不会因 `set -e` 退出。
 - `bash -n` 通过；其余脚本逻辑（二次验证、`review.md` 生成、JSON 输出）不受影响。
 
+### 阶段 3 完成证据（2026-07-03）
+
+- `scripts/pdf-merge` 内嵌 Python 增加 `hashlib` 导入和 `file_sha256(path)` 辅助函数。
+- 图片收集逻辑改为三段式：不存在→复制；存在且 SHA-256 相同→跳过（幂等）；存在且 SHA-256 不同→收集冲突。
+- 冲突图片输出源路径和目标路径到 stderr，`raise SystemExit` 非 0 退出。
+- 幂等跳过时输出 `跳过幂等图片: N 张（同名同内容）`。
+- fixture 验证：同名同内容（退出 0，1 复制 + 1 跳过）、同名不同内容（退出 1，输出冲突路径）。
+- `bash -n` 通过。
+
+## 阶段 3：可实施设计
+
+阶段 3 聚焦 `scripts/pdf-merge` 的图片收集确定性。当前实现按文件名去重，目标文件已存在就跳过；如果不同分段生成同名但内容不同的图片，合并 Markdown 可能引用错误图片。阶段 3 初始策略采用“同名不同内容直接失败并输出冲突清单”，避免静默错配。
+
+### 阶段 3 目标
+
+- `scripts/pdf-merge` 收集图片时计算源文件和目标文件内容哈希。
+- 同名且内容相同：视为幂等重复，不复制，不报错。
+- 同名但内容不同：终止合并流程，输出冲突图片路径和目标路径。
+- 不改变合并 Markdown 的默认输出路径、图片目录路径或 Markdown 内容拼接规则。
+- 更新运行手册或计划完成证据，说明图片同名冲突的失败语义。
+
+### 阶段 3 非目标
+
+- 不实现自动重命名图片。
+- 不重写 Markdown 图片引用。
+- 不改变 `pdf-seg`、`pdf-auto`、`pdf-rerun` 的服务生命周期逻辑。
+- 不处理远程图片 URL 或 Markdown 中未被复制的历史图片引用。
+
+### 阶段 3 现状证据
+
+| 文件 | 现状 | 阶段 3 处理 |
+|---|---|---|
+| `scripts/pdf-merge` | 行 100 起收集图片；当 `pkg_images / img.name` 已存在时直接跳过 | 增加 SHA-256 内容比较；相同跳过，不同失败 |
+| `docs/plans/pdf-output-package-layout.md` | 已记录 `pdf-merge` 图片同名冲突可能静默跳过的风险 | 阶段 3 完成后更新为已解决或链接完成证据 |
+| `docs/PLAN_MAP.md` | 当前阻塞项记录图片同名冲突风险 | 阶段 3 完成后同步状态 |
+
+### 阶段 3 实施步骤
+
+1. 对 `scripts/pdf-merge` 做 GitNexus 影响分析；如果图谱仅识别文件级 CLI，则记录文件级影响面。
+2. 修改 `scripts/pdf-merge` 内嵌 Python：
+   - 引入 `hashlib`。
+   - 新增 `file_sha256(path)`。
+   - 复制图片前判断 `dest.exists()`：
+     - 不存在：照常复制并计数。
+     - 存在且 hash 相同：跳过，作为幂等重复。
+     - 存在且 hash 不同：记录冲突，循环结束后 `raise SystemExit`，输出冲突源和目标。
+3. 增加最小 fixture 验证，不依赖 MinerU：
+   - 创建临时包目录，包含两个分段 Markdown 和两个同名同内容图片，验证 `pdf-merge` 成功。
+   - 创建两个同名不同内容图片，验证 `pdf-merge` 非 0 退出且输出冲突信息。
+4. 运行静态检查、治理检查和 GitNexus `detect_changes`。
+5. 更新阶段 3 完成证据、`PLAN_MAP` 当前阻塞项和相关风险记录。
+
+### 阶段 3 验证方式
+
+```bash
+bash -n scripts/pdf-merge
+
+tmp="$(mktemp -d)"
+mkdir -p "$tmp/pkg/segments/p0001-0001/images" "$tmp/pkg/segments/p0002-0002/images"
+printf '# A\n![x](images/a.png)\n' > "$tmp/pkg/segments/p0001-0001/a.md"
+printf '# B\n![x](images/a.png)\n' > "$tmp/pkg/segments/p0002-0002/b.md"
+printf 'same' > "$tmp/pkg/segments/p0001-0001/images/a.png"
+printf 'same' > "$tmp/pkg/segments/p0002-0002/images/a.png"
+scripts/pdf-merge "$tmp/pkg/segments"
+
+tmp="$(mktemp -d)"
+mkdir -p "$tmp/pkg/segments/p0001-0001/images" "$tmp/pkg/segments/p0002-0002/images"
+printf '# A\n![x](images/a.png)\n' > "$tmp/pkg/segments/p0001-0001/a.md"
+printf '# B\n![x](images/a.png)\n' > "$tmp/pkg/segments/p0002-0002/b.md"
+printf 'one' > "$tmp/pkg/segments/p0001-0001/images/a.png"
+printf 'two' > "$tmp/pkg/segments/p0002-0002/images/a.png"
+if scripts/pdf-merge "$tmp/pkg/segments"; then
+  echo "expected image conflict failure" >&2
+  exit 1
+fi
+
+python3 scripts/check_plan_governance.py .
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 3 完成条件
+
+- 同名同内容图片保持幂等，不重复复制、不报错。
+- 同名不同内容图片使 `pdf-merge` 非 0 退出，并输出冲突源文件和目标文件。
+- 合并 Markdown 逻辑和默认输出路径不变。
+- `bash -n scripts/pdf-merge` 通过。
+- 最小 fixture 覆盖同名同内容和同名不同内容两条路径。
+- 治理检查通过，`PLAN_MAP` 和相关风险记录同步。
+
 ## 验证方式
 
 ```bash
@@ -191,7 +280,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 | ModelPad 暴露的 PDF 服务端口是否固定为 `9000` 起始 | 阶段 1 保留现有 `MINERU_API_BASE_PORT` 起始端口扫描契约，不新增固定端口要求 | 否 | 已确认 |
 | 哪些 `output/` 目录属于服务共享运行目录 | 阶段 1 将项目根目录 `output/` 视为脚本不可清理的共享运行目录；脚本只清理自身 `mktemp` 文件和输出包内确定性临时产物 | 否 | 已确认 |
 | 无 API 服务时是否允许 MinerU 默认本地运行 | 不允许；阶段 1 完全依赖 ModelPad 托管服务，未探测到服务即明确失败 | 否 | 已确认 |
-| 图片同名不同内容时采用失败还是重命名 | 初始建议失败并输出冲突文件清单，避免静默错配 | 否 | 待确认 |
+| 图片同名不同内容时采用失败还是重命名 | 阶段 3 采用失败并输出冲突文件清单，避免静默错配；自动重命名留给后续需要时再设计 | 否 | 已确认 |
 
 ## 关联计划
 

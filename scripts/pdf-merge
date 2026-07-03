@@ -42,10 +42,16 @@ pkg_images_dir="$pkg_dir/images"
 mkdir -p "$pkg_images_dir"
 
 python - "$segments_dir" "$output" "$pkg_images_dir" <<'PY'
+import hashlib
 import re
 import shutil
 import sys
 from pathlib import Path
+
+def file_sha256(p: Path) -> str:
+    """计算文件内容 SHA-256。"""
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
 
 segments_dir = Path(sys.argv[1])
 output = Path(sys.argv[2])
@@ -99,6 +105,8 @@ for start, end, name, md_path in segments:
 
 # --- 收集图片到输出包 images/ ---
 image_count = 0
+skipped_same = 0
+conflicts = []
 pkg_images.mkdir(parents=True, exist_ok=True)
 for _, _, _, md_path in segments:
     # MinerU 图片在 md_path 同级的 images/ 目录
@@ -106,11 +114,30 @@ for _, _, _, md_path in segments:
     if not seg_images.is_dir():
         continue
     for img in seg_images.iterdir():
-        if img.is_file():
-            dest = pkg_images / img.name
-            if not dest.exists():
-                shutil.copy2(img, dest)
-                image_count += 1
+        if not img.is_file():
+            continue
+        dest = pkg_images / img.name
+        if not dest.exists():
+            shutil.copy2(img, dest)
+            image_count += 1
+        elif file_sha256(img) == file_sha256(dest):
+            skipped_same += 1
+        else:
+            conflicts.append((str(img), str(dest)))
+
+if conflicts:
+    print("错误：图片同名但内容不同，合并终止：", file=sys.stderr)
+    for src, dst in conflicts:
+        print(f"  源: {src}", file=sys.stderr)
+        print(f"  目标: {dst}", file=sys.stderr)
+        print(file=sys.stderr)
+    raise SystemExit(
+        f"检测到 {len(conflicts)} 个图片文件名冲突。"
+        f"请检查分段图片目录后重新合并。"
+    )
+
 if image_count:
     print(f"收集图片: {image_count} 张 -> {pkg_images}")
+if skipped_same:
+    print(f"跳过幂等图片: {skipped_same} 张（同名同内容）")
 PY
