@@ -6,6 +6,10 @@ if [[ -d "$HOME/Documents/models/.venv/bin" ]]; then
   export PATH="$HOME/Documents/models/.venv/bin:$PATH"
 fi
 
+# --- ModelPad PDF 服务编排 ---
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+source "${_this_file%/*}/lib/modelpad-pdf-service"
+
 # --- JSON mode infrastructure ---
 json_mode="${PDF_AUTO_JSON:-0}"
 
@@ -205,23 +209,7 @@ segments_dir="$(cd "$segments_dir" && pwd)"
 threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
 rerun_effort="${MINERU_RERUN_EFFORT:-high}"
 # 自动检测可用 API 端口
-api_base="${MINERU_API_BASE_PORT:-9000}"
-api_url=""
-for ((_p=0; _p<3; _p++)); do
-  _port=$((api_base + _p))
-  if lsof -i ":$_port" -sTCP:LISTEN >/dev/null 2>&1; then
-    api_url="http://127.0.0.1:$_port"
-    break
-  fi
-done
-
-if [[ -z "$api_url" ]]; then
-  log "错误：未检测到 MinerU API 服务。请先启动 ModelPad PDF 服务。"
-  if [[ "${PDF_AUTO_JSON:-0}" == "1" ]]; then
-    python3 -c 'import json,sys; json.dump({"status":"error","reason":"no_api","message":"未检测到 MinerU API 服务。请先启动 ModelPad PDF 服务。"}, sys.stdout)'
-  fi
-  exit 1
-fi
+ensure_pdf_api log
 
 log "pdf-auto: $pdf_path"
 log "分段目录: $segments_dir"
@@ -243,7 +231,7 @@ step_start 2 "验证分段覆盖率"
 
 # 临时文件保存 pdf-validate 的 JSON 输出
 validate_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$_rerun_names_file"' EXIT
+trap 'rm -f "$validate_tmp" "$_rerun_names_file"; modelpad_stop_pdf_if_started log' EXIT
 
 # JSON 模式：stdout=JSON, stderr=人可读
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
@@ -924,7 +912,7 @@ log
 step_start "$_step_total" "二次验证"
 
 validate2_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"' EXIT
+trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"; modelpad_stop_pdf_if_started log' EXIT
 
 PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
 

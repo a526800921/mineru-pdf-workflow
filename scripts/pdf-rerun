@@ -6,6 +6,10 @@ if [[ -d "$HOME/Documents/models/.venv/bin" ]]; then
   export PATH="$HOME/Documents/models/.venv/bin:$PATH"
 fi
 
+# --- ModelPad PDF 服务编排 ---
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+source "${_this_file%/*}/lib/modelpad-pdf-service"
+
 usage() {
   cat <<'EOF'
 用法:
@@ -68,20 +72,9 @@ export MINERU_API_MAX_CONCURRENT_REQUESTS="${MINERU_API_MAX_CONCURRENT_REQUESTS:
 export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-8}"
 
 # 自动检测 API 端口
-api_base="${MINERU_API_BASE_PORT:-9000}"
-api_url=""
-for ((_p=0; _p<3; _p++)); do
-  _port=$((api_base + _p))
-  if lsof -i ":$_port" -sTCP:LISTEN >/dev/null 2>&1; then
-    api_url="http://127.0.0.1:$_port"
-    break
-  fi
-done
+ensure_pdf_api echo
 
-if [[ -z "$api_url" ]]; then
-  echo "错误：未检测到 MinerU API 服务。请先启动 ModelPad PDF 服务。" >&2
-  exit 1
-fi
+trap 'modelpad_stop_pdf_if_started echo' EXIT
 
 echo "PDF: $pdf_path"
 echo "分段目录: $segments_dir"

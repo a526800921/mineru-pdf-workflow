@@ -19,6 +19,7 @@
 | [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 已完成 | 阶段 8：PDF 输出包目录结构 | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [阶段 8 完成证据](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 已完成 | 无/有 API 双路径验收通过，`_api_arg[@]` 修复 | automated-pdf-pipeline、coverage-validation-optimization | [验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [modelpad-pdf-service-lifecycle](plans/modelpad-pdf-service-lifecycle.md) | 已完成 | 全阶段（0-3） | ModelPad app、automated-pdf-pipeline、pdf-output-package-layout | [阶段 3 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-3-完成证据2026-07-03) |
+| [modelpad-pdf-service-orchestration](plans/modelpad-pdf-service-orchestration.md) | 实施中 | 阶段 1-2：封装启停 helper + 接入三个入口 | modelpad-pdf-service-lifecycle、ModelPad API、pdf 模型配置 | [阶段 1-2 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-1-2-完成证据2026-07-04) |
 | [structured-data-extraction](plans/structured-data-extraction.md) | 已完成 | 全阶段（0-3） | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 3 完成证据](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
 | [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 已完成 | 阶段 3：实际入库接口或外部系统边界 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案 | [阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
@@ -33,10 +34,11 @@
 2. `pdf-output-package-layout`
 3. `coverage-validation-optimization`
 4. `modelpad-pdf-service-lifecycle`
-5. `marker-feature-absorption`
-6. `structured-data-extraction`
-7. `data-ingestion-pipeline`
-8. `minimal-automation-runbook`
+5. `modelpad-pdf-service-orchestration`
+6. `marker-feature-absorption`
+7. `structured-data-extraction`
+8. `data-ingestion-pipeline`
+9. `minimal-automation-runbook`
 
 ## 依赖关系
 
@@ -51,6 +53,9 @@
 | modelpad-pdf-service-lifecycle | ModelPad app | PDF 服务生命周期由 `/Users/jafish/Documents/work/ModelPad` 托管 |
 | modelpad-pdf-service-lifecycle | automated-pdf-pipeline | 收敛 `pdf-seg`、`pdf-auto`、`pdf-rerun` 的服务管理副作用 |
 | modelpad-pdf-service-lifecycle | pdf-output-package-layout | 保持输出包目录结构不变，只调整服务和临时目录边界 |
+| modelpad-pdf-service-orchestration | modelpad-pdf-service-lifecycle | 在已收敛副作用的脚本上增加显式 ModelPad API 启停编排 |
+| modelpad-pdf-service-orchestration | ModelPad API | 调用 `POST /api/models/:id/start` 和 `POST /api/models/:id/stop` |
+| modelpad-pdf-service-orchestration | pdf 模型配置 | 默认模型 id 为 `40621169-461C-4018-974E-9FAC92A542E7` |
 | structured-data-extraction | pdf-output-package-layout | 结构化草案输出到 `<package>/data/`，复用稳定输出包结构 |
 | structured-data-extraction | coverage-validation-optimization | 复用 `content_list_v2.json`、页面类型和质量判定经验 |
 | structured-data-extraction | demo20 输出包 | 阶段 0/1 需要真实含图文和 content_list 的样本 |
@@ -83,6 +88,7 @@
 | `pdf-auto` 重跑失败路径可能被 `set -e` 提前中断 | 阶段 2 已修复：`mineru` 重跑调用改为 `if mineru ... ; then rc=0; else rc=$?; fi` 包装，`set -e` 下失败不再提前退出 | `pdf-auto` 自动重跑、MCP `run_pdf_auto` 失败诊断 | 否 | 已解决 |
 | `pdf-merge` 图片同名冲突可能被静默跳过 | 阶段 3 已修复：SHA-256 内容校验；同名同内容跳过，同名不同内容失败并输出冲突路径 | 输出包 `images/`、合并 Markdown 图片引用 | 否 | 已解决 |
 | PDF 服务生命周期将由 ModelPad app 托管 | 全阶段（0-3）已完成：脚本不再管理服务进程/shared 输出目录，`pdf-auto` 重跑失败安全兜底，`pdf-merge` 图片同名冲突检测 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 已解决 |
+| PDF 服务未启动时需要按需调用 ModelPad start/stop | 阶段 1-2 已完成：`scripts/lib/modelpad-pdf-service` helper 封装启停逻辑，三个入口已接入；无服务时自启、用完自停；已有服务时只复用不停止 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、ModelPad API | 否 | 已解决 |
 
 ## 完成证据
 
@@ -96,3 +102,4 @@
 | marker-feature-absorption | 阶段 0-4 | 详见 [marker 特性吸纳计划](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |
 | modelpad-pdf-service-lifecycle | 阶段 0-3 | 详见 [ModelPad 托管 PDF 服务阶段 3 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-3-完成证据2026-07-03) |
+| modelpad-pdf-service-orchestration | 阶段 0-2 | 详见 [ModelPad PDF 服务按需编排阶段 1-2 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-1-2-完成证据2026-07-04) |

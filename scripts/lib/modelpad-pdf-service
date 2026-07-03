@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# ModelPad PDF 服务按需编排 helper
+#
+# 用法（在 pdf-seg / pdf-auto / pdf-rerun 中 source）：
+#   source "${BASH_SOURCE[0]%/*}/lib/modelpad-pdf-service"
+#
+#   1. 调用 detect_pdf_api   → 扫描 MinerU API 端口，返回 api_url
+#   2. 调用 ensure_pdf_api   → 无服务时通过 ModelPad API 启动
+#   3. 在 EXIT trap 中调用   → modelpad_stop_pdf_if_started
+#
+# 环境变量：
+#   MODELPAD_API_BASE          默认 http://127.0.0.1:9786
+#   MODELPAD_PDF_MODEL_ID      默认 40621169-461C-4018-974E-9FAC92A542E7
+#   MODELPAD_PDF_START_TIMEOUT 默认 120 (秒)
+#   MINERU_API_BASE_PORT       默认 9000 (沿用现有)
+
+set -euo pipefail
+
+MODELPAD_API_BASE="${MODELPAD_API_BASE:-http://127.0.0.1:9786}"
+MODELPAD_PDF_MODEL_ID="${MODELPAD_PDF_MODEL_ID:-40621169-461C-4018-974E-9FAC92A542E7}"
+MODELPAD_PDF_START_TIMEOUT="${MODELPAD_PDF_START_TIMEOUT:-120}"
+
+# 内部状态：仅当本次脚本通过 ModelPad API 启动了服务时才为 1
+_MODELPAD_PDF_STARTED_BY_SCRIPT=0
+
+# detect_pdf_api — 扫描 MinerU API 端口
+# 输出：设置全局变量 api_url；找到则非空，未找到则为空
+detect_pdf_api() {
+  local api_base="${MINERU_API_BASE_PORT:-9000}"
+  api_url=""
+  for ((_p=0; _p<3; _p++)); do
+    local _port=$((api_base + _p))
+    if lsof -i ":$_port" -sTCP:LISTEN >/dev/null 2>&1; then
+      api_url="http://127.0.0.1:$_port"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# wait_pdf_api — 等待 MinerU API 端口可用
+# 参数：$1 = log 函数名（可选，默认 echo）
+wait_pdf_api() {
+  local log_fn="${1:-echo}"
+  local api_base="${MINERU_API_BASE_PORT:-9000}"
+  local deadline=$(($(date +%s) + MODELPAD_PDF_START_TIMEOUT))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    if lsof -i ":${api_base}" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  "$log_fn" "错误：等待 MinerU API 端口 ${api_base} 超时（${MODELPAD_PDF_START_TIMEOUT}s）" >&2
+  return 1
+}
+
+# modelpad_start_pdf — 通过 ModelPad API 启动 pdf 模型
+# 前置：detect_pdf_api 已返回非空（服务已在运行），或 detect_pdf_api 失败（需要启动）
+# 参数：$1 = log 函数名（可选，默认 echo）
+# 输出：成功返回 0，失败返回 1
+modelpad_start_pdf() {
+  local log_fn="${1:-echo}"
+  api_url="${api_url:-}"
+
+  # 如果服务已经可用，只复用，不启动
+  if detect_pdf_api; then
+    "$log_fn" "PDF 服务已在运行: ${api_url:-unknown}（复用，不启动）"
+    return 0
+  fi
+
+  "$log_fn" "正在通过 ModelPad 启动 PDF 服务..."
+  local start_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_PDF_MODEL_ID}/start"
+  local resp
+  resp="$(curl -s -X POST "$start_url" 2>&1)" || true
+
+  # 检查 ModelPad API 是否响应
+  if [[ -z "$resp" ]]; then
+    "$log_fn" "错误：ModelPad API 无响应 ($start_url)" >&2
+    return 1
+  fi
+
+  # 检查响应中 ok 字段
+  if ! echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ok") else 1)' 2>/dev/null; then
+    "$log_fn" "错误：ModelPad 启动 PDF 服务失败: $resp" >&2
+    return 1
+  fi
+
+  "$log_fn" "ModelPad 已接受启动请求，等待 MinerU API 就绪..."
+  if ! wait_pdf_api "$log_fn"; then
+    "$log_fn" "错误：PDF 服务启动超时" >&2
+    return 1
+  fi
+
+  detect_pdf_api
+  _MODELPAD_PDF_STARTED_BY_SCRIPT=1
+  "$log_fn" "PDF 服务已就绪: $api_url"
+  return 0
+}
+
+# modelpad_stop_pdf_if_started — 仅停止本次脚本启动的服务
+# 参数：$1 = log 函数名（可选，默认 echo）
+modelpad_stop_pdf_if_started() {
+  local log_fn="${1:-echo}"
+  if [[ "$_MODELPAD_PDF_STARTED_BY_SCRIPT" != "1" ]]; then
+    return 0
+  fi
+  "$log_fn" "正在通过 ModelPad 停止本次启动的 PDF 服务..."
+  local stop_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_PDF_MODEL_ID}/stop"
+  local resp
+  resp="$(curl -s -X POST "$stop_url" 2>&1)" || true
+  if [[ -n "$resp" ]] && echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ok") else 1)' 2>/dev/null; then
+    "$log_fn" "PDF 服务已停止"
+  else
+    "$log_fn" "警告：ModelPad 停止 PDF 服务可能失败: ${resp:-无响应}" >&2
+  fi
+}
+
+# ensure_pdf_api — 一键确保 PDF API 可用
+# 参数：$1 = log 函数名（可选，默认 echo）
+# 输出：成功设置 api_url 返回 0，失败返回 1
+ensure_pdf_api() {
+  local log_fn="${1:-echo}"
+  if ! modelpad_start_pdf "$log_fn"; then
+    "$log_fn" "错误：无法确保 PDF 服务可用。请检查 ModelPad app 是否已启动。" >&2
+    return 1
+  fi
+  return 0
+}
