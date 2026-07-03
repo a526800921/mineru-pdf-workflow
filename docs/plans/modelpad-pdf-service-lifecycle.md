@@ -49,7 +49,7 @@
 |---|---|---|---|---|
 | 阶段 0 | 固化服务生命周期边界和现状证据 | ModelPad 托管服务约束明确 | 文档和 PLAN_MAP 同步 | 已完成 |
 | 阶段 1 | 移除脚本服务管理副作用 | 阶段 0 完成 | 脚本不启动/重启/关闭服务，不清理共享运行目录 | 已完成 |
-| 阶段 2 | 修复自动重跑失败兜底 | 阶段 1 完成 | 模拟 `mineru` 非 0 后仍生成诊断或 review | 候选 |
+| 阶段 2 | 修复自动重跑失败兜底 | 阶段 1 完成 | 模拟 `mineru` 非 0 后仍生成诊断或 review | 已完成 |
 | 阶段 3 | 图片冲突检测和运行手册同步 | 阶段 2 完成 | 同名不同内容图片不静默错配，运行手册可复现 | 候选 |
 
 ## 阶段 1：可实施设计
@@ -128,6 +128,13 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 - 三个脚本均通过 `bash -n`；`MINERU_API_RESTART`、`mineru-api 已停`、`kill.*_api_pid`、`rm -rf.*output` 全部零残留。
 - 治理检查通过（`python3 scripts/check_plan_governance.py .`）；`git diff --check` 通过。
 - 净变更：3 文件，+22 / -72 行。
+
+### 阶段 2 完成证据（2026-07-03）
+
+- `scripts/pdf-auto` 行 882 的 `mineru` 重跑调用从裸调用改为 `if mineru ... ; then mineru_rc=0; else mineru_rc=$?; fi` 包装。
+- `if` 条件在 bash `set -e` 下不会触发提前退出；`else` 分支中 `$?` 正确捕获 mineru 退出码。
+- 模拟测试验证：mineru 成功（`rc=0`→成功路径）和 mineru 失败（`rc=1`→失败兜底）均不会因 `set -e` 退出。
+- `bash -n` 通过；其余脚本逻辑（二次验证、`review.md` 生成、JSON 输出）不受影响。
 
 ## 验证方式
 

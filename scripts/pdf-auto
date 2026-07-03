@@ -879,7 +879,7 @@ for s in report['segments']:
     # 标记此段是否成功
     segment_ok=true
 
-    mineru \
+    if mineru \
         -p "$pdf_path" \
         -o "$rerun_dir" \
         -b "$backend" \
@@ -888,8 +888,11 @@ for s in report['segments']:
         -l "$lang" \
         -s "$start_page" \
         -e "$end_page" \
-        --api-url "$api_url" >"$_subprocess_stdout" 2>&1
-    mineru_rc=$?
+        --api-url "$api_url" >"$_subprocess_stdout" 2>&1; then
+      mineru_rc=0
+    else
+      mineru_rc=$?
+    fi
     if [[ "$mineru_rc" -eq 0 ]]; then
       log "    ✓ 完成"
       find_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"

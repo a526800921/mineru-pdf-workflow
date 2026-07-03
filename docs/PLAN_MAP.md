@@ -80,9 +80,9 @@
 | 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复 Python 分支 + bash `needs_review` 处理分支，复验返回 `needs_review` 并生成 `<package>/review.md` | `pdf-auto` | 否 | 已解决 |
 | 真实样本 `pdf-seg` 环境依赖未满足 | 根因 `transformers 5.x` 不兼容；已创建隔离 venv（`~/Documents/models/.venv`, `transformers 4.57.6`），scripts 自动检测优先使用 | Phase 8 端到端验收 | 否 | 已解决 |
 | 未检测到 MinerU API 时 `pdf-seg` 因 `_api_arg[@]` 未绑定失败 | 已修复：`if/else` 分支替代空数组 `set -u` 展开，无 API 时自动启动临时服务 | Phase 8 端到端验收、无 API 服务启动路径 | 否 | 已解决 |
-| `pdf-auto` 重跑失败路径可能被 `set -e` 提前中断 | 后续修复为条件式捕获 `mineru` 退出码，并补模拟失败回归；当前先按风险记录，不改变已完成计划状态 | `pdf-auto` 自动重跑、MCP `run_pdf_auto` 失败诊断 | 否 | 已记录 |
+| `pdf-auto` 重跑失败路径可能被 `set -e` 提前中断 | 阶段 2 已修复：`mineru` 重跑调用改为 `if mineru ... ; then rc=0; else rc=$?; fi` 包装，`set -e` 下失败不再提前退出 | `pdf-auto` 自动重跑、MCP `run_pdf_auto` 失败诊断 | 否 | 已解决 |
 | `pdf-merge` 图片同名冲突可能被静默跳过 | 后续在图片收集阶段增加内容哈希校验、冲突重命名或失败提示；当前 demo5/demo20 幂等样本未暴露该问题 | 输出包 `images/`、合并 Markdown 图片引用 | 否 | 已记录 |
-| PDF 服务生命周期将由 ModelPad app 托管 | 阶段 1 已完成：脚本不再 kill mineru-api、不再清理项目 `output/`、无 API 时报错退出、所有 mineru 调用统一使用 `--api-url`。阶段 2（重跑失败兜底）和阶段 3（图片冲突）待下一轮 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 阶段 1 已完成，阶段 2/3 待实施 |
+| PDF 服务生命周期将由 ModelPad app 托管 | 阶段 1-2 已完成：脚本不再管理服务进程和共享输出目录，`pdf-auto` 重跑失败路径已用 `if` 包装免疫 `set -e`。阶段 3（图片冲突检测）待下一轮 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 阶段 1-2 已完成，阶段 3 待实施 |
 
 ## 完成证据
 
@@ -95,4 +95,4 @@
 | coverage-validation-optimization | 阶段 0-5 | 详见 [覆盖率验证口径优化计划](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | marker-feature-absorption | 阶段 0-4 | 详见 [marker 特性吸纳计划](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |
-| modelpad-pdf-service-lifecycle | 阶段 0-1 | 详见 [ModelPad 托管 PDF 服务阶段 1 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-1-完成证据2026-07-03) |
+| modelpad-pdf-service-lifecycle | 阶段 0-2 | 详见 [ModelPad 托管 PDF 服务阶段 2 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-2-完成证据2026-07-03) |
