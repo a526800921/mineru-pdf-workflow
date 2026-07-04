@@ -316,6 +316,50 @@ def parse_html_tables(md_text: str) -> list[list[list[str]]]:
     return tables
 
 
+ROWSPAN_PARENT_RE = re.compile(
+    r'<(?:td|th)([^>]*?)>(.*?)</(?:td|th)>', re.DOTALL
+)
+ROWSPAN_ATTR_RE = re.compile(r'rowspan\s*=\s*"(\d+)"')
+
+
+def build_html_parent_maps(md_text: str) -> list[dict[int, str]]:
+    """为每个 HTML <table> 构建 {data_row_index: parent_text} 映射。
+
+    从首列 <td rowspan="N"> 提取父级分组标签，返回与 parse_html_tables
+    同顺序的 parent map 列表。parent_map 的 key 是 data_row 的 0-based 索引
+    （即 table[1:] 中的位置），value 是父级文本。
+    """
+    parent_maps = []
+    table_pattern = re.compile(r'<table>(.*?)</table>', re.DOTALL)
+    for table_match in table_pattern.finditer(md_text):
+        table_html = table_match.group(0)
+        rows_html = re.findall(r'<tr>(.*?)</tr>', table_html, re.DOTALL)
+        parent_map: dict[int, str] = {}
+        pending: list[list] = []  # [[remaining, text], ...]
+        for html_row_idx, row_html in enumerate(rows_html):
+            # 注入待生效的 rowspan 父级
+            if pending:
+                # data_row 索引 = html_row_idx - 1（跳过表头行）
+                data_idx = html_row_idx - 1
+                if data_idx >= 0:
+                    parent_map[data_idx] = pending[0][1]
+                pending[0][0] -= 1
+                if pending[0][0] <= 1:
+                    pending.pop(0)
+            # 检查首列是否有 rowspan
+            first_cell = ROWSPAN_PARENT_RE.search(row_html)
+            if first_cell:
+                attrs = first_cell.group(1)
+                text = re.sub(r'<[^>]+>', '', first_cell.group(2)).strip()
+                rs_match = ROWSPAN_ATTR_RE.search(attrs)
+                if rs_match:
+                    rs = int(rs_match.group(1))
+                    if rs > 1:
+                        pending.append([rs, text])
+        parent_maps.append(parent_map)
+    return parent_maps
+
+
 def guess_key_col_idx(headers: list, rows: list) -> int:
     """猜测 key 列索引."""
     if not headers or len(headers) < 2:
@@ -345,8 +389,9 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                            page_map: dict, counters: dict) -> list:
     rows = []
     tables = parse_html_tables(md_text)
+    parent_maps = build_html_parent_maps(md_text)
 
-    for table in tables:
+    for table_idx, table in enumerate(tables):
         if len(table) < 2:
             continue
         headers = table[0]
@@ -356,13 +401,8 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
         counters["html_table"] += 1
         table_id = f"html_table:{counters['html_table']}"
 
-        # 尝试检测首列是否为父级分组列
-        first_col_values = [row[0].strip() if len(row) > 0 else "" for row in data_rows]
-        has_parent_col = (
-            len(headers) >= 2
-            and len(set(first_col_values)) < len(first_col_values)
-            and len(first_col_values) > 2
-        )
+        # rowspan 父级映射（来自 build_html_parent_maps）
+        rowspan_parents = parent_maps[table_idx] if table_idx < len(parent_maps) else {}
 
         for row_idx, row in enumerate(data_rows):
             if len(row) < max(key_idx, val_idx) + 1:
@@ -386,12 +426,18 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
             pg_start, pg_end = get_page_range(line_no, page_map)
             sec_path = build_section_path(line_no, sections)
 
-            # 保守 parent_key：首列明确是父级分组列时使用
-            parent_key = ""
-            if has_parent_col and key_idx > 0 and len(row) > 0:
-                first_cell = row[0].strip()
-                if first_cell and first_cell != key:
-                    parent_key = first_cell
+            # parent_key：优先 rowspan 父级，其次旧的首列重复检测
+            parent_key = rowspan_parents.get(row_idx, "")
+            if not parent_key:
+                first_col_values = [r[0].strip() if len(r) > 0 else "" for r in data_rows]
+                if (
+                    key_idx > 0 and len(row) > 0
+                    and len(set(first_col_values)) < len(first_col_values)
+                    and len(first_col_values) > 2
+                ):
+                    first_cell = row[0].strip()
+                    if first_cell and first_cell != key:
+                        parent_key = first_cell
 
             confidence = "medium" if key_idx == 0 else "low"
             status = "draft" if confidence == "medium" else "needs_review"
