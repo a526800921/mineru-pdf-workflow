@@ -829,7 +829,7 @@ for s in report['segments']:
 ")"
 
   backend="${MINERU_BACKEND:-hybrid-engine}"
-  method="${MINERU_METHOD:-auto}"
+  method="${MINERU_METHOD:-ocr}"
   lang="${MINERU_LANG:-ch}"
 
   export MINERU_DEVICE_MODE="${MINERU_DEVICE_MODE:-mps}"
