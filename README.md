@@ -14,7 +14,7 @@
 
 ### ModelPad PDF 服务
 
-`pdf-seg`、`pdf-auto`、`pdf-rerun` 依赖 ModelPad 托管的 PDF 服务。脚本会先探测 `MINERU_API_BASE_PORT`（默认 `9000`）起始的 3 个端口：
+`pdf-seg`、`pdf-auto`、`pdf-rerun` 依赖 ModelPad 托管的 PDF 服务。脚本通过 ModelPad API 查询 `pdf` 模型状态，只有 `status=running` 且返回数字 `port` 时才使用：
 
 - 如果 PDF 服务已在运行，脚本只复用服务，结束时不停止它。
 - 如果 PDF 服务未运行，脚本会通过 ModelPad API 启动 `pdf` 模型，等待 MinerU API 就绪，运行完成后只停止本次脚本启动的服务。
@@ -26,7 +26,6 @@
 MODELPAD_API_BASE=http://127.0.0.1:9786
 MODELPAD_PDF_MODEL_ID=40621169-461C-4018-974E-9FAC92A542E7
 MODELPAD_PDF_START_TIMEOUT=120
-MINERU_API_BASE_PORT=9000
 ```
 
 ```text
@@ -63,31 +62,29 @@ scripts/pdf-extract-data
 ## 推荐流程
 
 ```bash
-cd /Users/jafish/Documents/work/mineru-pdf-workflow
+# PDF 可放在任意路径，所有产物（segments/md/review/data）默认输出到 PDF 所在目录
+# 确保 ModelPad app 已启动；PDF 服务由脚本按需 start/stop
 
-# 1. 确保 ModelPad app 已启动；PDF 服务由脚本按需 start/stop
-# 2. 把 PDF 放入目标车型目录，分段解析
-scripts/pdf-seg pdf/春风\ 150AURA/春风\ 150AURA.pdf
-# 输出: pdf/春风 150AURA/segments/
+# 1. 分段解析
+scripts/pdf-seg /path/to/春风\ 150AURA.pdf
+# 输出: /path/to/segments/
 
-# 3. 验证覆盖率
+# 2. 验证覆盖率
 scripts/pdf-validate \
-  pdf/春风\ 150AURA/春风\ 150AURA.pdf \
-  pdf/春风\ 150AURA/segments
+  /path/to/春风\ 150AURA.pdf \
+  /path/to/segments
 
-# 4. 合并分段 Markdown
-scripts/pdf-merge pdf/春风\ 150AURA/segments
-# 输出: pdf/春风 150AURA/春风 150AURA.md
+# 3. 合并分段 Markdown
+scripts/pdf-merge /path/to/segments
+# 输出: /path/to/春风 150AURA.md
 
 # 或一步到位（自动验证→重跑→合并→人工兜底）
-scripts/pdf-auto pdf/春风\ 150AURA/春风\ 150AURA.pdf pdf/春风\ 150AURA/segments
+scripts/pdf-auto /path/to/春风\ 150AURA.pdf /path/to/segments
 
-# 5. 生成结构化数据草案
-scripts/pdf-extract-data pdf/春风\ 150AURA
-# 输出: pdf/春风 150AURA/data/
+# 4. 生成结构化数据草案
+scripts/pdf-extract-data /path/to
+# 输出: /path/to/data/
 ```
-
-如果验证发现可疑分段，先针对该分段重跑高精度，再重新验证和合并。
 
 ## 文档
 

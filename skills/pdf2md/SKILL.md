@@ -24,11 +24,11 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 
 ## 前置条件
 
-- 在项目根目录 `/Users/jafish/Documents/work/mineru-pdf-workflow` 执行命令。
-- PDF 应放在目标输出包目录内，例如 `pdf/demo20/demo20.pdf`。
-- ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9786`。
-- 第一版 MCP 工具为 `run_pdf_auto`，封装 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`。
+- PDF 可放在任意路径；所有产物（segments、md、review、manifest、images、data）默认输出到 **PDF 所在目录**，无需将 PDF 复制到本项目。
+- 脚本位于 `<project>/scripts/`，可通过绝对路径调用，也可将 `scripts/` 加入 `PATH`。
+- MCP 工具 `run_pdf_auto` 封装了 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`，可直接使用。
 - 如果 MCP 工具不可用，可直接运行同等 CLI 命令。
+- ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9786`。
 
 ## ModelPad PDF 服务
 
@@ -49,17 +49,20 @@ MODELPAD_PDF_START_TIMEOUT=120
 
 ## 输出包结构
 
-推荐结构：
+所有产物默认输出到 **PDF 所在目录**。例如 PDF 位于 `/path/to/doc.pdf`：
 
 ```text
-pdf/<package>/
-  <stem>.pdf
-  <stem>.md
-  review.md
-  manifest.json
-  segments/
-  images/
-  data/
+/path/to/
+  doc.pdf                  ← 原始 PDF
+  doc.md                   ← 合并后的 Markdown
+  review.md                ← 人工复核清单
+  manifest.json            ← 解析状态元数据
+  segments/                ← 分段解析产物
+    p0001-0008/
+    p0009-0016/
+    ...
+  images/                  ← 提取的图片（预留）
+  data/                    ← 结构化数据
     quick_lookup_draft.csv
     verification.csv
     fixtures_result.md
@@ -70,25 +73,33 @@ pdf/<package>/
     ingest_manifest.json
 ```
 
+也可以按主题组织到子目录，例如 `~/manuals/honda-cbr/pdf/xxx.pdf`——产物会出现在 `~/manuals/honda-cbr/pdf/` 下。
+
 默认规则：
 
-- `scripts/pdf-seg <package>/<stem>.pdf` 输出到 `<package>/segments/`。
-- `scripts/pdf-auto <pdf> <package>/segments` 默认合并到 `<package>/<stem>.md`，人工复核清单为 `<package>/review.md`。
-- `scripts/pdf-extract-data <package>` 写入 `<package>/data/`。
-- `scripts/pdf-prepare-ingest <package>` 写入 `ingest_ready.csv` 和 `conflicts.csv`。
-- `scripts/pdf-export-ingest <package>` 写入 `ingest_batch.jsonl` 和 `ingest_manifest.json`。
+- `scripts/pdf-seg /path/to/doc.pdf` 输出到 `/path/to/segments/`。
+- `scripts/pdf-auto /path/to/doc.pdf /path/to/segments` 默认合并到 `/path/to/doc.md`，人工复核清单为 `/path/to/review.md`。
+- `scripts/pdf-extract-data /path/to` 写入 `<pdf_dir>/data/`。
+- `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
+- `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 
 ## 核心流程
 
 ```bash
-cd /Users/jafish/Documents/work/mineru-pdf-workflow
+# PDF 可以在任意路径，产物跟着 PDF 走
+scripts/pdf-seg /path/to/doc.pdf
+scripts/pdf-auto /path/to/doc.pdf /path/to/segments
+scripts/pdf-extract-data /path/to
+scripts/pdf-prepare-ingest /path/to
+scripts/pdf-export-ingest /path/to
+```
 
-scripts/pdf-seg pdf/demo20/demo20.pdf
-scripts/pdf-auto pdf/demo20/demo20.pdf pdf/demo20/segments
-scripts/pdf-extract-data pdf/demo20
-scripts/pdf-prepare-ingest pdf/demo20
-scripts/pdf-export-ingest pdf/demo20
+如果 `scripts/` 不在 `PATH` 中，使用绝对路径：
+
+```bash
+<project>/scripts/pdf-seg /path/to/doc.pdf
+<project>/scripts/pdf-auto /path/to/doc.pdf /path/to/segments
 ```
 
 已有 `segments/` 时可以跳过 `pdf-seg`，直接调用 `run_pdf_auto` 或 `scripts/pdf-auto`。
@@ -110,19 +121,19 @@ scripts/pdf-export-ingest pdf/demo20
 
 必填：
 
-- `pdf_path`：PDF 绝对路径，必须位于输出包目录。
-- `segments_dir`：分段目录绝对路径，通常是 `<package>/segments`。
+- `pdf_path`：PDF 绝对路径。
+- `segments_dir`：分段目录绝对路径，通常是 `<pdf所在目录>/segments`。
 
 可选：
 
 - `threshold`：覆盖率阈值，默认 0.82。
 - `rerun_effort`：重跑精度，通常使用 `high`。
-- `merge_output`：自定义合并输出路径；默认 `<package>/<stem>.md`。
+- `merge_output`：自定义合并输出路径；默认 `<pdf所在目录>/<stem>.md`。
 
 CLI 回退：
 
 ```bash
-PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <package>/segments
+PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 ```
 
 ## 结果解读
@@ -135,8 +146,8 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <package>/segments
 
 常见产物：
 
-- `merged_markdown`：合并后的 `<package>/<stem>.md`。
-- `review_markdown`：人工复核清单 `<package>/review.md`。
+- `merged_markdown`：合并后的 `<pdf所在目录>/<stem>.md`。
+- `review_markdown`：人工复核清单 `<pdf所在目录>/review.md`。
 - `rerun_segments`：真正执行 high 重跑的段。目录页、图片稀疏页、表格页通常进入 review_only，不做无效 high 重跑。
 
 ## 结构化数据与入库准备
@@ -144,7 +155,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <package>/segments
 生成结构化草案：
 
 ```bash
-scripts/pdf-extract-data <package>
+scripts/pdf-extract-data <pdf所在目录>
 ```
 
 输出：
@@ -158,7 +169,7 @@ data/fixtures_result.md
 生成入库候选和冲突报告：
 
 ```bash
-scripts/pdf-prepare-ingest <package>
+scripts/pdf-prepare-ingest <pdf所在目录>
 ```
 
 输出：
@@ -178,19 +189,19 @@ record_id,review_status,notes
 保存为：
 
 ```text
-<package>/data/review_overrides.csv
+<pdf所在目录>/data/review_overrides.csv
 ```
 
 然后重新运行：
 
 ```bash
-scripts/pdf-prepare-ingest <package>
+scripts/pdf-prepare-ingest <pdf所在目录>
 ```
 
 导出可交付批次：
 
 ```bash
-scripts/pdf-export-ingest <package>
+scripts/pdf-export-ingest <pdf所在目录>
 ```
 
 输出：
