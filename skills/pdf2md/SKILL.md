@@ -161,10 +161,42 @@ scripts/pdf-extract-data <pdf所在目录>
 输出：
 
 ```text
-data/quick_lookup_draft.csv
+data/quick_lookup_draft.csv    ← 结构化草案，含来源上下文
 data/verification.csv
 data/fixtures_result.md
 ```
+
+`quick_lookup_draft.csv` 字段（加粗为 v2 新增上下文字段）：
+
+| 字段 | 说明 |
+|---|---|
+| `source_pdf` | 来源 PDF 文件名 |
+| `model` | 车型/文档标识 |
+| `section_path` | 章节路径 |
+| `key` | 抽取的属性名 |
+| `value` | 抽取的属性值 |
+| `unit` | 单位 |
+| `page_start` | 来源 PDF 起始页 |
+| `page_end` | 来源 PDF 结束页 |
+| `evidence_text` | 证据文本片段 |
+| `confidence` | 置信度（high/medium/low） |
+| `status` | 状态（draft/needs_review） |
+| `notes` | 备注（抽取规则标识） |
+| **`source_block_id`** | 来源块序号（paragraph:N / md_table:N / html_table:N） |
+| **`table_id`** | 所属表格 ID |
+| **`row_index`** | 表格内行序号 |
+| **`parent_key`** | 父级行/列标签 |
+| **`key_role`** | key 分类（business_key / local_label / marker / spec_value / state_label） |
+
+`key_role` 分类用于后续冲突判定：
+
+| key_role | 含义 | 示例 |
+|---|---|---|
+| `business_key` | 业务属性 | 排量、最大功率 |
+| `local_label` | 局部编号 | 2、3、10-16 |
+| `marker` | 符号/占位符 | ■、▲、-、/ |
+| `spec_value` | 规格值被误作 key | M8×30、M10×1.25 |
+| `state_label` | 界面状态/标签 | 主界面、电话、菜单音乐 |
 
 生成入库候选和冲突报告：
 

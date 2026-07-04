@@ -253,6 +253,18 @@ def main():
     # Build conflicts
     conflicts = build_conflicts(ingest_rows)
 
+    # Carry forward previously resolved conflicts
+    prev_conflicts: dict[str, str] = {}
+    if conflict_path.exists():
+        with open(conflict_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("resolution_status") == "resolved":
+                    prev_conflicts[row["conflict_id"]] = row.get("notes", "")
+    for c in conflicts:
+        if c["conflict_id"] in prev_conflicts:
+            c["resolution_status"] = "resolved"
+            c["notes"] = prev_conflicts[c["conflict_id"]]
+
     # Compute ingest status
     compute_ingest_status(ingest_rows, conflicts)
 

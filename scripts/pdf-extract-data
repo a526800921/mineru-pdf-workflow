@@ -5,8 +5,8 @@
   scripts/pdf-extract-data <package>
 
 示例:
+  scripts/pdf-extract-data /path/to/package
   scripts/pdf-extract-data pdf/demo20
-  scripts/pdf-extract-data pdf/demo5
 """
 
 import csv
@@ -31,6 +31,64 @@ COLON_BAD_PATTERNS = [
 UNIT_RE = re.compile(r"[\s]*[（(]?([a-zA-Z·/℃²³%]+(?:·[a-zA-Z]+)?)[\s）)]?$")
 DIGIT_RE = re.compile(r"\d+\.?\d*")
 
+# 阶段 1：页段注释和 key_role 分类
+PAGE_COMMENT_RE = re.compile(r"<!--\s*pages?\s*(\d+)\s*[-–—]\s*(\d+)\s*-->")
+MARKER_KEY_RE = re.compile(r"^[\s■▲●○◆◇★☆※\-—/\\|·]+$")
+SPEC_KEY_RE = re.compile(r"^M\d+\s*[×xX]")
+DIGIT_ONLY_RE = re.compile(r"^\d+$")
+DIGIT_UNIT_RE = re.compile(r"^\d+\s*[a-zA-Z·/℃²³%]+$")
+
+STATE_LABELS = {
+    "主界面", "电话", "菜单音乐", "音乐", "导航", "设置", "蓝牙",
+    "FM", "AM", "USB", "AUX", "收音机", "通话", "联系人", "消息",
+    "菜单", "返回", "确认", "取消", "音量", "静音", "语音",
+}
+
+
+def parse_page_comments(md_text: str) -> dict:
+    """返回 {line_no: (page_start, page_end)} 映射。"""
+    page_map = {}
+    for i, line in enumerate(md_text.split("\n"), 1):
+        m = PAGE_COMMENT_RE.search(line)
+        if m:
+            page_map[i] = (int(m.group(1)), int(m.group(2)))
+    return page_map
+
+
+def get_page_range(line_no: int, page_map: dict) -> tuple:
+    """根据行号查找所在页段，返回 (page_start_str, page_end_str)。"""
+    best = (0, 0)
+    for comment_line in sorted(page_map.keys()):
+        if comment_line <= line_no:
+            best = page_map[comment_line]
+        else:
+            break
+    if best == (0, 0):
+        return ("", "")
+    return (str(best[0]), str(best[1]))
+
+
+def classify_key_role(key: str) -> str:
+    """对 key 做最小分类，用于后续冲突判定。"""
+    if not key or not key.strip():
+        return "marker"
+    key = key.strip()
+    if MARKER_KEY_RE.match(key):
+        return "marker"
+    if key in STATE_LABELS:
+        return "state_label"
+    if SPEC_KEY_RE.match(key):
+        return "spec_value"
+    if DIGIT_ONLY_RE.match(key):
+        return "local_label"
+    if DIGIT_UNIT_RE.match(key):
+        return "local_label"
+    return "business_key"
+
+
+def new_block_counters() -> dict:
+    return {"paragraph": 0, "md_table": 0, "html_table": 0}
+
 
 def read_manifest(pkg: Path) -> dict:
     manifest_path = pkg / "manifest.json"
@@ -42,7 +100,7 @@ def read_manifest(pkg: Path) -> dict:
 
 def read_markdown(pkg: Path, manifest: dict) -> str:
     stem = manifest.get("model", pkg.name)
-    md_rel = manifest.get("files", {}).get("markdown", f"{stem}.md")
+    md_rel = manifest.get("files", {}).get("markdown") or f"{stem}.md"
     md_path = pkg / md_rel
     if not md_path.exists():
         sys.exit(f"错误：找不到 Markdown 文件: {md_path}")
@@ -106,7 +164,8 @@ def is_valid_colon_line(key: str, value: str) -> bool:
     return True
 
 
-def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str) -> list:
+def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str,
+                       page_map: dict, counters: dict) -> list:
     rows = []
     for line in md_text.split("\n"):
         line_orig = line.strip()
@@ -123,14 +182,21 @@ def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str
         has_digit = bool(DIGIT_RE.search(clean_val))
         line_no = md_text[: md_text.find(line_orig)].count("\n") + 1
         sec_path = build_section_path(line_no, sections)
+        pg_start, pg_end = get_page_range(line_no, page_map)
+        counters["paragraph"] += 1
         rows.append({
             "source_pdf": source_pdf, "model": model, "section_path": sec_path,
             "key": key, "value": clean_val, "unit": unit,
-            "page_start": "", "page_end": "",
+            "page_start": pg_start, "page_end": pg_end,
             "evidence_text": line_orig[:200],
             "confidence": "medium" if (has_digit and unit) else "low",
             "status": "needs_review",
             "notes": "colon_line" + ("+unit" if unit else ""),
+            "source_block_id": f"paragraph:{counters['paragraph']}",
+            "table_id": "",
+            "row_index": "",
+            "parent_key": "",
+            "key_role": classify_key_role(key),
         })
     return rows
 
@@ -215,7 +281,8 @@ def guess_value_col_idx(headers: list, rows: list) -> int:
     return max(1, len(headers) - 1)
 
 
-def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model: str) -> list:
+def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
+                           page_map: dict, counters: dict) -> list:
     rows = []
     tables = parse_html_tables(md_text)
 
@@ -226,8 +293,18 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
         data_rows = table[1:]
         key_idx = guess_key_col_idx(headers, data_rows)
         val_idx = guess_value_col_idx(headers, data_rows)
+        counters["html_table"] += 1
+        table_id = f"html_table:{counters['html_table']}"
 
-        for row in data_rows:
+        # 尝试检测首列是否为父级分组列
+        first_col_values = [row[0].strip() if len(row) > 0 else "" for row in data_rows]
+        has_parent_col = (
+            len(headers) >= 2
+            and len(set(first_col_values)) < len(first_col_values)
+            and len(first_col_values) > 2
+        )
+
+        for row_idx, row in enumerate(data_rows):
             if len(row) < max(key_idx, val_idx) + 1:
                 continue
             key = row[key_idx].strip()
@@ -246,23 +323,37 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                     line_no = i + 1
                     break
 
+            pg_start, pg_end = get_page_range(line_no, page_map)
             sec_path = build_section_path(line_no, sections)
+
+            # 保守 parent_key：首列明确是父级分组列时使用
+            parent_key = ""
+            if has_parent_col and key_idx > 0 and len(row) > 0:
+                first_cell = row[0].strip()
+                if first_cell and first_cell != key:
+                    parent_key = first_cell
 
             confidence = "medium" if key_idx == 0 else "low"
             status = "draft" if confidence == "medium" else "needs_review"
             rows.append({
                 "source_pdf": source_pdf, "model": model, "section_path": sec_path,
                 "key": key, "value": clean_val, "unit": unit,
-                "page_start": "", "page_end": "",
+                "page_start": pg_start, "page_end": pg_end,
                 "evidence_text": f"{key}: {value_str}"[:200],
                 "confidence": confidence, "status": status,
                 "notes": "html_table",
+                "source_block_id": f"html_table:{counters['html_table']}",
+                "table_id": table_id,
+                "row_index": str(row_idx + 1),
+                "parent_key": parent_key,
+                "key_role": classify_key_role(key),
             })
 
     return rows
 
 
-def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: str) -> list:
+def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
+                         page_map: dict, counters: dict) -> list:
     rows = []
     lines = md_text.split("\n")
     MD_TABLE_SEP = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
@@ -271,8 +362,11 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
         stripped = lines[i].strip()
         if stripped.startswith("|") and not MD_TABLE_SEP.match(stripped):
             if i + 1 < len(lines) and MD_TABLE_SEP.match(lines[i + 1].strip()):
+                counters["md_table"] += 1
+                table_id = f"md_table:{counters['md_table']}"
                 header_cells = [c.strip() for c in stripped.split("|")[1:-1]]
                 i += 2
+                row_idx = 0
                 while i < len(lines) and lines[i].strip().startswith("|"):
                     if MD_TABLE_SEP.match(lines[i].strip()):
                         i += 1
@@ -283,15 +377,26 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
                         value = " / ".join(cells[1:])
                         clean_val, unit = extract_unit(value)
                         line_no = i + 1
+                        pg_start, pg_end = get_page_range(line_no, page_map)
                         sec_path = build_section_path(line_no, sections)
+                        row_idx += 1
+                        # 保守 parent_key：首列与其他行首列不同且非数字时可能为父级
+                        parent_key = ""
+                        if len(cells) > 2 and cells[0] and not DIGIT_ONLY_RE.match(cells[0]):
+                            pass  # 无法可靠判断时留空
                         rows.append({
                             "source_pdf": source_pdf, "model": model,
                             "section_path": sec_path,
                             "key": key, "value": clean_val, "unit": unit,
-                            "page_start": "", "page_end": "",
+                            "page_start": pg_start, "page_end": pg_end,
                             "evidence_text": lines[i].strip()[:200],
                             "confidence": "medium", "status": "draft",
                             "notes": "md_table",
+                            "source_block_id": f"md_table:{counters['md_table']}",
+                            "table_id": table_id,
+                            "row_index": str(row_idx),
+                            "parent_key": parent_key,
+                            "key_role": classify_key_role(key),
                         })
                     i += 1
                 continue
@@ -474,14 +579,17 @@ def main():
     model = manifest.get("model", pkg.name)
 
     sections = parse_sections(md_text)
+    page_map = parse_page_comments(md_text)
+    counters = new_block_counters()
 
-    md_table_rows = extract_md_table_rows(md_text, sections, source_pdf, model)
-    html_table_rows = extract_html_table_rows(md_text, sections, source_pdf, model)
-    colon_rows = extract_colon_rows(md_text, sections, source_pdf, model)
+    md_table_rows = extract_md_table_rows(md_text, sections, source_pdf, model, page_map, counters)
+    html_table_rows = extract_html_table_rows(md_text, sections, source_pdf, model, page_map, counters)
+    colon_rows = extract_colon_rows(md_text, sections, source_pdf, model, page_map, counters)
     draft_rows = md_table_rows + html_table_rows + colon_rows
 
     fields = ["source_pdf", "model", "section_path", "key", "value", "unit",
-              "page_start", "page_end", "evidence_text", "confidence", "status", "notes"]
+              "page_start", "page_end", "evidence_text", "confidence", "status", "notes",
+              "source_block_id", "table_id", "row_index", "parent_key", "key_role"]
     draft_path = pkg / "data" / "quick_lookup_draft.csv"
     write_csv(draft_path, fields, draft_rows)
 

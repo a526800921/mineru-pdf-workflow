@@ -23,6 +23,7 @@
 | [modelpad-pdf-service-orchestration](plans/modelpad-pdf-service-orchestration.md) | 已完成 | 全阶段（0-3） | modelpad-pdf-service-lifecycle、ModelPad API、pdf 模型配置 | [阶段 3 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-3-完成证据2026-07-04) |
 | [structured-data-extraction](plans/structured-data-extraction.md) | 已完成 | 全阶段（0-3） | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 3 完成证据](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
 | [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 已完成 | 阶段 3：实际入库接口或外部系统边界 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案 | [阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
+| [conflict-context-ingestion-fix](plans/conflict-context-ingestion-fix.md) | 实施中 | 阶段 2：调整冲突判定与误报过滤 | structured-data-extraction、data-ingestion-pipeline、春风 150AURA 真实样本 | [阶段 1 完成证据](plans/conflict-context-ingestion-fix.md#阶段-1-完成证据2026-07-04) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
@@ -40,8 +41,9 @@
 6. `marker-feature-absorption`
 7. `structured-data-extraction`
 8. `data-ingestion-pipeline`
-9. `minimal-automation-runbook`
-10. `modelpad-dynamic-env-cleanup`
+9. `conflict-context-ingestion-fix`
+10. `minimal-automation-runbook`
+11. `modelpad-dynamic-env-cleanup`
 
 ## 依赖关系
 
@@ -65,6 +67,9 @@
 | data-ingestion-pipeline | structured-data-extraction | 以 `quick_lookup_draft.csv`、`verification.csv` 和 `fixtures_result.md` 为输入边界 |
 | data-ingestion-pipeline | pdf-output-package-layout | 入库候选仍位于 `<package>/data/`，复用输出包目录结构 |
 | data-ingestion-pipeline | demo20 数据草案 | 阶段 0/1 使用真实草案样本验证字段和状态边界 |
+| conflict-context-ingestion-fix | structured-data-extraction | 需要补齐 `quick_lookup_draft.csv` 的页段和表格上下文字段 |
+| conflict-context-ingestion-fix | data-ingestion-pipeline | 需要修正 `pdf-prepare-ingest` 的冲突 identity 和放行门禁 |
+| conflict-context-ingestion-fix | 春风 150AURA 真实样本 | 35 组冲突误报和 390 条 not_ready 记录是本计划的 Step 0 基线 |
 | marker-feature-absorption | pdf-output-package-layout | 段级汇总、进度输出和幂等验收基于输出包结构 |
 | marker-feature-absorption | automated-pdf-pipeline | 变更集中在 `pdf-auto`，属于流水线主脚本 |
 | minimal-automation-runbook | automated-pdf-pipeline | 执行手册描述流水线当前可用子集 |
@@ -94,6 +99,7 @@
 | `pdf-merge` 图片同名冲突可能被静默跳过 | 阶段 3 已修复：SHA-256 内容校验；同名同内容跳过，同名不同内容失败并输出冲突路径 | 输出包 `images/`、合并 Markdown 图片引用 | 否 | 已解决 |
 | PDF 服务生命周期将由 ModelPad app 托管 | 全阶段（0-3）已完成：脚本不再管理服务进程/shared 输出目录，`pdf-auto` 重跑失败安全兜底，`pdf-merge` 图片同名冲突检测 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 已解决 |
 | PDF 服务未启动时需要按需调用 ModelPad start/stop | 全阶段（0-3）已完成：helper 封装启停逻辑，三个入口已接入；无服务时自启、用完自停；已有服务时只复用不停止；失败路径可诊断 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、ModelPad API | 否 | 已解决 |
+| `pdf-prepare-ingest` 对真实手册表格产生冲突误报 | `conflict-context-ingestion-fix` 阶段 1 已完成：`quick_lookup_draft.csv` 已补齐页段/块序号/表格/父级/`key_role` 上下文字段；阶段 2 待实施：调整冲突 identity，符号和局部编号不作为全局冲突 key | `pdf-extract-data`、`pdf-prepare-ingest`、`conflicts.csv`、`ingest_ready.csv` | 是，阻塞真实样本入库准备放行 | 阶段 1 已完成 |
 
 ## 完成证据
 
@@ -103,6 +109,7 @@
 | pdf-output-package-layout | Phase 8 复验 | 详见 [PDF 输出包目录结构计划验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | structured-data-extraction | 阶段 0-3 | 详见 [输出包结构化数据抽取计划](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
 | data-ingestion-pipeline | 阶段 0-3 | 详见 [结构化数据入库准备管线阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
+| conflict-context-ingestion-fix | 阶段 0-1 | 详见 [结构化数据冲突误报与上下文主键修正阶段 1 完成证据](plans/conflict-context-ingestion-fix.md#阶段-1-完成证据2026-07-04) |
 | coverage-validation-optimization | 阶段 0-5 | 详见 [覆盖率验证口径优化计划](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | marker-feature-absorption | 阶段 0-4 | 详见 [marker 特性吸纳计划](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |
