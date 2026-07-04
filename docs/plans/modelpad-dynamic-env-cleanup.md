@@ -41,6 +41,7 @@ ModelPad start API 已支持在请求体中传入 `env` 覆盖。`StartModelRequ
 | 临时目录位置 | 默认 `${TMPDIR:-/tmp}/mineru-pdf-output-XXXXXXXX`，由 `mktemp -d` 创建 |
 | 清理触发点 | `modelpad_stop_pdf_if_started` 停止本次启动的服务后 |
 | 历史目录 | `/Users/jafish/Documents/models/mineru-api-output` 只做单独人工清理步骤 |
+| 端口来源 | 通过 ModelPad 模型状态接口获取 `pdf` 模型 `status` 和 `port`；不再扫描本地 9000/9001/9002 端口推断 PDF 服务 |
 | 文档同步 | 若实现改变已发布的 ModelPad PDF 服务使用说明，需同步 `skills/pdf2md/SKILL.md` 和 `/Users/jafish/.claude/skills/pdf2md/SKILL.md` |
 
 ## 关键语义
@@ -53,6 +54,7 @@ ModelPad start API 已支持在请求体中传入 `env` 覆盖。`StartModelRequ
 | stop API 失败 | 仍记录警告；实现阶段需明确是否清理本次临时目录，推荐先清理本次目录，因为 workflow 产物已下载到输出包 |
 | 常驻服务 | 使用 ModelPad `pdf.env` 持久化的 `MINERU_API_OUTPUT_ROOT`，继续依赖服务端 retention 策略 |
 | `pdf-seg` 到 `pdf-auto` 串联 | 每个入口只管理自己启动的服务和临时目录；若中间服务被停止，下一入口创建新的临时目录 |
+| 端口判定 | `detect_pdf_api` 以 ModelPad `pdf` 模型状态为准，只有 `status=running` 且 `port` 为数字时才返回 `http://127.0.0.1:<port>`，避免 fanyi 等其他模型占用相邻端口时被误判为 PDF 服务 |
 
 ## 拟议阶段
 
@@ -61,7 +63,7 @@ ModelPad start API 已支持在请求体中传入 `env` 覆盖。`StartModelRequ
 | 阶段 0 | 固化现状证据和可实施边界 | 已确认 ModelPad start API 支持 `env` 覆盖 | 文档与 PLAN_MAP 同步 | 已完成 |
 | 阶段 1 | 在 helper 中实现动态 env 与临时目录状态 | 阶段 0 完成，完成 GitNexus 影响分析 | `bash -n`、mock start body、已有服务不创建目录 | 已完成 |
 | 阶段 2 | 真实 workflow 路径验收 | 阶段 1 完成 | 无服务路径创建并清理临时目录；已有服务路径不清理 | 已完成 |
-| 阶段 3 | 历史堆积目录人工清理 | 阶段 2 真实验收通过，确认无常驻服务使用该目录 | 清理前后目录计数记录 | 待实施 |
+| 阶段 3 | 历史堆积目录人工清理 | 阶段 2 真实验收通过，确认无常驻服务使用该目录 | 清理前后目录计数记录 | 已完成 |
 | 阶段 4 | 治理和 skill 收尾同步 | 阶段 1-3 完成 | `check_plan_governance`、`detect_changes`、文档证据回填 | 待实施 |
 
 ## Step 0 证据
@@ -72,6 +74,7 @@ ModelPad start API 已支持在请求体中传入 `env` 覆盖。`StartModelRequ
 - `scripts/lib/modelpad-pdf-service` 当前 `modelpad_stop_pdf_if_started` 只负责停止本次脚本启动的服务，未记录或清理本次服务端输出目录。
 - `scripts/pdf-seg`、`scripts/pdf-auto`、`scripts/pdf-rerun` 均通过 `modelpad-pdf-service` helper 管理 PDF 服务，因此实现可集中在 helper。
 - 当前 `/Users/jafish/Documents/models/mineru-api-output` 下存在历史 UUID 子目录，属于已完成任务残留，需要在代码上线后另行清理。
+- 阶段 2 实现发现端口扫描会把非 PDF 模型（如 `fanyi` 在 9001）纳入探测范围；端口获取已改为通过 ModelPad 模型状态接口读取 `pdf` 模型 `port`，以 ModelPad 作为服务身份事实源。
 
 ## 阶段 1：可实施设计
 
@@ -146,6 +149,7 @@ ModelPad start API 已支持在请求体中传入 `env` 覆盖。`StartModelRequ
 - 第 74-86 行在启动新服务前创建 `${TMPDIR:-/tmp}/mineru-pdf-output-XXXXXXXX`，并以 `Content-Type: application/json` 传入 `MINERU_API_OUTPUT_ROOT`。
 - 第 89-109 行在 ModelPad API 无响应、start 失败、等待 MinerU API 超时三类失败路径中清理本次临时目录并清空状态变量。
 - 第 120-140 行只在 `_MODELPAD_PDF_STARTED_BY_SCRIPT=1` 时停止服务，并仅清理 `_MODELPAD_PDF_OUTPUT_DIR` 指向的本次目录；清理后清空变量，重复调用保持幂等。
+- `detect_pdf_api` 通过 ModelPad 模型状态接口获取 `pdf` 模型的 `status` 和 `port`，不再依赖本地端口扫描；`wait_pdf_api` 等待的是 ModelPad 报告 `pdf` 模型进入 `running` 状态。
 
 阶段 1 blast radius：
 
@@ -210,6 +214,26 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
   - `PDF_AUTO_JSON=1 scripts/pdf-auto` stdout 为有效 JSON（`{"status":"needs_review",...}`）。
   - 人类日志走 stderr，stdout 未被污染。
 
+### 阶段 2 复验记录（2026-07-04）
+
+复验结论：阶段 2 通过，可进入阶段 3 历史堆积目录人工清理门禁。
+
+静态和治理验收：
+
+- `bash -n scripts/lib/modelpad-pdf-service scripts/pdf-seg scripts/pdf-auto scripts/pdf-rerun` 通过。
+- `python3 scripts/check_plan_governance.py .` 通过。
+- `git diff --check` 通过。
+- `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 返回 `No changes detected`。
+
+真实路径复验：
+
+- 复用服务路径：验收前 `pdf` 在 `http://127.0.0.1:9000` 运行，`fanyi` 在 `http://127.0.0.1:9001` 运行；执行 `scripts/pdf-seg pdf/demo5/demo5.pdf` 后日志输出 `PDF 服务已在运行: http://127.0.0.1:9000（复用，不启动）`，未出现 `本次临时输出目录`、`正在通过 ModelPad 启动 PDF 服务` 或 `已清理临时输出目录`，执行后 `pdf` 仍为 `running`。
+- JSON 路径：执行 `PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments`，stdout 可被 `python3 -m json.tool` 解析，业务状态为 `needs_review`，stderr 承载人类日志，stdout 未被污染。
+- 无服务路径：先通过 ModelPad API 停止 `pdf`，确认 `pdf stopped` 且 `fanyi running`；执行 `scripts/pdf-seg pdf/demo5/demo5.pdf` 后日志输出 `本次临时输出目录: /var/folders/.../mineru-pdf-output-BzkqVV53`、`正在通过 ModelPad 启动 PDF 服务...`、`PDF 服务已就绪: http://127.0.0.1:9000`、`PDF 服务已停止`、`已清理临时输出目录: .../mineru-pdf-output-BzkqVV53`。
+- 端口身份判定：验收期间 `fanyi` 持续运行在 `9001`，`pdf` 停止时不会被相邻端口误判为可用 PDF 服务；`pdf` 启动后通过 ModelPad 返回的 `port=9000` 生成 `api_url`。
+- 临时目录清理：脚本退出后，在 `/tmp` 和 `$TMPDIR` 下未发现 `mineru-pdf-output-*` 残留。
+- 状态恢复：无服务路径验收结束后 `pdf` 为 `stopped`，随后已按验收前状态恢复为 `running`；`fanyi` 全程保持 `running`。
+
 
 ## 阶段 3：历史堆积目录人工清理
 
@@ -240,6 +264,15 @@ rm -rf /Users/jafish/Documents/models/mineru-api-output/*
 
 - 历史 UUID 子目录已清理，清理前后计数写回本计划。
 - 常驻服务下次启动时仍可按 `pdf.env` 中的持久化 `MINERU_API_OUTPUT_ROOT` 写入该目录。
+
+### 阶段 3 完成证据
+
+2026-07-04 阶段 3 完成：
+
+- **清理前**：子目录数 7、总大小 4.3M，PDF 服务已停止，无常驻服务使用该目录。
+- **清理命令**：`rm -rf /Users/jafish/Documents/models/mineru-api-output/*`（用户已确认）。
+- **清理后**：子目录数 0、总大小 0B。
+- `pdf.env` 持久化 `MINERU_API_OUTPUT_ROOT` 路径保留，常驻服务下次启动仍可按原路径写入。
 
 ## 阶段 4：治理和说明同步
 
