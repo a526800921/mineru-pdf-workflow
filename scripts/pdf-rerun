@@ -8,7 +8,8 @@ fi
 
 # --- ModelPad PDF 服务编排 ---
 _this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-source "${_this_file%/*}/lib/modelpad-pdf-service"
+_scripts_dir="${_this_file%/*}"
+source "$_scripts_dir/lib/modelpad-pdf-service"
 
 usage() {
   cat <<'EOF'
@@ -161,4 +162,4 @@ echo "重跑完成: $rerun_count 段"
 # 自动合并
 echo
 echo "=== 合并 ==="
-scripts/pdf-merge "$segments_dir"
+"$_scripts_dir/pdf-merge" "$segments_dir"

@@ -8,7 +8,8 @@ fi
 
 # --- ModelPad PDF 服务编排 ---
 _this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-source "${_this_file%/*}/lib/modelpad-pdf-service"
+_scripts_dir="${_this_file%/*}"
+source "$_scripts_dir/lib/modelpad-pdf-service"
 
 # --- JSON mode infrastructure ---
 json_mode="${PDF_AUTO_JSON:-0}"
@@ -234,7 +235,7 @@ validate_tmp="$(mktemp)"
 trap 'rm -f "$validate_tmp" "$_rerun_names_file"; modelpad_stop_pdf_if_started log' EXIT
 
 # JSON 模式：stdout=JSON, stderr=人可读
-PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
+PDF_VALIDATE_JSON=1 "$_scripts_dir/pdf-validate" "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
 
 # Python 解析 JSON，输出 "merge" 或 "rerun" 到 stdout，日志到 stderr
 action="$(python3 - "$threshold" "$validate_tmp" <<'PY'
@@ -463,7 +464,7 @@ if fixed_count:
 PY
 
   log "  → 输出: $merge_output"
-  PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
+  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
 
   # 检查是否有 review_only 段，生成人工复核清单
   review_count="$(python3 -c "
@@ -810,7 +811,7 @@ PY
   if [[ "$json_mode" == "1" ]]; then
     emit_json "needs_review" 2 "" "$review_output" "$validate_tmp"
   fi
-  update_manifest "needs_review" "" "review.md"
+  update_manifest "needs_review" "${pdf_stem}.md" "review.md"
   exit 2
 fi
 
@@ -914,7 +915,7 @@ step_start "$_step_total" "二次验证"
 validate2_tmp="$(mktemp)"
 trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"; modelpad_stop_pdf_if_started log' EXIT
 
-PDF_VALIDATE_JSON=1 scripts/pdf-validate "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
+PDF_VALIDATE_JSON=1 "$_scripts_dir/pdf-validate" "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
 
 # 判定是否全部通过，保存到 decision 变量供 Task 5 使用
 decision="$(python3 - "$threshold" "$validate2_tmp" <<'PY'
@@ -1056,7 +1057,7 @@ if fixed:
     print(f"TOC 修复: {fixed} 个段已从 PDF 重建", file=sys.stderr)
 PY
 
-  PDF_MERGE_OUTPUT="$merge_output" scripts/pdf-merge "$segments_dir" >"$_subprocess_stdout"
+  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
   log "合并完成: $merge_output"
 
 
@@ -1246,7 +1247,7 @@ PY
   if [[ "$json_mode" == "1" ]]; then
     emit_json "needs_review" 2 "" "$review_output" "$validate2_tmp"
   fi
-  update_manifest "needs_review" "" "review.md"
+  update_manifest "needs_review" "${pdf_stem}.md" "review.md"
   exit 2
 fi
 
