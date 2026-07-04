@@ -85,16 +85,26 @@
 
 ### 阶段 1 完成证据（2026-07-04）
 
-- `scripts/pdf-extract-data` 已添加 `parse_page_comments`、`get_page_range`、`classify_key_role` 辅助函数，从 `<!-- pages 65-72 -->` 注释提取页段范围。
-- `extract_colon_rows`、`extract_html_table_rows`、`extract_md_table_rows` 三个抽取函数均已接受 `page_map` 和 `counters` 参数，写入 `source_block_id`、`table_id`、`row_index`、`parent_key`、`key_role` 五个新字段。
-- 春风样本重新抽取后 `quick_lookup_draft.csv` 仍为 390 行。
-- `page_start/page_end` 从全部为空变为 390/390 有值（覆盖率 100%）。
-- `key_role` 分类验证通过：`business_key` 260、`marker` 54、`local_label` 52、`spec_value` 16、`state_label` 8。
+通过项：
+
+- `python3 -m py_compile scripts/pdf-extract-data` 通过。
+- `scripts/pdf-extract-data "pdf/春风 150AURA"` 通过，生成 `quick_lookup_draft.csv: 390 行`。
+- 春风样本新增字段存在：`source_block_id`、`table_id`、`row_index`、`parent_key`、`key_role`。
+- 春风样本 `page_start/page_end` 均为 390/390 有值。
+- 春风样本 `key_role` 分布：`business_key` 260、`marker` 54、`local_label` 52、`spec_value` 16、`state_label` 8。
 - `source_block_id` 分布：`html_table` 249、`paragraph` 141。
-- `read_markdown` 修复了 `markdown: null` 时的 TypeError（demo20/demo5 处于 segmented 状态无合并 markdown，非本次回归）。
-- 项目级 `pdf2md` skill 已更新 `quick_lookup_draft.csv` 字段说明和 `key_role` 枚举，已同步到用户级 skill。
-- 治理检查通过：`python3 scripts/check_plan_governance.py .`，`git diff --check` 无空白问题。
-- GitNexus 影响分析：三个目标函数均为脚本内部函数，无外部调用者，风险 LOW。
+- 项目级 `pdf2md` skill 与用户级 `/Users/jafish/.claude/skills/pdf2md/SKILL.md` 内容一致。
+- 治理检查通过：`python3 scripts/check_plan_governance.py .`。
+- 空白检查通过：`git diff --check`。
+- GitNexus 变化检测通过：`node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 返回 `No changes detected.`。
+
+回归修复（2026-07-04）：
+
+- `read_markdown` 无合并 Markdown 时返回 `None` 而非 `sys.exit`。
+- `main()` 在 `md_text is None` 时走空草案路径：生成仅含表头的 `quick_lookup_draft.csv`（0 行），在 `verification.csv` 中记录 `error` 级缺失 markdown 信息。
+- demo20/demo5 回归通过：均生成空草案 + verification error 记录，不再崩溃退出。
+
+### 阶段 1 完成证据（2026-07-04）
 
 ## 阶段 0 完成条件
 
