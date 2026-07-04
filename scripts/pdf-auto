@@ -643,6 +643,88 @@ if [[ "$action" == "needs_review" ]]; then
   review_output="$(dirname "$segments_dir")/review.md"
 
 
+  _step_total=$((_step_total + 1))
+  step_start "$_step_total" "TOC 段修复"
+
+  # 对 review_only 的 TOC 段执行 PDF 文本层重建
+  python3 - "$pdf_path" "$segments_dir" "$validate_tmp" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+try:
+    import fitz
+except Exception:
+    print("TOC 修复跳过：PyMuPDF 不可用", file=sys.stderr)
+    sys.exit(0)
+
+pdf_path = Path(sys.argv[1])
+segments_dir = Path(sys.argv[2])
+
+with open(sys.argv[3]) as f:
+    report = json.load(f)
+
+toc_segs = [
+    s for s in report["segments"]
+    if s.get("page_type_summary", {}).get("toc", 0) > 0
+]
+if not toc_segs:
+    sys.exit(0)
+
+doc = fitz.open(pdf_path)
+TITLE_DOTS = re.compile(r'^(\S.+?)\s*[.]{3,}\s*$')
+DOTS_NUM = re.compile(r'^\s*[.]{3,}\s*(\d+)\s*$')
+fixed = 0
+
+for seg in toc_segs:
+    seg_dir = segments_dir / seg["name"]
+    md_files = sorted(seg_dir.rglob("*.md"))
+    if not md_files:
+        continue
+    md_path = md_files[0]
+
+    pdf_lines = []
+    for p in range(seg["start_page"] - 1, min(seg["end_page"], doc.page_count)):
+        pdf_lines.append(doc[p].get_text())
+    pdf_text = "\n".join(pdf_lines)
+
+    lines = [l.strip() for l in pdf_text.strip().split('\n') if l.strip()]
+    entries = []
+    prev_key = None
+    for i in range(len(lines) - 1):
+        title_m = TITLE_DOTS.match(lines[i])
+        num_m = DOTS_NUM.match(lines[i + 1])
+        if title_m and num_m:
+            title = title_m.group(1).strip()
+            page_ref = num_m.group(1)
+            if len(title) >= 2 and not title.isdigit():
+                key = (title, page_ref)
+                if key == prev_key:
+                    continue
+                entries.append((title, int(page_ref)))
+                prev_key = key
+
+    if not entries:
+        continue
+
+    new_md = ["## 目录\n"]
+    cf = None
+    for title, page_ref in entries:
+        first = title[0]
+        if cf and first != cf:
+            new_md.append("")
+        new_md.append(f"- {title} {page_ref}")
+        cf = first
+
+    md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
+    print(f"  {seg['name']}: {len(entries)} 条目，已从 PDF 重建", file=sys.stderr)
+    fixed += 1
+
+doc.close()
+if fixed:
+    print(f"TOC 修复: {fixed} 个段已从 PDF 重建", file=sys.stderr)
+PY
+
+  step_done
   step_start "$_step_total" "生成人工兜底清单"
 
   python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate_tmp" "" <<'PY'
@@ -1073,6 +1155,89 @@ fi
 if echo "$decision" | grep -q "^has_issues$"; then
   review_output="$(dirname "$segments_dir")/review.md"
 
+  _step_total=$((_step_total + 1))
+  step_start "$_step_total" "TOC 段修复"
+
+  # 对 review_only 的 TOC 段执行 PDF 文本层重建
+  python3 - "$pdf_path" "$segments_dir" "$validate2_tmp" <<'PY'
+import json, re, sys
+from collections import OrderedDict
+from pathlib import Path
+
+try:
+    import fitz
+except Exception:
+    print("TOC 修复跳过：PyMuPDF 不可用", file=sys.stderr)
+    sys.exit(0)
+
+pdf_path = Path(sys.argv[1])
+segments_dir = Path(sys.argv[2])
+
+with open(sys.argv[3]) as f:
+    report = json.load(f)
+
+toc_segs = [
+    s for s in report["segments"]
+    if s.get("page_type_summary", {}).get("toc", 0) > 0
+]
+if not toc_segs:
+    sys.exit(0)
+
+doc = fitz.open(pdf_path)
+TITLE_DOTS = re.compile(r'^(\S.+?)\s*[.]{3,}\s*$')
+DOTS_NUM = re.compile(r'^\s*[.]{3,}\s*(\d+)\s*$')
+fixed = 0
+
+for seg in toc_segs:
+    seg_dir = segments_dir / seg["name"]
+    md_files = sorted(seg_dir.rglob("*.md"))
+    if not md_files:
+        continue
+    md_path = md_files[0]
+
+    pdf_lines = []
+    for p in range(seg["start_page"] - 1, min(seg["end_page"], doc.page_count)):
+        pdf_lines.append(doc[p].get_text())
+    pdf_text = "\n".join(pdf_lines)
+
+    lines = [l.strip() for l in pdf_text.strip().split('\n') if l.strip()]
+    entries = []
+    prev_key = None
+    for i in range(len(lines) - 1):
+        title_m = TITLE_DOTS.match(lines[i])
+        num_m = DOTS_NUM.match(lines[i + 1])
+        if title_m and num_m:
+            title = title_m.group(1).strip()
+            page_ref = num_m.group(1)
+            if len(title) >= 2 and not title.isdigit():
+                key = (title, page_ref)
+                if key == prev_key:
+                    continue
+                entries.append((title, int(page_ref)))
+                prev_key = key
+
+    if not entries:
+        continue
+
+    new_md = ["## 目录\n"]
+    cf = None
+    for title, page_ref in entries:
+        first = title[0]
+        if cf and first != cf:
+            new_md.append("")
+        new_md.append(f"- {title} {page_ref}")
+        cf = first
+
+    md_path.write_text("\n".join(new_md) + "\n", encoding="utf-8")
+    print(f"  {seg['name']}: {len(entries)} 条目，已从 PDF 重建", file=sys.stderr)
+    fixed += 1
+
+doc.close()
+if fixed:
+    print(f"TOC 修复: {fixed} 个段已从 PDF 重建", file=sys.stderr)
+PY
+
+  step_done
   step_start "$_step_total" "生成人工兜底清单"
 
   python3 - "$threshold" "$pdf_path" "$segments_dir" "$review_output" "$validate2_tmp" "$rerun_failures" <<'PY'
