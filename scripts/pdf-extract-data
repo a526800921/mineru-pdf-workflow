@@ -90,6 +90,65 @@ def new_block_counters() -> dict:
     return {"paragraph": 0, "md_table": 0, "html_table": 0}
 
 
+def refine_page_numbers(draft_rows: list[dict], pdf_path: Path) -> None:
+    """用 PyMuPDF 逐页搜索，把页段级 page_start/page_end 精确定位到单页。
+
+    对于每个 draft 行，在 PDF 文本层中搜索 key，找到匹配的精确页码。
+    如果 key 跨多页出现，用 evidence_text 进一步消歧。
+    """
+    try:
+        import fitz
+    except Exception:
+        return  # PyMuPDF 不可用时保持页段级定位
+
+    if not pdf_path.exists():
+        return
+
+    doc = fitz.open(pdf_path)
+    # 构建每页文本索引
+    page_texts: dict[int, str] = {}
+    for i in range(doc.page_count):
+        page_texts[i + 1] = doc[i].get_text()
+    doc.close()
+
+    # 对每个 draft 行精确定位
+    for row in draft_rows:
+        key = row.get("key", "")
+        if not key:
+            continue
+
+        # 找到包含 key 的候选页
+        candidates = [
+            p for p, text in page_texts.items()
+            if key in text
+        ]
+
+        if not candidates:
+            # 无法在 PDF 中找到 key，保留页段级定位
+            continue
+
+        if len(candidates) == 1:
+            row["page_start"] = str(candidates[0])
+            row["page_end"] = str(candidates[0])
+            continue
+
+        # 多页候选：用 evidence_text 消歧
+        evidence = row.get("evidence_text", "")
+        best_page = None
+        best_score = 0
+        for p in candidates:
+            # 计算 evidence_text 中词语在页面中的命中数
+            words = set(evidence.split()) if evidence else {key}
+            score = sum(1 for w in words if w in page_texts[p])
+            if score > best_score:
+                best_score = score
+                best_page = p
+
+        if best_page:
+            row["page_start"] = str(best_page)
+            row["page_end"] = str(best_page)
+
+
 def read_manifest(pkg: Path) -> dict:
     manifest_path = pkg / "manifest.json"
     if not manifest_path.exists():
@@ -621,6 +680,10 @@ def main():
     html_table_rows = extract_html_table_rows(md_text, sections, source_pdf, model, page_map, counters)
     colon_rows = extract_colon_rows(md_text, sections, source_pdf, model, page_map, counters)
     draft_rows = md_table_rows + html_table_rows + colon_rows
+
+    # 用 PDF 文本层精确定位每行的页码（替代页段级 page_start/page_end）
+    pdf_path = pkg / manifest.get("files", {}).get("pdf", f"{model}.pdf")
+    refine_page_numbers(draft_rows, pdf_path)
 
     draft_path = pkg / "data" / "quick_lookup_draft.csv"
     write_csv(draft_path, fields, draft_rows)
