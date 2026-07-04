@@ -22,6 +22,8 @@ MODELPAD_PDF_START_TIMEOUT="${MODELPAD_PDF_START_TIMEOUT:-120}"
 
 # 内部状态：仅当本次脚本通过 ModelPad API 启动了服务时才为 1
 _MODELPAD_PDF_STARTED_BY_SCRIPT=0
+# 内部状态：本次启动创建的临时输出目录（仅 helper 创建时非空）
+_MODELPAD_PDF_OUTPUT_DIR=""
 
 # detect_pdf_api — 扫描 MinerU API 端口
 # 输出：设置全局变量 api_url；找到则非空，未找到则为空
@@ -68,26 +70,42 @@ modelpad_start_pdf() {
     return 0
   fi
 
+  # 为本次运行创建临时输出目录
+  if ! _MODELPAD_PDF_OUTPUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mineru-pdf-output-XXXXXXXX" 2>&1)"; then
+    "$log_fn" "错误：无法创建临时输出目录: $_MODELPAD_PDF_OUTPUT_DIR" >&2
+    _MODELPAD_PDF_OUTPUT_DIR=""
+    return 1
+  fi
+  "$log_fn" "本次临时输出目录: $_MODELPAD_PDF_OUTPUT_DIR"
+
   "$log_fn" "正在通过 ModelPad 启动 PDF 服务..."
   local start_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_PDF_MODEL_ID}/start"
   local resp
-  resp="$(curl -s -X POST "$start_url" 2>&1)" || true
+  resp="$(curl -s -X POST "$start_url" \
+    -H "Content-Type: application/json" \
+    -d "{\"env\":{\"MINERU_API_OUTPUT_ROOT\":\"$_MODELPAD_PDF_OUTPUT_DIR\"}}" 2>&1)" || true
 
   # 检查 ModelPad API 是否响应
   if [[ -z "$resp" ]]; then
     "$log_fn" "错误：ModelPad API 无响应 ($start_url)" >&2
+    rm -rf "$_MODELPAD_PDF_OUTPUT_DIR"
+    _MODELPAD_PDF_OUTPUT_DIR=""
     return 1
   fi
 
   # 检查响应中 ok 字段
   if ! echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ok") else 1)' 2>/dev/null; then
     "$log_fn" "错误：ModelPad 启动 PDF 服务失败: $resp" >&2
+    rm -rf "$_MODELPAD_PDF_OUTPUT_DIR"
+    _MODELPAD_PDF_OUTPUT_DIR=""
     return 1
   fi
 
   "$log_fn" "ModelPad 已接受启动请求，等待 MinerU API 就绪..."
   if ! wait_pdf_api "$log_fn"; then
     "$log_fn" "错误：PDF 服务启动超时" >&2
+    rm -rf "$_MODELPAD_PDF_OUTPUT_DIR"
+    _MODELPAD_PDF_OUTPUT_DIR=""
     return 1
   fi
 
@@ -112,6 +130,13 @@ modelpad_stop_pdf_if_started() {
     "$log_fn" "PDF 服务已停止"
   else
     "$log_fn" "警告：ModelPad 停止 PDF 服务可能失败: ${resp:-无响应}" >&2
+  fi
+
+  # 清理本次临时输出目录（幂等：仅清理 helper 自己创建的目录）
+  if [[ -n "$_MODELPAD_PDF_OUTPUT_DIR" ]] && [[ -d "$_MODELPAD_PDF_OUTPUT_DIR" ]]; then
+    rm -rf "$_MODELPAD_PDF_OUTPUT_DIR"
+    "$log_fn" "已清理临时输出目录: $_MODELPAD_PDF_OUTPUT_DIR"
+    _MODELPAD_PDF_OUTPUT_DIR=""
   fi
 }
 

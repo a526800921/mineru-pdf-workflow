@@ -26,6 +26,7 @@
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
+| [modelpad-dynamic-env-cleanup](plans/modelpad-dynamic-env-cleanup.md) | 实施中 | 阶段 1：已完成 / 阶段 2：待验收 | modelpad-pdf-service-orchestration、ModelPad API | [阶段 1 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-1-完成证据) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -40,6 +41,7 @@
 7. `structured-data-extraction`
 8. `data-ingestion-pipeline`
 9. `minimal-automation-runbook`
+10. `modelpad-dynamic-env-cleanup`
 
 ## 依赖关系
 
@@ -66,6 +68,8 @@
 | marker-feature-absorption | pdf-output-package-layout | 段级汇总、进度输出和幂等验收基于输出包结构 |
 | marker-feature-absorption | automated-pdf-pipeline | 变更集中在 `pdf-auto`，属于流水线主脚本 |
 | minimal-automation-runbook | automated-pdf-pipeline | 执行手册描述流水线当前可用子集 |
+| modelpad-dynamic-env-cleanup | modelpad-pdf-service-orchestration | 在已有启停编排上增加动态 env 传递和临时输出目录自动清理 |
+| modelpad-dynamic-env-cleanup | ModelPad API | start 请求体传入 `env` 覆盖，stop 后清理临时目录 |
 
 ## 替代、合并和废弃
 
