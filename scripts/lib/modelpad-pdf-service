@@ -12,7 +12,6 @@
 #   MODELPAD_API_BASE          默认 http://127.0.0.1:9786
 #   MODELPAD_PDF_MODEL_ID      默认 40621169-461C-4018-974E-9FAC92A542E7
 #   MODELPAD_PDF_START_TIMEOUT 默认 120 (秒)
-#   MINERU_API_BASE_PORT       默认 9000 (沿用现有)
 
 set -euo pipefail
 
@@ -25,34 +24,39 @@ _MODELPAD_PDF_STARTED_BY_SCRIPT=0
 # 内部状态：本次启动创建的临时输出目录（仅 helper 创建时非空）
 _MODELPAD_PDF_OUTPUT_DIR=""
 
-# detect_pdf_api — 扫描 MinerU API 端口
-# 输出：设置全局变量 api_url；找到则非空，未找到则为空
+# detect_pdf_api — 通过 ModelPad API 获取 pdf 模型运行端口
+# 输出：设置全局变量 api_url；服务运行中则非空，否则为空
 detect_pdf_api() {
-  local api_base="${MINERU_API_BASE_PORT:-9000}"
   api_url=""
-  for ((_p=0; _p<3; _p++)); do
-    local _port=$((api_base + _p))
-    if lsof -i ":$_port" -sTCP:LISTEN >/dev/null 2>&1; then
-      api_url="http://127.0.0.1:$_port"
-      return 0
-    fi
-  done
+  local models_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_PDF_MODEL_ID}"
+  local resp
+  resp="$(curl -s "$models_url" 2>&1)" || true
+  if [[ -z "$resp" ]]; then
+    return 1
+  fi
+  # 解析 model_status 和 port；仅 running 状态才认为可用
+  local model_status port
+  model_status="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("model",{}).get("status",""))' 2>/dev/null)" || true
+  port="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("model",{}).get("port",""))' 2>/dev/null)" || true
+  if [[ "$model_status" == "running" ]] && [[ -n "$port" ]] && [[ "$port" =~ ^[0-9]+$ ]]; then
+    api_url="http://127.0.0.1:$port"
+    return 0
+  fi
   return 1
 }
 
-# wait_pdf_api — 等待 MinerU API 端口可用
+# wait_pdf_api — 等待 ModelPad 报告 pdf 模型进入 running 状态
 # 参数：$1 = log 函数名（可选，默认 echo）
 wait_pdf_api() {
   local log_fn="${1:-echo}"
-  local api_base="${MINERU_API_BASE_PORT:-9000}"
   local deadline=$(($(date +%s) + MODELPAD_PDF_START_TIMEOUT))
   while [[ $(date +%s) -lt $deadline ]]; do
-    if lsof -i ":${api_base}" -sTCP:LISTEN >/dev/null 2>&1; then
+    if detect_pdf_api; then
       return 0
     fi
     sleep 1
   done
-  "$log_fn" "错误：等待 MinerU API 端口 ${api_base} 超时（${MODELPAD_PDF_START_TIMEOUT}s）" >&2
+  "$log_fn" "错误：等待 PDF 服务就绪超时（${MODELPAD_PDF_START_TIMEOUT}s）" >&2
   return 1
 }
 

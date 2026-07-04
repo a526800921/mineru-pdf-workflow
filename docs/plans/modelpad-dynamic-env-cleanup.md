@@ -60,7 +60,7 @@ ModelPad start API 已支持在请求体中传入 `env` 覆盖。`StartModelRequ
 |---|---|---|---|---|
 | 阶段 0 | 固化现状证据和可实施边界 | 已确认 ModelPad start API 支持 `env` 覆盖 | 文档与 PLAN_MAP 同步 | 已完成 |
 | 阶段 1 | 在 helper 中实现动态 env 与临时目录状态 | 阶段 0 完成，完成 GitNexus 影响分析 | `bash -n`、mock start body、已有服务不创建目录 | 已完成 |
-| 阶段 2 | 真实 workflow 路径验收 | 阶段 1 完成 | 无服务路径创建并清理临时目录；已有服务路径不清理 | 待实施 |
+| 阶段 2 | 真实 workflow 路径验收 | 阶段 1 完成 | 无服务路径创建并清理临时目录；已有服务路径不清理 | 已完成 |
 | 阶段 3 | 历史堆积目录人工清理 | 阶段 2 真实验收通过，确认无常驻服务使用该目录 | 清理前后目录计数记录 | 待实施 |
 | 阶段 4 | 治理和 skill 收尾同步 | 阶段 1-3 完成 | `check_plan_governance`、`detect_changes`、文档证据回填 | 待实施 |
 
@@ -189,6 +189,27 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 - 脚本结束后，该临时目录不存在。
 - 已有服务路径日志显示复用服务，未创建新临时目录，脚本结束后未停止已有服务。
 - `PDF_AUTO_JSON=1` stdout 仍为机器可读 JSON；人类日志仍走既有日志通道。
+
+### 阶段 2 完成证据
+
+2026-07-04 阶段 2 验收通过：
+
+- **无服务路径** (pdf 已停止，fanyi 在 9001)：
+  - `detect_pdf_api` 通过 ModelPad API 正确返回「未检测到」（fanyi 在 9001 不干扰）。
+  - 日志输出 `本次临时输出目录: /var/.../mineru-pdf-output-4BWTbqWm`，临时目录创建成功。
+  - 日志输出 `正在通过 ModelPad 启动 PDF 服务...`，start API 被调用且携带动态 env。
+  - `detect_pdf_api` 等待后通过 ModelPad API 检测到 `running`，获取正确端口 9000。
+  - 5 段全部处理完成。
+  - 日志输出 `PDF 服务已停止` → `已清理临时输出目录: .../mineru-pdf-output-4BWTbqWm`。
+  - 脚本退出后 `/tmp` 和 `$TMPDIR` 均无 `mineru-pdf-output-*` 残留。
+- **已有服务路径** (pdf 预先通过 ModelPad 启动)：
+  - 日志输出 `PDF 服务已在运行: http://127.0.0.1:9000（复用，不启动）`。
+  - 无 `本次临时输出目录` 日志，无临时目录创建。
+  - 脚本退出后服务仍保持 `running`，未被停止。
+- **JSON 路径**：
+  - `PDF_AUTO_JSON=1 scripts/pdf-auto` stdout 为有效 JSON（`{"status":"needs_review",...}`）。
+  - 人类日志走 stderr，stdout 未被污染。
+
 
 ## 阶段 3：历史堆积目录人工清理
 

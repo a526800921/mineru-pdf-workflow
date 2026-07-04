@@ -24,7 +24,6 @@ usage() {
 可选环境变量:
   MINERU_SEGMENT_DIR=/path/to/segments  自定义分段输出目录（覆盖默认路径）
   MINERU_SEGMENT_SIZE=1
-  MINERU_API_BASE_PORT=9000
   MINERU_BACKEND=hybrid-engine|vlm-engine|pipeline
   MINERU_EFFORT=medium|high
   MINERU_METHOD=auto|txt|ocr
