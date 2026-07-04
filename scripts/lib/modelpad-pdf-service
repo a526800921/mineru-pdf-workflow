@@ -4,7 +4,7 @@
 # 用法（在 pdf-seg / pdf-auto / pdf-rerun 中 source）：
 #   source "${BASH_SOURCE[0]%/*}/lib/modelpad-pdf-service"
 #
-#   1. 调用 detect_pdf_api   → 扫描 MinerU API 端口，返回 api_url
+#   1. 调用 detect_pdf_api   → 通过 ModelPad API 获取 pdf 模型端口，返回 api_url
 #   2. 调用 ensure_pdf_api   → 无服务时通过 ModelPad API 启动
 #   3. 在 EXIT trap 中调用   → modelpad_stop_pdf_if_started
 #
