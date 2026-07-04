@@ -162,8 +162,12 @@ def detect_page_type(
 
     优先级：no_text_layer > toc > image_or_sparse > table > text > unknown
     """
-    # 1. 无文本层
+    # 1. 无文本层：PDF 文本层为空，但 mineru ocr 重跑后可能已有产出
     if not pdf_page_text.strip() or pdf_token_count == 0:
+        # 如果 markdown 已有实质内容（ocr 重跑后），不再判为 no_text_layer
+        md_tokens = len(_TOKEN_RE.findall(md_text)) if md_text else 0
+        if md_tokens >= 10:
+            return "text"
         return "no_text_layer"
 
     # 2. 目录页检测：PDF 文本包含大量点线+页码模式，或标题含"目录"且元素很少
@@ -328,8 +332,13 @@ for start, end, segment in segments:
                 (t, c) for t, c in (pc - mc).most_common(10) if t.strip()
             ]
         else:
-            page_cov = None
-            page_missing = []
+            # PDF 无文本层但 markdown 可能有 ocr 产出
+            if md_page_tokens:
+                page_cov = 1.0  # PDF 无文本可对比，信任 markdown 结果
+                page_missing = []
+            else:
+                page_cov = None
+                page_missing = []
 
         # --- 页面类型检测与处理决策（阶段 3） ---
         cl_page = cl_data[array_idx] if (cl_data is not None and array_idx < len(cl_data)) else None
