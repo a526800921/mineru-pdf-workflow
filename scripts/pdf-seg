@@ -23,7 +23,7 @@ usage() {
 
 可选环境变量:
   MINERU_SEGMENT_DIR=/path/to/segments  自定义分段输出目录（覆盖默认路径）
-  MINERU_SEGMENT_SIZE=1
+  MINERU_SEGMENT_SIZE=8
   MINERU_BACKEND=hybrid-engine|vlm-engine|pipeline
   MINERU_EFFORT=medium|high
   MINERU_METHOD=auto|txt|ocr
@@ -63,7 +63,7 @@ pdf_dir="$(dirname "$pdf_path")"
 pdf_name="$(basename "$pdf_path")"
 pdf_stem="${pdf_name%.*}"
 
-segment_size="${MINERU_SEGMENT_SIZE:-1}"
+segment_size="${MINERU_SEGMENT_SIZE:-8}"
 backend="${MINERU_BACKEND:-hybrid-engine}"
 effort="${MINERU_EFFORT:-medium}"
 method="${MINERU_METHOD:-auto}"
