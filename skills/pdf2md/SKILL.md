@@ -198,6 +198,15 @@ data/fixtures_result.md
 | `spec_value` | 规格值被误作 key | M8×30、M10×1.25 |
 | `state_label` | 界面状态/标签 | 主界面、电话、菜单音乐 |
 
+冲突判定规则（v2 上下文感知）：
+
+- 冲突 identity：`(model, section_path, page_start, source_block_id, table_id, parent_key, key)`
+- `key_role=marker` 不参与冲突检测（符号占位符）
+- `key_role=spec_value` 不参与冲突检测（规格值不是业务 key）
+- `key_role=local_label` 必须有 `table_id` 或 `source_block_id` 才参与
+- 跨上下文多值但缺少页段/块上下文的 key 标记为 `needs_review_context`
+- `conflicts.csv` 新增上下文列：`page_start`、`source_block_id`、`table_id`、`parent_key`、`key_role_distribution`
+
 生成入库候选和冲突报告：
 
 ```bash

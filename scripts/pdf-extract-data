@@ -34,7 +34,7 @@ DIGIT_RE = re.compile(r"\d+\.?\d*")
 # 阶段 1：页段注释和 key_role 分类
 PAGE_COMMENT_RE = re.compile(r"<!--\s*pages?\s*(\d+)\s*[-–—]\s*(\d+)\s*-->")
 MARKER_KEY_RE = re.compile(r"^[\s■▲●○◆◇★☆※\-—/\\|·]+$")
-SPEC_KEY_RE = re.compile(r"^M\d+\s*[×xX]")
+SPEC_KEY_RE = re.compile(r"^M\d+")
 DIGIT_ONLY_RE = re.compile(r"^\d+$")
 DIGIT_UNIT_RE = re.compile(r"^\d+\s*[a-zA-Z·/℃²³%]+$")
 

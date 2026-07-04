@@ -24,7 +24,8 @@ from pathlib import Path
 
 INGEST_FIELDS = [
     "record_id", "source_pdf", "model", "section_path", "key", "value", "unit",
-    "evidence_text", "confidence", "review_status", "ingest_status",
+    "page_start", "page_end", "evidence_text", "confidence", "review_status", "ingest_status",
+    "source_block_id", "table_id", "row_index", "parent_key", "key_role",
     "source_row_hash", "created_at", "notes",
 ]
 
@@ -32,10 +33,15 @@ DRAFT_FIELDS = [
     "source_pdf", "model", "section_path", "key", "value", "unit",
     "page_start", "page_end", "evidence_text", "confidence", "status", "notes",
 ]
+# 注：阶段 1 新字段 (source_block_id/table_id/row_index/parent_key/key_role) 暂不纳入
+# DRAFT_FIELDS hash，以保持 record_id 稳定。它们通过 INGEST_FIELDS 流入 ingest_ready.csv
+# 并参与 build_conflicts 的上下文 identity。纳入 hash 的决策推迟到阶段 3。
 
 CONFLICT_FIELDS = [
-    "conflict_id", "model", "section_path", "key",
-    "record_ids", "values", "resolution_status", "notes",
+    "conflict_id", "model", "section_path", "page_start",
+    "source_block_id", "table_id", "parent_key", "key",
+    "record_ids", "values", "key_role_distribution",
+    "resolution_status", "notes",
 ]
 
 OVERRIDE_FIELDS = ["record_id", "review_status", "notes"]
@@ -119,10 +125,17 @@ def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
             "key": dr.get("key", ""),
             "value": dr.get("value", ""),
             "unit": dr.get("unit", ""),
+            "page_start": dr.get("page_start", ""),
+            "page_end": dr.get("page_end", ""),
             "evidence_text": dr.get("evidence_text", ""),
             "confidence": dr.get("confidence", ""),
             "review_status": review_status,
             "ingest_status": ingest_status,
+            "source_block_id": dr.get("source_block_id", ""),
+            "table_id": dr.get("table_id", ""),
+            "row_index": dr.get("row_index", ""),
+            "parent_key": dr.get("parent_key", ""),
+            "key_role": dr.get("key_role", "business_key"),
             "source_row_hash": source_row_hash,
             "created_at": "",
             "notes": dr.get("notes", ""),
@@ -153,39 +166,160 @@ def apply_overrides(rows: list[dict], overrides: dict[str, dict]):
 
 
 def build_conflicts(rows: list[dict]) -> list[dict]:
-    """检测同 model+section_path+key 多值冲突，生成 conflicts.csv."""
-    groups: dict[tuple, list[dict]] = defaultdict(list)
+    """上下文感知冲突检测。
+
+    过滤规则:
+    - key_role=marker → 不参与冲突检测（符号占位符）
+    - key_role=spec_value → 不参与冲突检测（规格不是业务 key）
+    - key_role=local_label → 必须有 table_id 或 source_block_id 才参与
+    - 缺少上下文的行出现多值时标记为 needs_review_context
+
+    identity: (model, section_path, page_start, source_block_id, table_id, parent_key, key)
+    """
+    # 过滤参与冲突检测的行
+    candidates = []
+    skipped_marker = 0
+    skipped_spec = 0
+    skipped_local = 0
     for r in rows:
-        pk = (r["model"], r["section_path"], r["key"])
-        groups[pk].append(r)
+        kr = r.get("key_role", "business_key")
+        if kr == "marker":
+            skipped_marker += 1
+            continue
+        if kr == "spec_value":
+            skipped_spec += 1
+            continue
+        if kr == "local_label":
+            if not r.get("table_id") and not r.get("source_block_id"):
+                skipped_local += 1
+                continue
+        candidates.append(r)
+
+    # 分组：上下文感知 identity
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in candidates:
+        identity = (
+            r.get("model", ""),
+            r.get("section_path", ""),
+            r.get("page_start", ""),
+            r.get("source_block_id", ""),
+            r.get("table_id", ""),
+            r.get("parent_key", ""),
+            r.get("key", ""),
+        )
+        groups[identity].append(r)
+
+    # 统计参与 identity 的实际维度
+    used_dims = _identity_dims(candidates)
 
     conflicts = []
-    for pk, members in groups.items():
+    # 按 (model, section_path, key) 做跨上下文汇总，检测 needs_review_context
+    cross_groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in candidates:
+        cross_pk = (r.get("model", ""), r.get("section_path", ""), r.get("key", ""))
+        cross_groups[cross_pk].append(r)
+
+    for identity, members in groups.items():
         values = list({m["value"] for m in members})
         if len(values) <= 1:
             continue
-        cid = sha256(f"conflict|{pk[0]}|{pk[1]}|{pk[2]}|{'|'.join(sorted(values))}")
+        cid = sha256(
+            f"conflict|{'|'.join(str(x) for x in identity)}|"
+            f"{'|'.join(sorted(values))}"
+        )
+        key_roles = list({m.get("key_role", "business_key") for m in members})
         conflicts.append({
             "conflict_id": cid,
-            "model": pk[0],
-            "section_path": pk[1],
-            "key": pk[2],
+            "model": identity[0],
+            "section_path": identity[1],
+            "page_start": identity[2],
+            "source_block_id": identity[3],
+            "table_id": identity[4],
+            "parent_key": identity[5],
+            "key": identity[6],
             "record_ids": ";".join(m["record_id"] for m in members),
             "values": ";".join(sorted(values)),
+            "key_role_distribution": ";".join(sorted(key_roles)),
             "resolution_status": "unresolved",
-            "notes": f"conflicting values from {len(members)} rows",
+            "notes": (
+                f"{len(members)} rows, identity_dims={used_dims}, "
+                f"filtered_out: marker={skipped_marker} spec={skipped_spec} "
+                f"local_no_context={skipped_local}"
+            ),
         })
+
+    # 检测跨上下文仍多值但缺少页段/块上下文的 key
+    for cross_pk, cross_members in cross_groups.items():
+        cross_values = list({m["value"] for m in cross_members})
+        if len(cross_values) <= 1:
+            continue
+        # 如果有行缺少页段或块上下文，标记 needs_review_context
+        missing_ctx = [
+            m for m in cross_members
+            if not m.get("page_start") and not m.get("source_block_id")
+        ]
+        if missing_ctx and len(cross_members) > 1:
+            # 检查这个 cross_pk 是否已被现有 conflicts 覆盖
+            already_covered = any(
+                c["model"] == cross_pk[0]
+                and c["section_path"] == cross_pk[1]
+                and c["key"] == cross_pk[2]
+                and c["resolution_status"] == "unresolved"
+                for c in conflicts
+            )
+            if not already_covered:
+                cid = sha256(
+                    f"needs_review_context|{cross_pk[0]}|{cross_pk[1]}|{cross_pk[2]}"
+                )
+                key_roles = list({m.get("key_role", "business_key") for m in cross_members})
+                conflicts.append({
+                    "conflict_id": cid,
+                    "model": cross_pk[0],
+                    "section_path": cross_pk[1],
+                    "page_start": "",
+                    "source_block_id": "",
+                    "table_id": "",
+                    "parent_key": "",
+                    "key": cross_pk[2],
+                    "record_ids": ";".join(m["record_id"] for m in cross_members),
+                    "values": ";".join(sorted(cross_values)),
+                    "key_role_distribution": ";".join(sorted(key_roles)),
+                    "resolution_status": "needs_review_context",
+                    "notes": (
+                        f"{len(cross_members)} rows across contexts, "
+                        f"{len(missing_ctx)} rows missing page or block context. "
+                        f"identity_dims={used_dims}"
+                    ),
+                })
+
     return conflicts
+
+
+def _identity_dims(candidates: list[dict]) -> str:
+    """返回实际参与 identity 的维度名（用于冲突 notes）。"""
+    dims = []
+    if any(r.get("page_start") for r in candidates):
+        dims.append("page_start")
+    if any(r.get("source_block_id") for r in candidates):
+        dims.append("source_block_id")
+    if any(r.get("table_id") for r in candidates):
+        dims.append("table_id")
+    if any(r.get("parent_key") for r in candidates):
+        dims.append("parent_key")
+    return "+".join(dims) if dims else "model+section_path+key"
 
 
 def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
     """阶段 2 状态流转：approved+完整+无冲突→ready."""
-    # Build set of record_ids in unresolved conflicts
+    # Build sets of record_ids in unresolved / needs_review_context conflicts
     unresolved_ids: set[str] = set()
+    review_context_ids: set[str] = set()
     for c in conflicts:
+        rids = [rid.strip() for rid in c["record_ids"].split(";")]
         if c["resolution_status"] == "unresolved":
-            for rid in c["record_ids"].split(";"):
-                unresolved_ids.add(rid.strip())
+            unresolved_ids.update(rids)
+        elif c["resolution_status"] == "needs_review_context":
+            review_context_ids.update(rids)
 
     for r in rows:
         rs = r["review_status"]
@@ -212,6 +346,8 @@ def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
             issues.append("missing_value")
         if r["record_id"] in unresolved_ids:
             issues.append("unresolved_conflict")
+        if r["record_id"] in review_context_ids:
+            issues.append("needs_review_context")
 
         if issues:
             r["ingest_status"] = "not_ready"

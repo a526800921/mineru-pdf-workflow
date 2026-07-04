@@ -76,12 +76,26 @@
 |---|---|---|---|---|
 | 阶段 0 | 固化误报基线和修正规则 | 真实样本可读，冲突样本已人工核对 | 文档、Step 0 证据、验收命令明确 | 已完成 |
 | 阶段 1 | 补齐来源页段与表格上下文字段 | 阶段 0 完成，实施前影响分析完成 | `quick_lookup_draft.csv` 有稳定上下文字段 | 已完成 |
-| 阶段 2 | 调整冲突判定与误报过滤 | 阶段 1 完成 | `conflicts.csv` 不再拦截已知误报类型 | 候选 |
+| 阶段 2 | 调整冲突判定与误报过滤 | 阶段 1 完成 | `conflicts.csv` 不再拦截已知误报类型 | 已完成 |
 | 阶段 3 | 回归验证、skill 同步和治理收尾 | 阶段 2 完成 | 春风样本、demo20/demo5、导出边界均通过 | 候选 |
 
 ## 当前阶段
 
-阶段 1 已完成。下一步为阶段 2：调整冲突判定与误报过滤。
+阶段 2 已完成。下一步为阶段 3：回归验证、skill 同步和治理收尾。
+
+### 阶段 2 完成证据（2026-07-04）
+
+- `scripts/pdf-prepare-ingest` 的 `build_conflicts` 已重写为上下文感知冲突判定。
+- `INGEST_FIELDS` 新增 `page_start/page_end/source_block_id/table_id/row_index/parent_key/key_role`，阶段 1 上下文字段完整流入 `ingest_ready.csv` 和冲突判定。
+- 冲突 identity 从 `(model, section_path, key)` 升级为 `(model, section_path, page_start, source_block_id, table_id, parent_key, key)`。
+- 过滤规则生效：`key_role=marker` 54 条、`spec_value` 16 条从冲突检测排除；`local_label` 无上下文时排除。
+- `conflicts.csv` 新增 `page_start/source_block_id/table_id/parent_key/key_role_distribution` 上下文列。
+- 新增 `needs_review_context` 冲突类型：跨上下文多值但缺页段/块上下文时标记。
+- 春风样本冲突 35 组 → 3 组（降幅 91%）；剩余 3 组为真实业务多值（`后轮` × 2、`动力不足`）。
+- `DRAFT_FIELDS` 暂不纳入阶段 1 新字段以保持 `record_id` 稳定。
+- `SPEC_KEY_RE` 修正为 `^M\d+`，覆盖 `M8`、`M10` 等独立规格值。
+- demo20/demo5 空草案处理正常（0 行、0 冲突）。
+- 旧 `review_overrides.csv` 因 `page_start` 由空变有值导致 hash 变化，已备份为 `review_overrides_v1.csv`。
 
 ### 阶段 1 完成证据（2026-07-04）
 
@@ -103,8 +117,6 @@
 - `read_markdown` 无合并 Markdown 时返回 `None` 而非 `sys.exit`。
 - `main()` 在 `md_text is None` 时走空草案路径：生成仅含表头的 `quick_lookup_draft.csv`（0 行），在 `verification.csv` 中记录 `error` 级缺失 markdown 信息。
 - demo20/demo5 回归通过：均生成空草案 + verification error 记录，不再崩溃退出。
-
-### 阶段 1 完成证据（2026-07-04）
 
 ## 阶段 0 完成条件
 
@@ -269,6 +281,113 @@ conflict_identity = (
 - `key_role=spec_value`：规格本身不作为主 key，优先使用表格中的位置/项目列作为 `key`。
 - 缺少上下文且出现多值时，不直接放行；标记为 `needs_review_context`，避免误把真冲突吞掉。
 - `conflicts.csv` 继续输出未解决冲突，但 `notes` 必须说明冲突依据使用了哪些上下文字段。
+
+### 阶段 2 实施范围
+
+阶段 2 只修改入库准备层，目标是让 `conflicts.csv` 使用阶段 1 已补齐的上下文字段判定冲突；不修改抽取层、不写数据库、不改变 `pdf-export-ingest` 的导出条件。
+
+允许修改：
+
+- `scripts/pdf-prepare-ingest`
+- `skills/pdf2md/SKILL.md`
+- `/Users/jafish/.claude/skills/pdf2md/SKILL.md`（由项目级 skill 同步覆盖）
+- `docs/plans/conflict-context-ingestion-fix.md`
+- `docs/PLAN_MAP.md`
+
+阶段 2 不修改：
+
+- `scripts/pdf-extract-data`
+- `scripts/pdf-export-ingest`
+- `scripts/pdf-auto`
+- `scripts/pdf-merge`
+- `scripts/pdf-validate`
+- `mcp/server/*`
+
+### 阶段 2 实施前门禁
+
+修改脚本前必须运行并记录 GitNexus 影响分析：
+
+```bash
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target build_conflicts --direction upstream
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target compute_source_row_hash --direction upstream
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target generate_ingest_rows --direction upstream
+node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target compute_ingest_status --direction upstream
+```
+
+如果任一影响分析返回 HIGH 或 CRITICAL，必须先向用户报告影响范围，再继续实施。
+
+### 阶段 2 具体改动
+
+1. 扩展 `scripts/pdf-prepare-ingest` 的草案字段读取：
+   - 兼容阶段 1 新增字段：`source_block_id`、`table_id`、`row_index`、`parent_key`、`key_role`。
+   - 不要求旧草案一定存在这些字段；缺失时按空字符串处理。
+2. 保持 `record_id` 与 `review_overrides.csv` 兼容：
+   - 阶段 2 不把新增上下文字段纳入 `compute_source_row_hash`。
+   - 阶段 2 不修改 `INGEST_FIELDS`，避免影响 `pdf-export-ingest` 现有契约。
+3. 调整 `build_conflicts`：
+   - `key_role=marker` 的记录不生成冲突。
+   - `key_role=spec_value` 的记录不生成冲突；保留为可人工复核的普通候选。
+   - `key_role=local_label` 的 identity 必须包含 `page_start`、`source_block_id`、`table_id`、`parent_key`、`key`。
+   - 默认 `business_key/state_label` 的 identity 使用 `model`、`section_path`、`page_start`、`source_block_id`、`table_id`、`parent_key`、`key`。
+4. 保守处理上下文缺失：
+   - 如果同一 `model+section_path+key` 多值且相关记录缺少 `page_start/source_block_id/table_id` 等核心上下文，不自动放行。
+   - 输出 `conflicts.csv`，`notes` 包含 `needs_review_context`。
+5. 保留已解决冲突延续逻辑：
+   - 继续按 `conflict_id` 继承既有 `resolution_status=resolved`。
+   - 因 identity 改变产生的新 `conflict_id` 不自动继承旧 resolved。
+6. 更新 `conflicts.csv` 备注：
+   - `notes` 需说明冲突依据，例如 `identity=model,section_path,page_start,source_block_id,table_id,parent_key,key`。
+   - 对被排除的 marker/spec_value 不写入 `conflicts.csv`。
+7. 更新项目级 `skills/pdf2md/SKILL.md`：
+   - 说明冲突判定已从三元组升级为上下文 identity。
+   - 说明 `marker`、`spec_value` 不参与冲突检测。
+8. 同步用户级 skill：
+   - `mkdir -p /Users/jafish/.claude/skills/pdf2md`
+   - `cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md`
+
+### 阶段 2 验收命令
+
+```bash
+python3 -m py_compile scripts/pdf-prepare-ingest
+
+scripts/pdf-extract-data "pdf/春风 150AURA"
+scripts/pdf-prepare-ingest "pdf/春风 150AURA"
+
+python3 - <<'PY'
+import csv
+from collections import Counter
+
+conf=list(csv.DictReader(open("pdf/春风 150AURA/data/conflicts.csv", newline="", encoding="utf-8-sig")))
+keys=Counter(c["key"] for c in conf)
+print("conflicts", len(conf))
+print("keys", keys.most_common(20))
+for forbidden in ["■", "▲", "-", "/"]:
+    assert forbidden not in keys, forbidden
+for reduced in ["后轮", "M8×30", "10", "11", "12", "13", "14", "15", "16"]:
+    assert keys[reduced] == 0, (reduced, keys[reduced])
+assert len(conf) < 35, len(conf)
+PY
+
+scripts/pdf-prepare-ingest pdf/demo20
+scripts/pdf-export-ingest pdf/demo20
+
+scripts/pdf-prepare-ingest pdf/demo5
+scripts/pdf-export-ingest pdf/demo5
+
+cmp -s skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
+python3 scripts/check_plan_governance.py .
+git diff --check
+node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
+```
+
+### 阶段 2 完成条件
+
+- 春风样本 `conflicts.csv` 冲突数少于阶段 0 基线 35 组。
+- `■`、`▲`、`-`、`/` 不再作为冲突 key。
+- 车辆视图数字编号、`M8×30`、`后轮` 等已知误报通过上下文或过滤规则消除。
+- demo20/demo5 的入库准备和导出流程不失败，空样本仍保持空批次或空冲突。
+- 项目级 `pdf2md` skill 已更新并同步到用户级 skill。
+- 治理文档记录阶段 2 完成证据，`PLAN_MAP.md` 同步状态。
 
 ## 阶段 3 验证方式
 
