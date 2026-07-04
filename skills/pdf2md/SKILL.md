@@ -32,11 +32,12 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 
 ## ModelPad PDF 服务
 
-`pdf-seg`、`pdf-auto`、`pdf-rerun` 依赖 ModelPad 托管的 PDF 服务。脚本会先探测 `MINERU_API_BASE_PORT`（默认 `9000`）起始的 3 个端口：
+`pdf-seg`、`pdf-auto`、`pdf-rerun` 依赖 ModelPad 托管的 PDF 服务。脚本会通过 ModelPad API 查询 `pdf` 模型状态，只有模型 `status=running` 且返回了数字 `port` 时，才会把 `http://127.0.0.1:<port>` 作为 MinerU API 地址：
 
 - 如果 PDF 服务已在运行，脚本只复用服务，结束时不停止它。
 - 如果 PDF 服务未运行，脚本会通过 ModelPad API 启动 `pdf` 模型，等待 MinerU API 就绪，运行完成后只停止本次脚本启动的服务。
 - 如果 ModelPad API 不可用或启动失败，脚本应失败并输出明确诊断。
+- 不再通过扫描相邻本地端口推断 PDF 服务，避免其他 ModelPad 模型占用 9001/9002 等端口时被误判为 PDF 服务。
 
 可选环境变量：
 
@@ -44,7 +45,6 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 MODELPAD_API_BASE=http://127.0.0.1:9786
 MODELPAD_PDF_MODEL_ID=40621169-461C-4018-974E-9FAC92A542E7
 MODELPAD_PDF_START_TIMEOUT=120
-MINERU_API_BASE_PORT=9000
 ```
 
 ## 输出包结构

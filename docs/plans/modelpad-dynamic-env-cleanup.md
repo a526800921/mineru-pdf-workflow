@@ -64,7 +64,7 @@ ModelPad start API 已支持在请求体中传入 `env` 覆盖。`StartModelRequ
 | 阶段 1 | 在 helper 中实现动态 env 与临时目录状态 | 阶段 0 完成，完成 GitNexus 影响分析 | `bash -n`、mock start body、已有服务不创建目录 | 已完成 |
 | 阶段 2 | 真实 workflow 路径验收 | 阶段 1 完成 | 无服务路径创建并清理临时目录；已有服务路径不清理 | 已完成 |
 | 阶段 3 | 历史堆积目录人工清理 | 阶段 2 真实验收通过，确认无常驻服务使用该目录 | 清理前后目录计数记录 | 已完成 |
-| 阶段 4 | 治理和 skill 收尾同步 | 阶段 1-3 完成 | `check_plan_governance`、`detect_changes`、文档证据回填 | 待实施 |
+| 阶段 4 | 治理和 skill 收尾同步 | 阶段 1-3 完成 | `check_plan_governance`、`detect_changes`、文档证据回填 | 已完成 |
 
 ## Step 0 证据
 
@@ -274,6 +274,15 @@ rm -rf /Users/jafish/Documents/models/mineru-api-output/*
 - **清理后**：子目录数 0、总大小 0B。
 - `pdf.env` 持久化 `MINERU_API_OUTPUT_ROOT` 路径保留，常驻服务下次启动仍可按原路径写入。
 
+### 阶段 3 复验记录（2026-07-04）
+
+复验结论：阶段 3 通过，历史堆积目录已清理，可进入阶段 4 治理收尾。
+
+- `/Users/jafish/Documents/models/mineru-api-output` 当前子目录数为 0。
+- `/Users/jafish/Documents/models/mineru-api-output` 当前总大小为 0B。
+- ModelPad 当前状态：`pdf stopped`，`fanyi running http://127.0.0.1:9001`。
+- 未执行额外清理命令；本次仅核对阶段 3 已完成后的目录和服务状态。
+
 ## 阶段 4：治理和说明同步
 
 ### 阶段 4 目标
@@ -289,7 +298,19 @@ rm -rf /Users/jafish/Documents/models/mineru-api-output/*
 - `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 已执行并记录结果。
 - 本计划状态更新为 `已完成`，PLAN_MAP 证据链接指向阶段完成证据。
 
-## 验证方式汇总
+### 阶段 4 完成证据（2026-07-04）
+
+2026-07-04 完成治理和说明同步收尾：
+
+- 本计划已回填阶段 0-3 的实现、复验和清理证据，阶段状态均为 `已完成`。
+- `docs/PLAN_MAP.md` 已同步 `modelpad-dynamic-env-cleanup` 状态为 `已完成`，证据链接指向本节。
+- 项目级 `skills/pdf2md/SKILL.md` 已更新 ModelPad PDF 服务说明：端口来源以 ModelPad `pdf` 模型状态接口为准，不再扫描相邻本地端口。
+- Claude Code 用户级 skill `/Users/jafish/.claude/skills/pdf2md/SKILL.md` 已由项目级 skill 覆盖同步。
+- `python3 scripts/check_plan_governance.py .` 通过。
+- `git diff --check` 通过。
+- `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 已执行，风险等级为 LOW，未发现受影响执行流程。
+
+## 验证方式
 
 | 验证项 | 命令或观察点 | 预期 |
 |---|---|---|
@@ -321,10 +342,10 @@ rm -rf /Users/jafish/Documents/models/mineru-api-output/*
 
 | 问题 | 推荐方案 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|
-| stop API 失败时是否仍清理本次临时目录 | 阶段 1 先实现“清理本次目录并警告”；阶段 2 真实验收后确认是否需要改成“仅 stop 成功才清理” | 否 | 待验收 |
-| JSON body 生成方式 | 优先使用 `python3` 生成 JSON，避免 Bash 字符串转义风险 | 否 | 待实施 |
-| 历史目录是否立即清理 | 作为阶段 3 单独动作，必须用户确认后执行 | 否 | 待用户确认 |
-| 是否需要同步 `skills/pdf2md/SKILL.md` | 若实现后只是内部隔离，当前 skill 可保持不变；若新增用户可见环境变量或日志语义，则同步 | 否 | 待阶段 4 判断 |
+| stop API 失败时是否仍清理本次临时目录 | 保持阶段 1 实现：记录 stop 警告后仍只清理本次 helper 创建的临时目录；阶段 2 真实路径未暴露问题 | 否 | 已确认 |
+| JSON body 生成方式 | 当前路径仅传入 `mktemp` 生成的本地目录，Bash JSON body 已通过阶段 2 真实启动验收；如后续支持任意 env 值再改为结构化 JSON 生成 | 否 | 已确认 |
+| 历史目录是否立即清理 | 已作为阶段 3 单独动作完成，清理后目录数 0、大小 0B | 否 | 已完成 |
+| 是否需要同步 `skills/pdf2md/SKILL.md` | 已同步项目级 `skills/pdf2md/SKILL.md`，并覆盖 Claude Code 用户级 skill | 否 | 已完成 |
 
 ## 关联计划
 

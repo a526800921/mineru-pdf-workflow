@@ -26,7 +26,7 @@
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
-| [modelpad-dynamic-env-cleanup](plans/modelpad-dynamic-env-cleanup.md) | 实施中 | 阶段 3 已完成 / 阶段 4：待验收 | modelpad-pdf-service-orchestration、ModelPad API | [阶段 3 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-3-完成证据) |
+| [modelpad-dynamic-env-cleanup](plans/modelpad-dynamic-env-cleanup.md) | 已完成 | 全阶段（0-4） | modelpad-pdf-service-orchestration、ModelPad API | [阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -108,3 +108,4 @@
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |
 | modelpad-pdf-service-lifecycle | 阶段 0-3 | 详见 [ModelPad 托管 PDF 服务阶段 3 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-3-完成证据2026-07-03) |
 | modelpad-pdf-service-orchestration | 阶段 0-3 | 详见 [ModelPad PDF 服务按需编排阶段 3 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-3-完成证据2026-07-04) |
+| modelpad-dynamic-env-cleanup | 阶段 0-4 | 详见 [ModelPad 动态 env 与临时输出清理阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
