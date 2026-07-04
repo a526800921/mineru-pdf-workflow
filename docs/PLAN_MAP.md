@@ -23,7 +23,7 @@
 | [modelpad-pdf-service-orchestration](plans/modelpad-pdf-service-orchestration.md) | 已完成 | 全阶段（0-3） | modelpad-pdf-service-lifecycle、ModelPad API、pdf 模型配置 | [阶段 3 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-3-完成证据2026-07-04) |
 | [structured-data-extraction](plans/structured-data-extraction.md) | 已完成 | 全阶段（0-3） | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 3 完成证据](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
 | [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 已完成 | 阶段 3：实际入库接口或外部系统边界 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案 | [阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
-| [conflict-context-ingestion-fix](plans/conflict-context-ingestion-fix.md) | 实施中 | 阶段 3：回归验证、skill 同步和治理收尾 | structured-data-extraction、data-ingestion-pipeline、春风 150AURA 真实样本 | [阶段 2 完成证据](plans/conflict-context-ingestion-fix.md#阶段-2-完成证据2026-07-04) |
+| [conflict-context-ingestion-fix](plans/conflict-context-ingestion-fix.md) | 已完成 | 全阶段（0-3） | structured-data-extraction、data-ingestion-pipeline、春风 150AURA 真实样本 | [阶段 3 完成证据](plans/conflict-context-ingestion-fix.md#阶段-3-完成证据2026-07-04) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
@@ -99,7 +99,7 @@
 | `pdf-merge` 图片同名冲突可能被静默跳过 | 阶段 3 已修复：SHA-256 内容校验；同名同内容跳过，同名不同内容失败并输出冲突路径 | 输出包 `images/`、合并 Markdown 图片引用 | 否 | 已解决 |
 | PDF 服务生命周期将由 ModelPad app 托管 | 全阶段（0-3）已完成：脚本不再管理服务进程/shared 输出目录，`pdf-auto` 重跑失败安全兜底，`pdf-merge` 图片同名冲突检测 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 已解决 |
 | PDF 服务未启动时需要按需调用 ModelPad start/stop | 全阶段（0-3）已完成：helper 封装启停逻辑，三个入口已接入；无服务时自启、用完自停；已有服务时只复用不停止；失败路径可诊断 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、ModelPad API | 否 | 已解决 |
-| `pdf-prepare-ingest` 对真实手册表格产生冲突误报 | `conflict-context-ingestion-fix` 阶段 2 已完成：上下文感知冲突判定上线，春风样本冲突 35→3 组（降幅 91%）；阶段 3 待实施：回归验证和治理收尾 | `pdf-extract-data`、`pdf-prepare-ingest`、`conflicts.csv`、`ingest_ready.csv` | 否，冲突误报已大幅收敛 | 阶段 2 已完成 |
+| `pdf-prepare-ingest` 对真实手册表格产生冲突误报 | `conflict-context-ingestion-fix` 全阶段（0-3）已完成：上下文感知冲突判定 + rowspan 父级识别，春风样本冲突 35→0 组，已知误报全部消除 | `pdf-extract-data`、`pdf-prepare-ingest`、`conflicts.csv`、`ingest_ready.csv` | 否 | 已解决 |
 
 ## 完成证据
 
@@ -109,7 +109,7 @@
 | pdf-output-package-layout | Phase 8 复验 | 详见 [PDF 输出包目录结构计划验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | structured-data-extraction | 阶段 0-3 | 详见 [输出包结构化数据抽取计划](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
 | data-ingestion-pipeline | 阶段 0-3 | 详见 [结构化数据入库准备管线阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
-| conflict-context-ingestion-fix | 阶段 1 | 详见 [结构化数据冲突误报与上下文主键修正阶段 1 完成证据](plans/conflict-context-ingestion-fix.md#阶段-1-完成证据2026-07-04) |
+| conflict-context-ingestion-fix | 阶段 0-3 | 详见 [结构化数据冲突误报与上下文主键修正阶段 3 完成证据](plans/conflict-context-ingestion-fix.md#阶段-3-完成证据2026-07-04) |
 | coverage-validation-optimization | 阶段 0-5 | 详见 [覆盖率验证口径优化计划](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | marker-feature-absorption | 阶段 0-4 | 详见 [marker 特性吸纳计划](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
 | minimal-automation-runbook | 最小人工执行版 | 详见 [最小自动化执行手册](plans/minimal-automation-runbook.md#step-0-证据) |

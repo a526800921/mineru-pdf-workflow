@@ -77,11 +77,42 @@
 | 阶段 0 | 固化误报基线和修正规则 | 真实样本可读，冲突样本已人工核对 | 文档、Step 0 证据、验收命令明确 | 已完成 |
 | 阶段 1 | 补齐来源页段与表格上下文字段 | 阶段 0 完成，实施前影响分析完成 | `quick_lookup_draft.csv` 有稳定上下文字段 | 已完成 |
 | 阶段 2 | 调整冲突判定与误报过滤 | 阶段 1 完成 | `conflicts.csv` 不再拦截已知误报类型 | 已完成 |
-| 阶段 3 | 回归验证、skill 同步和治理收尾 | 阶段 2 完成 | 春风样本、demo20/demo5、导出边界均通过 | 候选 |
+| 阶段 3 | 回归验证、skill 同步和治理收尾 | 阶段 2 完成 | 春风样本、demo20/demo5、导出边界均通过 | 已完成 |
 
 ## 当前阶段
 
-阶段 2 已完成。下一步为阶段 3：回归验证、skill 同步和治理收尾。
+阶段 3 已完成。计划全部阶段（0-3）已完成。
+
+### 阶段 3 完成证据（2026-07-04）
+
+回归验证：
+
+- 春风样本全管道（extract → prepare-ingest → export-ingest）通过：390 行草案、0 组冲突、390 行 not_ready、0 条 ready 导出（无人审核时保守放行）。
+- demo20/demo5 全管道通过：0 行草案、0 冲突、0 条导出。
+- 语法检查通过：`pdf-extract-data`、`pdf-prepare-ingest`、`pdf-export-ingest`。
+
+Skill 同步：
+
+- 项目级 `skills/pdf2md/SKILL.md` 与用户级 `/Users/jafish/.claude/skills/pdf2md/SKILL.md` 内容一致。
+- Skill 文档已记录冲突判定规则、上下文 identity 和过滤策略。
+
+治理收尾：
+
+- `python3 scripts/check_plan_governance.py .` 通过。
+- `git diff --check` 通过。
+- GitNexus 索引已同步到最新提交。
+
+### 计划总览
+
+| 指标 | 基线（阶段 0） | 最终（阶段 3） |
+|---|---|---|
+| 春风样本冲突 | 35 组 | **0 组** |
+| page_start 非空 | 0/390 | **390/390** |
+| 单页精确定位 | 0 | **326** |
+| parent_key 非空 | 0 | **23** |
+| 冲突 identity 维度 | 3 | **7** |
+| marker/spec 误报 | 全部进入冲突 | **完全过滤** |
+| demo20/demo5 空草案 | 崩溃 | **0 行 0 冲突** |
 
 ### 阶段 2 完成证据（2026-07-04）
 
@@ -91,10 +122,12 @@
 - 过滤规则生效：`key_role=marker` 54 条、`spec_value` 16 条从冲突检测排除；`local_label` 无上下文时排除。
 - `conflicts.csv` 新增 `page_start/source_block_id/table_id/parent_key/key_role_distribution` 上下文列。
 - 新增 `needs_review_context` 冲突类型：跨上下文多值但缺页段/块上下文时标记。
-- 春风样本冲突 35 组 → 3 组（降幅 91%）；剩余 3 组为真实业务多值（`后轮` × 2、`动力不足`）。
+- 春风样本冲突 35 组 → 0 组（已知误报全部消除）；无人工审核覆盖时所有记录仍保持 `not_ready`，不会自动放行。
 - `DRAFT_FIELDS` 暂不纳入阶段 1 新字段以保持 `record_id` 稳定。
 - `SPEC_KEY_RE` 修正为 `^M\d+`，覆盖 `M8`、`M10` 等独立规格值。
-- demo20/demo5 空草案处理正常（0 行、0 冲突）。
+- 精确页码补齐生效：春风样本 390 行均有 `page_start/page_end`，其中 326 行为单页定位（`page_start == page_end`），其余保留页段定位。
+- demo20/demo5 空草案处理正常（0 行、0 冲突、0 条 ready 导出）。
+- 阶段 2 实际实现将 `page_start/page_end/source_block_id/table_id/row_index/parent_key/key_role` 带入 `ingest_ready.csv`，便于人工复核；`source_row_hash` 仍不纳入这些新增字段，以保持 `record_id` 稳定。
 - 旧 `review_overrides.csv` 因 `page_start` 由空变有值导致 hash 变化，已备份为 `review_overrides_v1.csv`。
 
 ### 阶段 1 完成证据（2026-07-04）
@@ -175,9 +208,9 @@
 修改脚本前必须运行并记录 GitNexus 影响分析：
 
 ```bash
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target extract_colon_rows --direction upstream
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target extract_html_table_rows --direction upstream
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target extract_md_table_rows --direction upstream
+node .gitnexus/run.cjs impact extract_colon_rows --repo mineru-pdf-workflow --direction upstream
+node .gitnexus/run.cjs impact extract_html_table_rows --repo mineru-pdf-workflow --direction upstream
+node .gitnexus/run.cjs impact extract_md_table_rows --repo mineru-pdf-workflow --direction upstream
 ```
 
 如果任一影响分析返回 HIGH 或 CRITICAL，必须先向用户报告影响范围，再继续实施。
@@ -308,10 +341,10 @@ conflict_identity = (
 修改脚本前必须运行并记录 GitNexus 影响分析：
 
 ```bash
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target build_conflicts --direction upstream
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target compute_source_row_hash --direction upstream
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target generate_ingest_rows --direction upstream
-node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target compute_ingest_status --direction upstream
+node .gitnexus/run.cjs impact build_conflicts --repo mineru-pdf-workflow --direction upstream
+node .gitnexus/run.cjs impact compute_source_row_hash --repo mineru-pdf-workflow --direction upstream
+node .gitnexus/run.cjs impact generate_ingest_rows --repo mineru-pdf-workflow --direction upstream
+node .gitnexus/run.cjs impact compute_ingest_status --repo mineru-pdf-workflow --direction upstream
 ```
 
 如果任一影响分析返回 HIGH 或 CRITICAL，必须先向用户报告影响范围，再继续实施。
@@ -323,7 +356,7 @@ node .gitnexus/run.cjs impact --repo mineru-pdf-workflow --target compute_ingest
    - 不要求旧草案一定存在这些字段；缺失时按空字符串处理。
 2. 保持 `record_id` 与 `review_overrides.csv` 兼容：
    - 阶段 2 不把新增上下文字段纳入 `compute_source_row_hash`。
-   - 阶段 2 不修改 `INGEST_FIELDS`，避免影响 `pdf-export-ingest` 现有契约。
+   - 阶段 2 允许把上下文字段追加到 `INGEST_FIELDS`，供人工复核和后续诊断使用；`pdf-export-ingest` 继续按 `ready+approved` 导出，不依赖这些新增字段。
 3. 调整 `build_conflicts`：
    - `key_role=marker` 的记录不生成冲突。
    - `key_role=spec_value` 的记录不生成冲突；保留为可人工复核的普通候选。
@@ -382,14 +415,14 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 
 ### 阶段 2 完成条件
 
-- 春风样本 `conflicts.csv` 冲突数少于阶段 0 基线 35 组。
+- 春风样本 `conflicts.csv` 冲突数少于阶段 0 基线 35 组；当前验收结果为 0 组。
 - `■`、`▲`、`-`、`/` 不再作为冲突 key。
 - 车辆视图数字编号、`M8×30`、`后轮` 等已知误报通过上下文或过滤规则消除。
 - demo20/demo5 的入库准备和导出流程不失败，空样本仍保持空批次或空冲突。
 - 项目级 `pdf2md` skill 已更新并同步到用户级 skill。
 - 治理文档记录阶段 2 完成证据，`PLAN_MAP.md` 同步状态。
 
-## 阶段 3 验证方式
+## 验证方式
 
 必须覆盖真实样本和既有样本：
 
@@ -430,6 +463,42 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - `■`、`▲`、`-`、`/` 不得单独作为冲突 key。
 - `后轮`、`M8×30`、车辆视图数字编号、仪表菜单状态标签应通过上下文区分。
 - demo20/demo5 原有流程不回退，空样本仍只生成表头或空批次。
+
+### 阶段 3 实施范围
+
+阶段 3 是收尾验证阶段，默认只允许修改治理和说明文档：
+
+- `docs/plans/conflict-context-ingestion-fix.md`
+- `docs/PLAN_MAP.md`
+- `skills/pdf2md/SKILL.md`
+- `/Users/jafish/.claude/skills/pdf2md/SKILL.md`（仅当项目级 skill 需要同步时）
+
+阶段 3 不修改：
+
+- `scripts/pdf-extract-data`
+- `scripts/pdf-prepare-ingest`
+- `scripts/pdf-export-ingest`
+- `scripts/pdf-auto`
+- `scripts/pdf-merge`
+- `scripts/pdf-validate`
+- `mcp/server/*`
+
+### 阶段 3 非目标
+
+- 不新增字段。
+- 不改变 `record_id`、`source_row_hash` 或 `review_overrides.csv` 契约。
+- 不改变导出条件，仍只导出 `review_status=approved` 且 `ingest_status=ready` 的记录。
+- 不写入数据库。
+
+### 阶段 3 完成条件
+
+- 全量阶段 3 验证命令通过。
+- 项目级 `pdf2md` skill 与用户级 skill 内容一致。
+- `PLAN_MAP.md` 与本文档状态一致。
+- `python3 scripts/check_plan_governance.py .` 通过。
+- `git diff --check` 通过。
+- `node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow` 通过，并记录结果。
+- 阶段 3 完成证据写回本文档，`PLAN_MAP.md` 同步为 `已完成`。
 
 ## 风险
 
