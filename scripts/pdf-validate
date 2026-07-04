@@ -341,9 +341,10 @@ for start, end, segment in segments:
             page_reason = "no_content_list"
             page_rerunnable = False
         elif page_type == "no_text_layer":
-            page_decision = "skip"
-            page_reason = "no_text_layer"
-            page_rerunnable = False
+            # PDF 无文本层 → ocr 可活（渲染为图片后视觉识别）
+            page_decision = "rerun"
+            page_reason = "no_text_layer_rerun_with_ocr"
+            page_rerunnable = True
         elif page_type in ("toc", "image_or_sparse"):
             # 目录页、图片稀疏页 → 覆盖率不可靠，不触发 high 重跑
             page_decision = "review_only"
