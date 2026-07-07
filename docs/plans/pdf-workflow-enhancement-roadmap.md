@@ -40,14 +40,23 @@ P1（已完成）：
 - `scripts/pdf-auto`：TOC 修复重构 → `lib/toc_repair.py`
 - `scripts/pdf-extract-data`：TOC 树 section_path 增强
 
-P2（当前阶段）：
+P2（已完成）：
 
 - `mcp/server/src/index.ts`：新增 5 个拆分工具
-- `mcp/server/src/tools/`：各工具实现模块（如需拆分）
 - `mcp/README.md`：更新工具契约文档
-- `docs/plans/pdf-workflow-enhancement-roadmap.md`
+- `scripts/pdf-rerun`：PDF_RERUN_JSON=1
+- `scripts/pdf-seg`：PDF_SEG_JSON=1
+- `scripts/pdf-review` + `scripts/lib/review_report.py`：新建
 
-P3-P5 的候选影响范围见各自阶段描述，实施前再细化。
+P3a（已完成）：
+
+- `mcp/server/src/index.ts`：新增 `read_page` + `search_pdf_content`
+- `scripts/pdf-read-page` + `scripts/pdf-search-content`：新建
+
+P3b（当前阶段）：
+
+- `mcp/server/src/index.ts`：新增 `export_chunks`
+- `scripts/pdf-export-chunks` + `scripts/lib/chunk_utils.py`：新建
 
 ## 公共契约变化
 
@@ -62,7 +71,7 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 | P1 | 提交未完成改动，清理工作区 | 有两个未提交的脚本改动 | 语法检查通过、detect_changes 低风险、提交成功 | 已完成 |
 | P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 已完成 |
 | P3a | 关键词检索 + 按页读取（无新依赖） | P2 已完成、有完整输出包样本（春风 150AURA） | `search_pdf_content` 返回页码/章节/原文片段、`read_page` 返回指定页 Markdown | 已完成 |
-| P3b | 向量化前置准备（无新依赖） | P3a 已完成 | `<package>/data/chunks.jsonl` 产出、每块含页码/章节/纯文本/字数 | 待实施 |
+| P3b | 向量化前置准备（无新依赖） | P3a 已完成 | `<package>/data/chunks.jsonl` 产出、每块含页码/章节/纯文本/字数 | 已完成 |
 | P4 | 评测体系 + 多模态增强 | P3a 或 P2 已完成、有表格和图片密集型 PDF 样本 | `table_accuracy.csv` 产出、TOC 条目级验证可用、VLM 描述产出 | 候选 |
 | P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
 
@@ -160,8 +169,8 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 - [x] P3a 已完成（`read_page` + `search_pdf_content` 可用）
 - [x] 有完整输出包样本：春风 150AURA（3212 行 Markdown，含 ## 标题和 HTML 表格）
 - [x] 下游 chunk 规范已对齐（[motor-app §10](../../motorcycle-manual-app/ios-agent-方案设计.md#10-pc-端构建流程)）
-- [ ] `scripts/lib/chunk_utils.py` 新建
-- [ ] `scripts/pdf-export-chunks` 新建
+- [x] `scripts/lib/chunk_utils.py` 新建
+- [x] `scripts/pdf-export-chunks` 新建
 
 ### 实施步骤
 
@@ -219,17 +228,17 @@ python3 scripts/check_plan_governance.py .
 
 ### 完成条件
 
-- [ ] `data/chunks.jsonl` 产出，每行有效 JSON
-- [ ] 每个 chunk 含 5 个字段：`id`、`content`、`page`、`section`、`token_count`
-- [ ] `id` 格式为 `<model>@seq_NNN`
-- [ ] `content` 无残留 Markdown 标记（`##`、`**`）和 HTML 标签（`<td>`、`<tr>`）
-- [ ] HTML 表格数据已展开为自然语言键值对（"机油容量：5.25L"）
-- [ ] `token_count` ≤ 384（BGE 512 上限留余量）
-- [ ] 超限章节已按 ### 或段落再切分
-- [ ] 相邻 chunk 有 1-2 句 overlap
-- [ ] 非法输入返回明确错误
-- [ ] TypeScript 编译通过（如新增 MCP 工具）
-- [ ] 治理检查通过
+- [x] `data/chunks.jsonl` 产出，每行有效 JSON。→ 春风 150AURA：335 chunks。
+- [x] 每个 chunk 含 5 个字段：`id`、`content`、`page`、`section`、`token_count`。→ 字段完整性验证通过。
+- [x] `id` 格式为 `<model>@seq_NNN`。→ 正则验证通过。
+- [x] `content` 无残留 Markdown 标记（`##`、`**`）和 HTML 标签（`<td>`、`<tr>`）。→ 0 残留。
+- [x] HTML 表格数据已展开为自然语言键值对。→ 参数表"最大净功率 / 11.8 Kw / 8500 rpm"等已展开。
+- [x] `token_count` ≤ 384。→ max=384，0 超限。
+- [x] 超限章节已按 ### 或段落/句子/字符级再切分。→ 三级 fallback 切分逻辑已实现。
+- [x] 相邻 chunk 有 1-2 句 overlap。→ OVERLAP_SENTENCES=2。
+- [x] 非法输入返回明确错误。→ 不存在目录返回 error JSON。
+- [x] TypeScript 编译通过。→ `tsc` 编译成功，9 个工具注册。
+- [x] 治理检查通过。→ `python3 scripts/check_plan_governance.py .` 通过。
 
 ## P4-P5 后续阶段（粗粒度）
 
