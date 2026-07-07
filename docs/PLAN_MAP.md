@@ -28,7 +28,7 @@
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
 | [modelpad-dynamic-env-cleanup](plans/modelpad-dynamic-env-cleanup.md) | 已完成 | 全阶段（0-4） | modelpad-pdf-service-orchestration、ModelPad API | [阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
-| [pdf-workflow-enhancement-roadmap](plans/pdf-workflow-enhancement-roadmap.md) | 实施中 | P1：就近收尾（已有未提交改动） | 所有已完成计划、豆包四层差距分析 | — |
+| [pdf-workflow-enhancement-roadmap](plans/pdf-workflow-enhancement-roadmap.md) | 实施中 | P2：拆分式 MCP 工具 | 所有已完成计划、豆包四层差距分析、MCP 工具设计 | [P1 完成](https://github.com/user/repo/commit/c227362) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 

@@ -1,4 +1,4 @@
-# PDF 工作流增强路线图
+# 计划：PDF 工作流增强路线图
 
 ## 背景
 
@@ -8,9 +8,62 @@
 
 ## 事实源职责
 
-本文档是 PDF 工作流增强路线图的事实源，记录阶段划分、目标、依赖和完成条件。
+本文档是 `pdf-workflow-enhancement-roadmap` 的实施细节事实源，记录阶段划分、目标、依赖和完成条件。
 
-计划状态、依赖和证据索引以 [PLAN_MAP](../PLAN_MAP.md) 为准。各阶段专项计划 `docs/plans/*.md` 是实施细节事实源。
+计划状态、依赖、替代/合并/废弃关系、推荐顺序、当前阻塞项和证据索引以 [PLAN_MAP](../PLAN_MAP.md) 为准。各阶段专项计划 `docs/plans/*.md` 是实施细节事实源。
+
+## 目标
+
+- 补齐豆包四层架构中当前项目未覆盖的能力：拆分式 MCP 工具（第 4 层）、语义索引与检索（第 3 层）、评测体系与多模态增强（第 1 层）。
+- 各阶段产出可独立验收、可与现有流水线集成的最小增量。
+- 不破坏现有 CLI/MCP 契约，所有增强向后兼容。
+
+## 非目标
+
+- 不改变 MinerU 解析引擎本身。
+- 不在当前阶段替换 PDF 文本层抽取方案。
+- 不承诺数据库选型或下游入库接口。
+- 不新增 Python 依赖（向量索引阶段再评估）。
+- P2-P5 不做完整 MCP server 重写，只做增量工具扩展。
+
+## 不变量
+
+- 现有 CLI 脚本签名和 JSON 输出契约不变。
+- `run_pdf_auto` MCP 工具保持向后兼容，拆分工具作为新增工具，不替换现有工具。
+- 原始 PDF、分段结果、合并 Markdown 不被增强工具修改。
+- 同一事实只在本文档或专项计划中定义一次，其他位置通过链接引用。
+
+## 影响模块或文件
+
+P1（已完成）：
+
+- `scripts/pdf-auto`：TOC 修复重构 → `lib/toc_repair.py`
+- `scripts/pdf-extract-data`：TOC 树 section_path 增强
+
+P2（当前阶段）：
+
+- `mcp/server/src/index.ts`：新增 5 个拆分工具
+- `mcp/server/src/tools/`：各工具实现模块（如需拆分）
+- `mcp/README.md`：更新工具契约文档
+- `docs/plans/pdf-workflow-enhancement-roadmap.md`
+
+P3-P5 的候选影响范围见各自阶段描述，实施前再细化。
+
+## 公共契约变化
+
+P1 无公共契约变化（纯重构 + 内部增强，不影响 CLI/MCP 接口）。
+
+P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/README.md#后续扩展工具草案)。现有 `run_pdf_auto` 工具保持不变。
+
+## 阶段路线图
+
+| 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
+|---|---|---|---|---|
+| P1 | 提交未完成改动，清理工作区 | 有两个未提交的脚本改动 | 语法检查通过、detect_changes 低风险、提交成功 | 已完成 |
+| P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 候选 |
+| P3 | 内容检索 + 语义索引 | P2 已完成、有真实输出包样本（如 demo20） | `search_pdf_content` 返回页码/章节/片段、向量索引可检索 | 候选 |
+| P4 | 评测体系 + 多模态增强 | P3 或 P2 已完成、有表格和图片密集型 PDF 样本 | `table_accuracy.csv` 产出、TOC 条目级验证可用、VLM 描述产出 | 候选 |
+| P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
 
 ## 当前基线
 
@@ -34,51 +87,87 @@
 生产评测             ~70%       表格解析精度专项指标
 ```
 
-## 阶段划分
+## 当前阶段：P2 拆分式 MCP 工具
 
-### P1：就近收尾（当前）
+### 范围
 
-**目标**：提交已有未完成改动，清理工作区。
+将单一 `run_pdf_auto` 工具拆分为 5 个独立 MCP 工具：
 
-**范围**：
-- `scripts/pdf-auto`：TOC 修复逻辑提取到 `lib/toc_repair.py`（4 处内联 Python → 模块调用）
-- `scripts/pdf-extract-data`：TOC 树 section_path 增强（`toc_tree.json` → 更准确的章节路径）
-
-**状态**：实施中
-
-### P2：拆分式 MCP 工具
-
-**目标**：将单一 `run_pdf_auto` 工具拆分为 5 个独立工具，支持细粒度编排。
-
-**范围**：
 - `parse_pdf_segmented`：分段解析
 - `validate_segments`：覆盖率验证
 - `rerun_segments`：单段重跑
 - `merge_segments`：合并 Markdown
 - `create_review_report`：生成人工兜底清单
 
-**设计已就绪**：[MCP 接入设计](../../mcp/README.md#后续扩展工具草案) 包含完整的 JSON Schema、输入输出契约和失败模式。
+### 实施步骤
 
-**状态**：候选
+1. 对 `mcp/server/src/index.ts` 执行 GitNexus 影响分析，报告直接调用方和风险级别。
+2. 按 [MCP 接入设计](../../mcp/README.md#后续扩展工具草案) 中的 JSON Schema 实现 5 个工具。
+3. 每个工具通过 `execFile` 调用对应 CLI 脚本（`pdf-seg`、`pdf-validate`、`pdf-rerun`、`pdf-merge` 等），复用现有 JSON 输出模式。
+4. 编译验证：`npm run build` 通过，`tools/list` 返回 6 个工具。
+5. 端到端验证：用 `demo5.pdf` 样本走通每个工具的调用→返回路径。
+6. 更新 `mcp/README.md` 工具契约和运行手册。
+
+### Step 0 证据
+
+**P1 完成证据**：
+
+- 提交 `c227362`：`pdf-auto` TOC 修复重构为 `lib/toc_repair.py`（-381/+104 行），`pdf-extract-data` TOC 树 section_path（+82 行），修复 rerun 分支 `$validate_tmp`→`$validate2_tmp` bug。
+- 语法检查通过（`bash -n`、`python3 -c ast.parse`）。
+- `detect_changes` 风险级别 LOW，无受影响流程。
+- 治理检查通过。
+
+**P2 基线**：
+
+- MCP 工具设计已就绪：[后续扩展工具草案](../../mcp/README.md#后续扩展工具草案)，含 5 个工具的完整 JSON Schema、输入输出契约和失败模式。
+- 对应 CLI 脚本均支持 JSON 输出模式（`PDF_VALIDATE_JSON=1`、`PDF_AUTO_JSON=1`）。
+
+### 验证方式
+
+```bash
+# 编译
+cd mcp/server && npm run build
+
+# 工具列表验证
+node dist/index.js  # 确认 tools/list 包含 run_pdf_auto + 5 个新工具
+
+# 每个工具独立端到端（以 demo5.pdf 为例）
+# parse_pdf_segmented
+# validate_segments / rerun_segments / merge_segments / create_review_report
+# 需确认每个工具在正常参数和错误参数下都能返回预期结构
+
+# 治理检查
+python3 scripts/check_plan_governance.py .
+```
+
+### 完成条件
+
+- [ ] `tools/list` 返回 6 个工具（`run_pdf_auto` + 5 个拆分工具）。
+- [ ] 每个拆分工具的 inputSchema 与 MCP README 设计一致。
+- [ ] 至少一个真实 PDF 样本（如 demo5.pdf）走通全部 5 个拆分工具的完整流程。
+- [ ] 每个工具在非法输入下返回明确错误（PDF 不存在、分段目录缺失等），不抛未捕获异常。
+- [ ] `run_pdf_auto` 行为不变（向后兼容）。
+- [ ] TypeScript 编译通过，`npm run build` 无错误。
+- [ ] 治理检查通过。
+
+## P3-P5 后续阶段（粗粒度）
 
 ### P3：内容检索 + 语义索引
 
-**目标**：补齐豆包第 3 层"向量+关键词双索引"和第 4 层"检索工具"。
-
 **范围**：
+
 - `search_pdf_content` MCP 工具：基于关键词检索已解析内容（Markdown + CSV），返回页码/章节/原文片段
-- 向量索引：对合并 Markdown 分段建 embedding，支持语义检索（可选轻量方案：ChromaDB 或 SQLite + sqlite-vec）
+- 向量索引：对合并 Markdown 分段建 embedding，支持语义检索（候选方案：ChromaDB 或 SQLite + sqlite-vec）
 - `read_page` MCP 工具：按页码读取 Markdown 片段
 
 **状态**：候选
 
 ### P4：评测体系 + 多模态增强
 
-**目标**：补齐评测短板和第 1 层多模态缺口。
-
 **范围**：
+
 - 表格解析精度专项评测（参照 TEDS 指标，产出 `data/table_accuracy.csv`）
-- TOC 条目级验证（`toc_entries` JSON 扩展，`coverage-validation-optimization.md:181-240` 已设计）
+- TOC 条目级验证（`toc_entries` JSON 扩展，设计见 `coverage-validation-optimization.md:181-240`）
 - 多模态图表理解（对 `image_or_sparse` 页调用 VLM 做视觉理解，产出结构化描述）
 
 **状态**：候选
@@ -95,15 +184,39 @@
 ## 依赖关系
 
 ```
-P1（收尾） → P2（MCP 拆分） → P3（检索+索引） → P4（评测+多模态）
+P1（收尾）→ P2（MCP 拆分）→ P3（检索+索引）→ P4（评测+多模态）
                                     ↘ P5（远期）
 ```
 
-P2 不依赖 P3，但 P3 的检索工具体验依赖 P2 的拆分式工具基础。P2/P3/P4 可部分并行。
+P2 不依赖 P3，但 P3 的检索工具体验依赖 P2 的拆分式工具基础。P3 和 P4 可部分并行。
 
-## 非目标
+## 未决问题
 
-- 不改变 MinerU 解析引擎本身
-- 不在当前阶段替换 PDF 文本层抽取方案
-- 不承诺数据库选型或下游入库接口
-- 不新增 Python 依赖（向量索引阶段再评估）
+| 问题 | 推荐方案 | 是否阻塞当前阶段 | 状态 |
+|---|---|---|---|
+| P2 是否需要拆分 tools/ 目录 | 初期单文件实现，等工具数 ≥6 再拆分 | 否 | 已记录 |
+| 向量索引选型（ChromaDB vs sqlite-vec） | P3 阶段 0 评估，优先选无服务依赖的方案 | 否 | 已延后 |
+| 多模态 VLM 选型（Claude Vision vs 本地模型） | P4 阶段 0 评估，取决于成本和精度要求 | 否 | 已延后 |
+| `pdf-auto` 的 `--rerun-only` 模式是否存在 | 已确认：`scripts/pdf-rerun` 已实现独立重跑+合并功能，可作为 `rerun_segments` MCP 工具的后端 | 否 | 已解决 |
+
+## 风险和回滚
+
+风险：
+
+- P2 新增工具可能让 MCP server 启动变慢；初期影响可忽略（<Node.js 加载 5 个工具注册的开销）。
+- 拆分式工具如果 CLI 封装不完整，可能导致行为与 `run_pdf_auto` 不一致。
+- P3 向量索引引入新依赖，可能与现有 venv 冲突。
+- P4 VLM 调用增加外部 API 成本和延迟。
+
+回滚：
+
+- P2 拆分工具作为新增，不删除 `run_pdf_auto`；如有问题可仅移除拆分工具。
+- P3 索引产物写入 `<package>/data/index/`，不影响现有输出包。
+- 各阶段产物独立，可单独回滚而不影响其他阶段。
+
+## 关联 ADR、迁移、spec 或 issue
+
+- [ADR 0001：先 CLI 固化，再 MCP 接入](../adr/0001-cli-first-mcp-ready.md)
+- [MCP 接入设计](../../mcp/README.md) — P2 工具契约事实源
+- [自动化 PDF 解析流水线计划](automated-pdf-pipeline.md) — P1-P5 均依赖其 CLI 契约
+- [覆盖率验证口径优化计划](coverage-validation-optimization.md) — TOC 条目级验证设计（P4）
