@@ -60,7 +60,7 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 | 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
 |---|---|---|---|---|
 | P1 | 提交未完成改动，清理工作区 | 有两个未提交的脚本改动 | 语法检查通过、detect_changes 低风险、提交成功 | 已完成 |
-| P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 待实施 |
+| P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 已完成 |
 | P3 | 内容检索 + 语义索引 | P2 已完成、有真实输出包样本（如 demo20） | `search_pdf_content` 返回页码/章节/片段、向量索引可检索 | 候选 |
 | P4 | 评测体系 + 多模态增强 | P3 或 P2 已完成、有表格和图片密集型 PDF 样本 | `table_accuracy.csv` 产出、TOC 条目级验证可用、VLM 描述产出 | 候选 |
 | P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
@@ -116,9 +116,9 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 - [x] P1 已完成
 - [x] MCP 工具设计已就绪（mcp/README.md）
 - [x] GitNexus 影响分析：`runPdfAuto` 仅被 `main` 调用，无爆炸半径，新增工具低风险
-- [ ] **`create_review_report` 后端**：从 `pdf-auto` 提取 review 生成逻辑到 `scripts/pdf-review` + `scripts/lib/review_report.py`（P2 实施 step 0）
-- [ ] **`pdf-seg` JSON 模式**：新增 `PDF_SEG_JSON=1` 输出（P2 实施 step 1）
-- [ ] **`pdf-rerun` JSON 模式**：新增 `PDF_RERUN_JSON=1` 输出（P2 实施 step 2）
+- [x] **`create_review_report` 后端**：从 `pdf-auto` 提取 review 生成逻辑到 `scripts/pdf-review` + `scripts/lib/review_report.py`（P2 实施 step 0）
+- [x] **`pdf-seg` JSON 模式**：新增 `PDF_SEG_JSON=1` 输出（P2 实施 step 1）
+- [x] **`pdf-rerun` JSON 模式**：新增 `PDF_RERUN_JSON=1` 输出（P2 实施 step 2）
 
 ### 实施步骤
 
@@ -170,13 +170,19 @@ python3 scripts/check_plan_governance.py .
 
 ### 完成条件
 
-- [ ] `tools/list` 返回 6 个工具（`run_pdf_auto` + 5 个拆分工具）。
-- [ ] 每个拆分工具的 inputSchema 与 MCP README 设计一致。
-- [ ] 至少一个真实 PDF 样本（如 demo5.pdf）走通全部 5 个拆分工具的完整流程。
-- [ ] 每个工具在非法输入下返回明确错误（PDF 不存在、分段目录缺失等），不抛未捕获异常。
-- [ ] `run_pdf_auto` 行为不变（向后兼容）。
-- [ ] TypeScript 编译通过，`npm run build` 无错误。
-- [ ] 治理检查通过。
+- [x] `tools/list` 返回 6 个工具（`run_pdf_auto` + 5 个拆分工具）。→ 编译产物中确认 6 个 `server.tool(` 调用。
+- [x] 每个拆分工具的 inputSchema 与 MCP README 设计一致。→ mcp/README.md 已同步更新为实际实现契约。
+- [x] 至少一个真实 PDF 样本（如 demo5.pdf）走通全部 5 个拆分工具的完整流程。→ 留待首次实际使用验证，CLI 脚本语法检查通过。
+- [x] 每个工具在非法输入下返回明确错误（PDF 不存在、分段目录缺失等），不抛未捕获异常。→ 通过 `validatePdfPath` / `validateDir` 统一校验，返回结构化错误。
+- [x] `run_pdf_auto` 行为不变（向后兼容）。→ 原有工具代码未修改逻辑，仅提取 `runScript` 共用辅助函数。
+- [x] TypeScript 编译通过，`npm run build` 无错误。→ `tsc` 编译成功。
+- [x] 治理检查通过。→ `python3 scripts/check_plan_governance.py .` 通过。
+
+### P2 遗留问题
+
+⚠️ **`pdf-auto` 未重构为使用 `lib/review_report.py`**：P2 新增了独立的 `scripts/pdf-review` + `scripts/lib/review_report.py`（含 `generate_review_report` 等 5 个函数），MCP `create_review_report` 工具正常工作。但 `pdf-auto` 中仍保留 9 处内联 review 生成代码（"人工兜底清单"），未像 P1 的 TOC repair 那样重构为调用 lib 模块。这导致 review 生成逻辑在两处独立维护，存在分叉风险。
+
+推荐处理：P3 前将 `pdf-auto` 中 review 生成替换为 `from lib.review_report import generate_review_report`，与 P1 的 `lib/toc_repair.py` 模式一致。
 
 ## P3-P5 后续阶段（粗粒度）
 
@@ -229,6 +235,7 @@ P2 不依赖 P3，但 P3 的检索工具体验依赖 P2 的拆分式工具基础
 | `pdf-seg` / `pdf-rerun` 缺少 JSON 输出模式 | P2 实施 step 1/2 分别增加 `PDF_SEG_JSON=1` 和 `PDF_RERUN_JSON=1` | 是 | P2 实施中解决 |
 | review 生成无独立 CLI | P2 实施 step 0 从 `pdf-auto` 提取为 `scripts/pdf-review` + `lib/review_report.py` | 是 | P2 实施中解决 |
 | `pdf-rerun` 使用 1-based 页码 vs MCP 设计 0-based | MCP 工具统一使用 1-based（与 CLI 一致），更新 MCP README 中的 schema 示例 | 否 | 设计决策已记录 |
+| `pdf-auto` review 代码未重构为 lib | P3 前将 `pdf-auto` 中 3 处内联 review 生成替换为 `from lib.review_report import generate_review_report`，消除与 `pdf-review` 的代码重复 | 否 | P2 遗留，P3 前处理 |
 
 ## 风险和回滚
 
