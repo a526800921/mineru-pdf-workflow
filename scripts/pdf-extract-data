@@ -201,6 +201,61 @@ def build_section_path(line_no: int, sections: list) -> str:
     return " / ".join(path_parts)
 
 
+def load_toc_tree(pkg: Path) -> list | None:
+    """加载 toc_tree.json，不存在时返回 None。"""
+    tree_path = pkg / "toc_tree.json"
+    if not tree_path.exists():
+        return None
+    with open(tree_path) as f:
+        return json.load(f)
+
+
+def build_page_section_map(toc_tree: list) -> dict[int, str]:
+    """构建 {page_num: section_path} 映射。
+
+    每个 TOC 条目覆盖从 page 到下一条目 page-1 的页面范围。
+    """
+    if not toc_tree:
+        return {}
+
+    depth_stack = []  # [(depth, title), ...]
+    paths = []        # [(page, full_path), ...]
+
+    for entry in toc_tree:
+        depth = entry["depth"]
+        title = entry["title"]
+        page = entry["page"]
+
+        while depth_stack and depth_stack[-1][0] >= depth:
+            depth_stack.pop()
+
+        depth_stack.append((depth, title))
+        full_path = " / ".join(t for _, t in depth_stack)
+        paths.append((page, full_path))
+
+    page_map = {}
+    for i, (page, path) in enumerate(paths):
+        next_page = paths[i + 1][0] if i + 1 < len(paths) else 999999
+        for p in range(page, next_page):
+            page_map[p] = path
+
+    return page_map
+
+
+def get_section_path(line_no: int, sections: list, page_start: str,
+                     page_section_map: dict[int, str] | None) -> str:
+    """获取 section_path：优先用 TOC 树（按页码），回退到 Markdown 标题。"""
+    if page_section_map:
+        try:
+            p = int(page_start)
+        except (ValueError, TypeError):
+            p = 0
+        toc_path = page_section_map.get(p, "")
+        if toc_path:
+            return toc_path
+    return build_section_path(line_no, sections)
+
+
 def extract_unit(value: str) -> tuple[str, str]:
     """从 value 尾部提取单位，返回 (value_without_unit, unit)."""
     m = UNIT_RE.search(value)
@@ -225,7 +280,8 @@ def is_valid_colon_line(key: str, value: str) -> bool:
 
 
 def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str,
-                       page_map: dict, counters: dict) -> list:
+                       page_map: dict, counters: dict,
+                       page_section_map: dict | None = None) -> list:
     rows = []
     for line in md_text.split("\n"):
         line_orig = line.strip()
@@ -386,7 +442,8 @@ def guess_value_col_idx(headers: list, rows: list) -> int:
 
 
 def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
-                           page_map: dict, counters: dict) -> list:
+                           page_map: dict, counters: dict,
+                           page_section_map: dict | None = None) -> list:
     rows = []
     tables = parse_html_tables(md_text)
     parent_maps = build_html_parent_maps(md_text)
@@ -424,7 +481,7 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                     break
 
             pg_start, pg_end = get_page_range(line_no, page_map)
-            sec_path = build_section_path(line_no, sections)
+            sec_path = get_section_path(line_no, sections, pg_start, page_section_map)
 
             # parent_key：优先 rowspan 父级，其次旧的首列重复检测
             parent_key = rowspan_parents.get(row_idx, "")
@@ -459,7 +516,8 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
 
 
 def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
-                         page_map: dict, counters: dict) -> list:
+                         page_map: dict, counters: dict,
+                         page_section_map: dict | None = None) -> list:
     rows = []
     lines = md_text.split("\n")
     MD_TABLE_SEP = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
@@ -484,7 +542,7 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
                         clean_val, unit = extract_unit(value)
                         line_no = i + 1
                         pg_start, pg_end = get_page_range(line_no, page_map)
-                        sec_path = build_section_path(line_no, sections)
+                        sec_path = get_section_path(line_no, sections, pg_start, page_section_map)
                         row_idx += 1
                         # 保守 parent_key：首列与其他行首列不同且非数字时可能为父级
                         parent_key = ""
@@ -730,6 +788,20 @@ def main():
     # 用 PDF 文本层精确定位每行的页码（替代页段级 page_start/page_end）
     pdf_path = pkg / manifest.get("files", {}).get("pdf", f"{model}.pdf")
     refine_page_numbers(draft_rows, pdf_path)
+
+    # TOC 树 section_path 二次修正（依赖精确定位后的 page_start）
+    toc_tree = load_toc_tree(pkg)
+    if toc_tree:
+        page_section_map = build_page_section_map(toc_tree)
+        updated = 0
+        for row in draft_rows:
+            pg = row.get("page_start", "")
+            toc_path = get_section_path(0, [], pg, page_section_map)
+            if toc_path:
+                row["section_path"] = toc_path
+                updated += 1
+        if updated:
+            print(f"  TOC section_path 修正: {updated}/{len(draft_rows)} 行", file=sys.stderr)
 
     draft_path = pkg / "data" / "quick_lookup_draft.csv"
     write_csv(draft_path, fields, draft_rows)
