@@ -92,14 +92,40 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 
 ### 范围
 
-将合并 Markdown 按 `<!-- pages N-M -->` 锚点分段，清洗 Markdown 语法后导出为下游可向量化的纯文本块。不引入 embedding 模型或向量数据库，只做数据准备。
+将合并 Markdown 预处理为下游可直接向量化的纯文本块。不引入 embedding 模型或向量数据库，只做数据准备。
+
+预处理规范对齐 [motorcycle-manual-app PC 端构建流程](../../motorcycle-manual-app/ios-agent-方案设计.md#10-pc-端构建流程)（第 10 节），确保产出可直接输入其 build pipeline。
 
 - `scripts/pdf-export-chunks`（需新建）：导出 `data/chunks.jsonl`
+- `scripts/lib/chunk_utils.py`（需新建）：chunk 预处理核心逻辑（切分、表格展开、图片替换、token 裁剪）
 - MCP `export_chunks`（可选）：封装上述脚本
 
 ### 设计原理
 
-不同项目对 embedding 模型和向量存储的选择不同（sentence-transformers / OpenAI / Voyage + ChromaDB / Milvus / pgvector）。本阶段只做**向量化前置准备**——产出结构化、去格式化的纯文本块，下游项目按需建索引。
+不同项目对 embedding 模型和向量存储的选择不同。本阶段只做**向量化前置准备**——产出结构化纯文本块，下游项目按需建索引。
+
+### Chunk 策略（对齐 motor-app §10）
+
+```
+合并 Markdown
+  │
+  ├─ 1. 按 ## 标题切分 chunk（语义小节粒度，非固定页段）
+  │     · 单 chunk 上限 384 token（约 200-256 字，为 BGE 512 token 上限留余量）
+  │     · 章节超限时按 ### 三级标题或段落继续切分
+  │     · 相邻 chunk 保留 1-2 句 overlap，避免语义断裂
+  │
+  ├─ 2. 表格 → 自然语言展开（规则转换，不调 LLM）
+  │     · | 机油容量 | 5.25L |  →  "机油容量：5.25L"
+  │     · | 最大净功率 | 11.8 Kw |  →  "最大净功率：11.8 Kw"
+  │
+  ├─ 3. 图片占位符 → 文字标注
+  │     · ![](oil-level.png)  →  [示意图：机油尺刻度位置]
+  │     · 标注由人工或后续阶段补充，当前用文件名作为占位
+  │
+  ├─ 4. 清洗 Markdown 标记（##、**、HTML 标签等）
+  │
+  └─ 5. 导出 chunks.jsonl
+```
 
 ### 输出契约
 
@@ -107,23 +133,21 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 
 ```json
 {
-  "chunk_id": "春风 150AURA@p0001-0008@0",
-  "page_start": 1,
-  "page_end": 8,
-  "section_path": "150 AURA 使用说明书 / 前言",
-  "text": "感谢您购买 CFMOTO 品牌旗下的车辆...",
-  "token_count": 382
+  "id": "春风 150AURA@seq_003",
+  "content": "序列号\n车架号：XXXXXX\n发动机号：XXXXXX\n车辆铭牌位于车架管右侧。（第12-14页）",
+  "page": "12-14",
+  "section": "序列号",
+  "token_count": 42
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `chunk_id` | string | 唯一标识，格式 `<model>@<page_range>@<seq>` |
-| `page_start` | int | 起始 PDF 页码（1-based） |
-| `page_end` | int | 结束 PDF 页码 |
-| `section_path` | string | 章节路径（从 TOC 树或 Markdown 标题推导） |
-| `text` | string | 纯文本内容（已去除 Markdown 标记） |
-| `token_count` | int | 中文字数估算（中文按单字、英文按空格分词） |
+| `id` | string | 唯一标识，格式 `<model>@seq_NNN` |
+| `content` | string | 纯文本内容（已去 Markdown 标记、表格已展开、图片已替换） |
+| `page` | string | 页码范围，如 `"12-14"`（1-based） |
+| `section` | string | 所属 `##` 标题 |
+| `token_count` | int | 中文字数（中文按单字、英文按空格分词） |
 
 ### CLI-to-MCP 映射
 
@@ -134,29 +158,29 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 ### 前置条件
 
 - [x] P3a 已完成（`read_page` + `search_pdf_content` 可用）
-- [x] 有完整输出包样本：春风 150AURA（3212 行 Markdown）
+- [x] 有完整输出包样本：春风 150AURA（3212 行 Markdown，含 ## 标题和 HTML 表格）
+- [x] 下游 chunk 规范已对齐（[motor-app §10](../../motorcycle-manual-app/ios-agent-方案设计.md#10-pc-端构建流程)）
+- [ ] `scripts/lib/chunk_utils.py` 新建
 - [ ] `scripts/pdf-export-chunks` 新建
 
 ### 实施步骤
 
-1. **Markdown 纯文本清洗**：`scripts/lib/text_utils.py`（如需），去除 Markdown 标记（`##`、`**`、`|`、HTML 标签等），保留中文和数字内容。
-2. **`scripts/pdf-export-chunks`**：读取合并 Markdown，按 `<!-- pages N-M -->` 分段，每段清洗并输出到 `data/chunks.jsonl`。
+1. **`scripts/lib/chunk_utils.py`**：实现 5 项预处理逻辑——标题切分 + token 上限裁剪（含 overlap）、表格展开、图片替换、Markdown 清洗。
+2. **`scripts/pdf-export-chunks`**：读取合并 Markdown + `manifest.json`（取 model 名），调用 chunk_utils，输出 `data/chunks.jsonl`。
 3. **MCP `export_chunks`**（可选）：在 `mcp/server/src/index.ts` 中注册，通过 `runScript` 调用 CLI。
 4. **编译 + 工具列表验证**：确认 tools/list 返回 9 个工具（8 旧 + 1 新）。
-5. **端到端验证**：用春风 150AURA 输出包验证 chunk 数量、字段完整性和文本清洗质量。
+5. **端到端验证**：用春风 150AURA 验证 chunk 切分粒度、表格展开质量、token 上限合规。
 6. **更新文档**：同步 `mcp/README.md`。
 
 ### Step 0 证据
 
 **P3a 完成证据**：
 - 提交 `0fc6e19`：P3a 关键词检索 + 按页读取，8 个 MCP 工具。
-- exitCode 校验缺陷已修复。
-- 治理检查通过。
 
 **P3b 基线**：
-- 合并 Markdown 结构已核实：`<!-- pages N-M -->` 锚点按 8 页间隔分段
-- 春风 150AURA：~18 个段，3212 行
-- 无需新增依赖
+- 合并 Markdown 结构已核实：春风 150AURA 含 ##/### 标题、HTML table、图片引用
+- 下游规范已对齐：[motor-app §10 chunk 预处理](../../motorcycle-manual-app/ios-agent-方案设计.md#10-pc-端构建流程)
+- 无需新增依赖（表格展开为纯规则，无 LLM 调用）
 
 ### 验证方式
 
@@ -172,10 +196,18 @@ with open('pdf/春风 150AURA/data/chunks.jsonl') as f:
 print(f'chunks: {len(chunks)}')
 c = chunks[0]
 print(f'fields: {sorted(c.keys())}')
-print(f'chunk_id: {c[\"chunk_id\"]}')
-print(f'pages: {c[\"page_start\"]}-{c[\"page_end\"]}')
-print(f'text_len: {len(c[\"text\"])} chars')
+print(f'id: {c[\"id\"]}')
+print(f'page: {c[\"page\"]}')
+print(f'section: {c[\"section\"]}')
 print(f'token_count: {c[\"token_count\"]}')
+print(f'content_preview: {c[\"content\"][:120]}')
+# 验证无残留标记
+import re
+for c in chunks:
+    assert '##' not in c['content'], f'{c[\"id\"]}: 残留 ##'
+    assert '<td>' not in c['content'], f'{c[\"id\"]}: 残留 HTML'
+    assert c['token_count'] <= 384, f'{c[\"id\"]}: token {c[\"token_count\"]} 超 384'
+print('全部通过: 无残留 Markdown/HTML, token 上限合规')
 "
 
 # MCP 编译
@@ -188,12 +220,14 @@ python3 scripts/check_plan_governance.py .
 ### 完成条件
 
 - [ ] `data/chunks.jsonl` 产出，每行有效 JSON
-- [ ] 每个 chunk 含 6 个字段：`chunk_id`、`page_start`、`page_end`、`section_path`、`text`、`token_count`
-- [ ] `chunk_id` 格式为 `<model>@<page_range>@<seq>`
-- [ ] `text` 已去除 Markdown 标记（无 `##`、`**`、`<td>` 等）
-- [ ] `token_count` 估算合理（中文按单字计数）
-- [ ] 春风 150AURA 样本产出约 18 个 chunk
-- [ ] 非法输入（不存在的目录、无合并 Markdown）返回明确错误
+- [ ] 每个 chunk 含 5 个字段：`id`、`content`、`page`、`section`、`token_count`
+- [ ] `id` 格式为 `<model>@seq_NNN`
+- [ ] `content` 无残留 Markdown 标记（`##`、`**`）和 HTML 标签（`<td>`、`<tr>`）
+- [ ] HTML 表格数据已展开为自然语言键值对（"机油容量：5.25L"）
+- [ ] `token_count` ≤ 384（BGE 512 上限留余量）
+- [ ] 超限章节已按 ### 或段落再切分
+- [ ] 相邻 chunk 有 1-2 句 overlap
+- [ ] 非法输入返回明确错误
 - [ ] TypeScript 编译通过（如新增 MCP 工具）
 - [ ] 治理检查通过
 
