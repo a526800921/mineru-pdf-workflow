@@ -60,7 +60,7 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 | 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
 |---|---|---|---|---|
 | P1 | 提交未完成改动，清理工作区 | 有两个未提交的脚本改动 | 语法检查通过、detect_changes 低风险、提交成功 | 已完成 |
-| P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 候选 |
+| P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 待实施 |
 | P3 | 内容检索 + 语义索引 | P2 已完成、有真实输出包样本（如 demo20） | `search_pdf_content` 返回页码/章节/片段、向量索引可检索 | 候选 |
 | P4 | 评测体系 + 多模态增强 | P3 或 P2 已完成、有表格和图片密集型 PDF 样本 | `table_accuracy.csv` 产出、TOC 条目级验证可用、VLM 描述产出 | 候选 |
 | P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
@@ -99,14 +99,36 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 - `merge_segments`：合并 Markdown
 - `create_review_report`：生成人工兜底清单
 
+### CLI-to-MCP 映射
+
+5 个拆分工具各对应一个已有 CLI 脚本：
+
+| MCP 工具 | CLI 后端 | JSON 模式 | 备注 |
+|---|---|---|---|
+| `parse_pdf_segmented` | `scripts/pdf-seg` | 需新增 `PDF_SEG_JSON=1` | 当前无 JSON 输出，需仿照 `pdf-validate` 增加 |
+| `validate_segments` | `scripts/pdf-validate` | `PDF_VALIDATE_JSON=1` ✅ | 已有完整 JSON 输出 |
+| `rerun_segments` | `scripts/pdf-rerun` | 需新增 `PDF_RERUN_JSON=1` | 当前无 JSON 输出；CLI 使用 1-based 页码，MCP 设计需对齐 |
+| `merge_segments` | `scripts/pdf-merge` | 无需 JSON（输出文件路径即可） | 简单工具 |
+| `create_review_report` | `scripts/pdf-review` | **需新建脚本** | review 生成逻辑当前内联在 `pdf-auto` 中，P2 实施前需提取为独立脚本 + `lib/review_report.py` |
+
+### 前置条件
+
+- [x] P1 已完成
+- [x] MCP 工具设计已就绪（mcp/README.md）
+- [x] GitNexus 影响分析：`runPdfAuto` 仅被 `main` 调用，无爆炸半径，新增工具低风险
+- [ ] **`create_review_report` 后端**：从 `pdf-auto` 提取 review 生成逻辑到 `scripts/pdf-review` + `scripts/lib/review_report.py`（P2 实施 step 0）
+- [ ] **`pdf-seg` JSON 模式**：新增 `PDF_SEG_JSON=1` 输出（P2 实施 step 1）
+- [ ] **`pdf-rerun` JSON 模式**：新增 `PDF_RERUN_JSON=1` 输出（P2 实施 step 2）
+
 ### 实施步骤
 
-1. 对 `mcp/server/src/index.ts` 执行 GitNexus 影响分析，报告直接调用方和风险级别。
-2. 按 [MCP 接入设计](../../mcp/README.md#后续扩展工具草案) 中的 JSON Schema 实现 5 个工具。
-3. 每个工具通过 `execFile` 调用对应 CLI 脚本（`pdf-seg`、`pdf-validate`、`pdf-rerun`、`pdf-merge` 等），复用现有 JSON 输出模式。
-4. 编译验证：`npm run build` 通过，`tools/list` 返回 6 个工具。
-5. 端到端验证：用 `demo5.pdf` 样本走通每个工具的调用→返回路径。
-6. 更新 `mcp/README.md` 工具契约和运行手册。
+1. **提取 review 生成模块**：将 `pdf-auto` 中 3 处内联 review 生成 Python 提取到 `scripts/lib/review_report.py`，创建 `scripts/pdf-review` CLI 入口。
+2. **给 `pdf-seg` 增加 JSON 模式**：仿照 `pdf-validate` 的 `PDF_VALIDATE_JSON=1` 模式，新增 `PDF_SEG_JSON=1`，输出分段名、页码范围、状态。
+3. **给 `pdf-rerun` 增加 JSON 模式**：新增 `PDF_RERUN_JSON=1`，输出重跑段名和状态。
+4. **MCP 端实现 5 个工具**：在 `mcp/server/src/index.ts` 中新增工具注册，每个工具通过 `spawn` 调用对应 CLI 脚本，复用现有 `validateInputs`/`parseCliOutput`/`formatOutput` 模式。`pdf-rerun` 的页码参数统一为 1-based（与 CLI 一致）。
+5. **编译 + 工具列表验证**：`npm run build`，确认 `tools/list` 返回 6 个工具。
+6. **端到端验证**：用 `demo5.pdf` 走通全部 5 个工具的调用→返回路径（正常 + 错误输入）。
+7. **更新 MCP 文档**：同步 `mcp/README.md` 工具契约、运行手册和排障清单。
 
 ### Step 0 证据
 
@@ -117,10 +139,16 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 - `detect_changes` 风险级别 LOW，无受影响流程。
 - 治理检查通过。
 
-**P2 基线**：
+**P2 基线（2026-07-07）**：
 
 - MCP 工具设计已就绪：[后续扩展工具草案](../../mcp/README.md#后续扩展工具草案)，含 5 个工具的完整 JSON Schema、输入输出契约和失败模式。
-- 对应 CLI 脚本均支持 JSON 输出模式（`PDF_VALIDATE_JSON=1`、`PDF_AUTO_JSON=1`）。
+- CLI 脚本现状核实：
+  - `pdf-seg` ✅ 存在，无 JSON 输出（需新增 `PDF_SEG_JSON=1`）
+  - `pdf-validate` ✅ 存在，`PDF_VALIDATE_JSON=1` 已就绪
+  - `pdf-rerun` ✅ 存在，无 JSON 输出（需新增 `PDF_RERUN_JSON=1`），使用 1-based 页码
+  - `pdf-merge` ✅ 存在，简单工具无需 JSON
+  - review 生成 ❌ 无独立 CLI（需从 `pdf-auto` 提取）
+- GitNexus 影响分析：`runPdfAuto` 仅被 `main` 调用，无外部依赖，新增工具风险 LOW。
 
 ### 验证方式
 
@@ -198,6 +226,9 @@ P2 不依赖 P3，但 P3 的检索工具体验依赖 P2 的拆分式工具基础
 | 向量索引选型（ChromaDB vs sqlite-vec） | P3 阶段 0 评估，优先选无服务依赖的方案 | 否 | 已延后 |
 | 多模态 VLM 选型（Claude Vision vs 本地模型） | P4 阶段 0 评估，取决于成本和精度要求 | 否 | 已延后 |
 | `pdf-auto` 的 `--rerun-only` 模式是否存在 | 已确认：`scripts/pdf-rerun` 已实现独立重跑+合并功能，可作为 `rerun_segments` MCP 工具的后端 | 否 | 已解决 |
+| `pdf-seg` / `pdf-rerun` 缺少 JSON 输出模式 | P2 实施 step 1/2 分别增加 `PDF_SEG_JSON=1` 和 `PDF_RERUN_JSON=1` | 是 | P2 实施中解决 |
+| review 生成无独立 CLI | P2 实施 step 0 从 `pdf-auto` 提取为 `scripts/pdf-review` + `lib/review_report.py` | 是 | P2 实施中解决 |
+| `pdf-rerun` 使用 1-based 页码 vs MCP 设计 0-based | MCP 工具统一使用 1-based（与 CLI 一致），更新 MCP README 中的 schema 示例 | 否 | 设计决策已记录 |
 
 ## 风险和回滚
 
