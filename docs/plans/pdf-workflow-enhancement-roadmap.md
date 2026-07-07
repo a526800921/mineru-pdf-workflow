@@ -62,7 +62,7 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 | P1 | 提交未完成改动，清理工作区 | 有两个未提交的脚本改动 | 语法检查通过、detect_changes 低风险、提交成功 | 已完成 |
 | P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 已完成 |
 | P3a | 关键词检索 + 按页读取（无新依赖） | P2 已完成、有完整输出包样本（春风 150AURA） | `search_pdf_content` 返回页码/章节/原文片段、`read_page` 返回指定页 Markdown | 已完成 |
-| P3b | 向量索引 + 语义检索 | P3a 已完成、确定向量存储和 embedding 方案 | 语义检索端到端可用、检索质量可量化 | 候选 |
+| P3b | 向量化前置准备（无新依赖） | P3a 已完成 | `<package>/data/chunks.jsonl` 产出、每块含页码/章节/纯文本/字数 | 待实施 |
 | P4 | 评测体系 + 多模态增强 | P3a 或 P2 已完成、有表格和图片密集型 PDF 样本 | `table_accuracy.csv` 产出、TOC 条目级验证可用、VLM 描述产出 | 候选 |
 | P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
 
@@ -88,188 +88,116 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 生产评测             ~70%       表格解析精度专项指标
 ```
 
-## 当前阶段：P3a 关键词检索 + 按页读取
+## 当前阶段：P3b 向量化前置准备
 
 ### 范围
 
-新增 2 个 MCP 工具，补齐豆包第 3 层"关键词检索"和第 4 层"读页"能力：
+将合并 Markdown 按 `<!-- pages N-M -->` 锚点分段，清洗 Markdown 语法后导出为下游可向量化的纯文本块。不引入 embedding 模型或向量数据库，只做数据准备。
 
-- `search_pdf_content`：关键词检索已解析内容（合并 Markdown + quick_lookup_draft.csv），返回页码/章节/原文片段
-- `read_page`：按 PDF 页码读取合并 Markdown 中对应片段
+- `scripts/pdf-export-chunks`（需新建）：导出 `data/chunks.jsonl`
+- MCP `export_chunks`（可选）：封装上述脚本
 
-P3a 不引入任何新依赖，纯基于现有输出包文件的文本检索。
+### 设计原理
 
-### 检索面
+不同项目对 embedding 模型和向量存储的选择不同（sentence-transformers / OpenAI / Voyage + ChromaDB / Milvus / pgvector）。本阶段只做**向量化前置准备**——产出结构化、去格式化的纯文本块，下游项目按需建索引。
 
-两个数据源覆盖不同类型的查询：
+### 输出契约
 
-| 数据源 | 文件 | 格式 | 内容 |
-|---|---|---|---|
-| 合并 Markdown | `<package>/<stem>.md` | `<!-- pages N-M -->` 页锚 + 正文 | 全文段落、标题、表格文本 |
-| 结构化草案 | `<package>/data/quick_lookup_draft.csv` | 16 字段 CSV | 键值对、规格参数、章节路径、证据文本、页码 |
+`<package>/data/chunks.jsonl`，每行一个 JSON 对象：
+
+```json
+{
+  "chunk_id": "春风 150AURA@p0001-0008@0",
+  "page_start": 1,
+  "page_end": 8,
+  "section_path": "150 AURA 使用说明书 / 前言",
+  "text": "感谢您购买 CFMOTO 品牌旗下的车辆...",
+  "token_count": 382
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `chunk_id` | string | 唯一标识，格式 `<model>@<page_range>@<seq>` |
+| `page_start` | int | 起始 PDF 页码（1-based） |
+| `page_end` | int | 结束 PDF 页码 |
+| `section_path` | string | 章节路径（从 TOC 树或 Markdown 标题推导） |
+| `text` | string | 纯文本内容（已去除 Markdown 标记） |
+| `token_count` | int | 中文字数估算（中文按单字、英文按空格分词） |
 
 ### CLI-to-MCP 映射
 
 | MCP 工具 | CLI 后端 | 说明 |
 |---|---|---|
-| `read_page` | `scripts/pdf-read-page`（需新建） | 按页码或页码范围从合并 Markdown 提取文本 |
-| `search_pdf_content` | `scripts/pdf-search-content`（需新建） | 关键词搜索 Markdown + CSV，返回统一结果 |
+| `export_chunks` | `scripts/pdf-export-chunks`（需新建） | 导出 chunks.jsonl |
 
 ### 前置条件
 
-- [x] P2 已完成（6 个 MCP 工具就绪）
-- [x] 有完整输出包样本：春风 150AURA（3212 行 Markdown + 390 行 CSV）
-- [x] `scripts/pdf-read-page` 新建
-- [x] `scripts/pdf-search-content` 新建
+- [x] P3a 已完成（`read_page` + `search_pdf_content` 可用）
+- [x] 有完整输出包样本：春风 150AURA（3212 行 Markdown）
+- [ ] `scripts/pdf-export-chunks` 新建
 
 ### 实施步骤
 
-1. **`scripts/pdf-read-page`**：Python 脚本，读合并 Markdown，按 `<!-- pages N-M -->` 锚点定位页码范围，输出该段 Markdown 文本。若合并 Markdown 不存在，从 `segments/` 目录按分段名查找。
-2. **`scripts/pdf-search-content`**：Python 脚本，对合并 Markdown + `quick_lookup_draft.csv` 做关键词匹配，返回统一结果列表（含来源、页码、章节、原文片段）。
-3. **MCP 端实现 2 个工具**：在 `mcp/server/src/index.ts` 中新增 `read_page` 和 `search_pdf_content`，通过 `runScript` 调用对应 CLI。输入校验复用 `validateDir`。
-4. **编译 + 工具列表验证**：`npm run build`，确认 `tools/list` 返回 8 个工具（6 旧 + 2 新）。
-5. **端到端验证**：用春风 150AURA 输出包走通两个工具的调用→返回路径（正常 + 错误输入）。
-6. **更新 MCP 文档**：同步 `mcp/README.md`。
-
-### 工具契约设计
-
-#### `read_page`
-
-输入：
-
-```json
-{
-  "package_dir": "/abs/path/pdf/春风 150AURA",
-  "page": 14
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `package_dir` | string | 是 | 输出包根目录（含 `<stem>.md` 和 `segments/`） |
-| `page` | number | 是 | PDF 页码（1-based），会定位到包含该页的 `<!-- pages N-M -->` 段 |
-| `page_end` | number | 否 | 结束页码，指定后返回连续多段的 Markdown |
-
-输出：
-
-```json
-{
-  "status": "completed",
-  "page": 14,
-  "page_start": 9,
-  "page_end": 16,
-  "section_path": "150 AURA 使用说明书 / 序列号",
-  "markdown": "## 序列号\n\n| 项目 | 规格 |\n| ..."
-}
-```
-
-失败模式：输出包目录不存在、合并 Markdown 不存在且无分段目录、页码超出范围。
-
-#### `search_pdf_content`
-
-输入：
-
-```json
-{
-  "package_dir": "/abs/path/pdf/春风 150AURA",
-  "query": "最大净功率",
-  "max_results": 10,
-  "source": "all"
-}
-```
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `package_dir` | string | 是 | 输出包根目录 |
-| `query` | string | 是 | 搜索关键词（支持空格分隔的多个词） |
-| `max_results` | number | 否 | 最大返回数，默认 10 |
-| `source` | enum | 否 | `all` / `markdown` / `csv`，默认 `all` |
-
-输出：
-
-```json
-{
-  "status": "completed",
-  "query": "最大净功率",
-  "total_matches": 3,
-  "results": [
-    {
-      "source": "csv",
-      "key": "最大净功率",
-      "value": "11.8 Kw / 8500",
-      "unit": "rpm",
-      "page_start": 14,
-      "page_end": 14,
-      "section_path": "150 AURA 使用说明书 / 序列号",
-      "evidence_text": "最大净功率: 11.8 Kw / 8500 rpm",
-      "confidence": "medium"
-    },
-    {
-      "source": "markdown",
-      "page_start": 14,
-      "page_end": 14,
-      "section_path": "150 AURA 使用说明书 / 序列号",
-      "snippet": "最大净功率 11.8 Kw / 8500 rpm..."
-    }
-  ]
-}
-```
+1. **Markdown 纯文本清洗**：`scripts/lib/text_utils.py`（如需），去除 Markdown 标记（`##`、`**`、`|`、HTML 标签等），保留中文和数字内容。
+2. **`scripts/pdf-export-chunks`**：读取合并 Markdown，按 `<!-- pages N-M -->` 分段，每段清洗并输出到 `data/chunks.jsonl`。
+3. **MCP `export_chunks`**（可选）：在 `mcp/server/src/index.ts` 中注册，通过 `runScript` 调用 CLI。
+4. **编译 + 工具列表验证**：确认 tools/list 返回 9 个工具（8 旧 + 1 新）。
+5. **端到端验证**：用春风 150AURA 输出包验证 chunk 数量、字段完整性和文本清洗质量。
+6. **更新文档**：同步 `mcp/README.md`。
 
 ### Step 0 证据
 
-**P2 完成证据**：
-- 提交 `5b61c77`：P2 拆分式 MCP 工具 + review 遗留修复。
-- 6 个 MCP 工具 + 2 个新 CLI JSON 模式 + `lib/review_report.py` 提取。
-- 端到端验收通过（all_passed + needs_review 两条路径）。
+**P3a 完成证据**：
+- 提交 `0fc6e19`：P3a 关键词检索 + 按页读取，8 个 MCP 工具。
+- exitCode 校验缺陷已修复。
 - 治理检查通过。
 
-**P3a 基线（2026-07-08）**：
-- 输出包检索面已核实：
-  - 春风 150AURA：合并 Markdown 3212 行，`<!-- pages N-M -->` 页锚按 8 页间隔分布
-  - `quick_lookup_draft.csv`：390 行，16 字段含 `key`/`value`/`page_start`/`section_path`/`evidence_text`
-- 无需新增 Python/系统依赖，纯文本检索。
+**P3b 基线**：
+- 合并 Markdown 结构已核实：`<!-- pages N-M -->` 锚点按 8 页间隔分段
+- 春风 150AURA：~18 个段，3212 行
+- 无需新增依赖
 
 ### 验证方式
 
 ```bash
 # CLI 验证
-scripts/pdf-read-page pdf/春风\ 150AURA 14
-scripts/pdf-read-page pdf/春风\ 150AURA 14 16
-scripts/pdf-search-content pdf/春风\ 150AURA "最大净功率"
-scripts/pdf-search-content pdf/春风\ 150AURA "最大净功率" --source csv --max 5
+scripts/pdf-export-chunks "pdf/春风 150AURA"
+
+# 检查输出
+python3 -c "
+import json
+with open('pdf/春风 150AURA/data/chunks.jsonl') as f:
+    chunks = [json.loads(l) for l in f if l.strip()]
+print(f'chunks: {len(chunks)}')
+c = chunks[0]
+print(f'fields: {sorted(c.keys())}')
+print(f'chunk_id: {c[\"chunk_id\"]}')
+print(f'pages: {c[\"page_start\"]}-{c[\"page_end\"]}')
+print(f'text_len: {len(c[\"text\"])} chars')
+print(f'token_count: {c[\"token_count\"]}')
+"
 
 # MCP 编译
 cd mcp/server && npm run build
 
-# 工具列表验证（期望 8 个工具）
 # 治理检查
 python3 scripts/check_plan_governance.py .
 ```
 
 ### 完成条件
 
-- [x] `tools/list` 返回 8 个工具（6 旧 + `read_page` + `search_pdf_content`）。→ 编译产物确认。
-- [x] `read_page` 按页码正确返回 Markdown 段（含 `<!-- pages -->` 锚点对应的章节）。→ 春风 150AURA page 14 测试通过。
-- [x] `read_page` 超范围页码返回明确错误。→ page 999 返回 `page_out_of_range` 错误 JSON。
-- [x] `search_pdf_content` 对 CSV 数据返回 key/value/page/section/evidence 结果。→ "最大净功率" 查回 CSV 完整记录。
-- [x] `search_pdf_content` 对 Markdown 全文返回页码/snippet 结果。→ 同 query 同时返回 Markdown 来源结果。
-- [x] `search_pdf_content` 多词搜索（空格分隔）支持 AND 逻辑。→ "最大净功率 11.8" 返回精确匹配。
-- [x] 非法输入（不存在的目录、空 query）返回明确错误。→ 已验证。
-- [x] TypeScript 编译通过，`npm run build` 无错误。→ `tsc` 编译成功。
-- [x] 治理检查通过。→ `python3 scripts/check_plan_governance.py .` 通过。
+- [ ] `data/chunks.jsonl` 产出，每行有效 JSON
+- [ ] 每个 chunk 含 6 个字段：`chunk_id`、`page_start`、`page_end`、`section_path`、`text`、`token_count`
+- [ ] `chunk_id` 格式为 `<model>@<page_range>@<seq>`
+- [ ] `text` 已去除 Markdown 标记（无 `##`、`**`、`<td>` 等）
+- [ ] `token_count` 估算合理（中文按单字计数）
+- [ ] 春风 150AURA 样本产出约 18 个 chunk
+- [ ] 非法输入（不存在的目录、无合并 Markdown）返回明确错误
+- [ ] TypeScript 编译通过（如新增 MCP 工具）
+- [ ] 治理检查通过
 
-## P3b-P5 后续阶段（粗粒度）
-
-### P3b：向量索引 + 语义检索
-
-**范围**：
-
-- 对合并 Markdown 按 `<!-- pages N-M -->` 分段建 embedding
-- 向量存储选型（候选：ChromaDB / SQLite + sqlite-vec / numpy-only）
-- `search_pdf_content` 增加 `mode: "semantic"` 参数
-- embedding 模型选型（候选：本地 sentence-transformers / API）
-
-**状态**：候选
+## P4-P5 后续阶段（粗粒度）
 
 ### P4：评测体系 + 多模态增强
 
@@ -293,18 +221,18 @@ python3 scripts/check_plan_governance.py .
 ## 依赖关系
 
 ```
-P1（收尾）→ P2（MCP 拆分）→ P3a（关键词+读页）→ P3b（向量语义检索）→ P4（评测+多模态）
-                                                              ↘ P5（远期）
+P1（收尾）→ P2（MCP 拆分）→ P3a（关键词+读页）→ P3b（向量化前置）→ P4（评测+多模态）
+                                                           ↘ P5（远期）
 ```
 
-P3a 不依赖 P3b，但 P3b 在 P3a 的检索工具基础上增加语义模式。
+P3b 不引入新依赖，只做数据准备。下游项目拿 `chunks.jsonl` 自行向量化。
 
 ## 未决问题
 
 | 问题 | 推荐方案 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|
 | P2 是否需要拆分 tools/ 目录 | 初期单文件实现，等工具数 ≥6 再拆分 | 否 | 已记录 |
-| 向量索引选型（ChromaDB vs sqlite-vec） | P3b 阶段 0 评估，优先选无服务依赖的方案 | 否 | 已延后 |
+| 向量索引选型（ChromaDB vs sqlite-vec） | P3b 已重定位为"向量化前置准备"，只产出 chunks.jsonl，不做索引。下游项目自行选型 | 否 | 设计决策：不在此项目做向量存储 |
 | 多模态 VLM 选型（Claude Vision vs 本地模型） | P4 阶段 0 评估，取决于成本和精度要求 | 否 | 已延后 |
 | `pdf-auto` 的 `--rerun-only` 模式是否存在 | 已确认：`scripts/pdf-rerun` 已实现独立重跑+合并功能，可作为 `rerun_segments` MCP 工具的后端 | 否 | 已解决 |
 | `pdf-seg` / `pdf-rerun` 缺少 JSON 输出模式 | P2 实施 step 1/2 分别增加 `PDF_SEG_JSON=1` 和 `PDF_RERUN_JSON=1` | 是 | P2 实施中解决 |
