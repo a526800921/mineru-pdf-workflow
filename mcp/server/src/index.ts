@@ -1187,6 +1187,101 @@ async function main() {
     },
   );
 
+  // ==========================================================
+  // Tool 9: export_chunks
+  // ==========================================================
+
+  server.tool(
+    "export_chunks",
+    "将合并 Markdown 预处理为 chunks.jsonl，供下游向量化。\n" +
+      "封装 scripts/pdf-export-chunks，内部按 ## 标题切分、HTML 表格展开、图片替换、Markdown 清洗、token 上限裁剪。\n" +
+      "输出到 <package>/data/chunks.jsonl，每行一个 JSON 块（id/content/page/section/token_count）。",
+    {
+      package_dir: z
+        .string()
+        .describe("输出包根目录（含 <stem>.md 和 manifest.json）的绝对路径"),
+      output_path: z
+        .string()
+        .optional()
+        .describe("自定义 JSONL 输出路径（可选，默认 <package>/data/chunks.jsonl）"),
+    },
+    async ({ package_dir, output_path }) => {
+      console.error(
+        `[mcp] export_chunks: pkg=${package_dir}, out=${output_path ?? "auto"}`,
+      );
+
+      const validDir = await validateDir(package_dir, "package_dir");
+      if (!validDir.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(buildFailedOutput(1, "", validDir.error)),
+            },
+          ],
+        };
+      }
+
+      const scriptPath = path.join(PROJECT_ROOT, "scripts", "pdf-export-chunks");
+      const args = [package_dir];
+      if (output_path) {
+        args.push(output_path);
+      }
+
+      const result = await runScript({
+        scriptPath,
+        args,
+        env: { PDF_EXPORT_CHUNKS_JSON: "1" },
+        logLabel: "export_chunks",
+      });
+
+      const { stdout, stderr, exitCode } = result;
+
+      if (exitCode !== 0) {
+        console.error(`[mcp] pdf-export-chunks exited with code ${exitCode}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(
+                buildFailedOutput(
+                  exitCode,
+                  stdout,
+                  stderr,
+                  `pdf-export-chunks exited with code ${exitCode}`,
+                ),
+              ),
+            },
+          ],
+        };
+      }
+
+      const parsed = parseCliJson(stdout);
+      if (!parsed.ok) {
+        console.error(`[mcp] Parse error: ${parsed.error}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(buildFailedOutput(1, stdout, stderr, parsed.error)),
+            },
+          ],
+        };
+      }
+
+      const output: MCPToolOutput = {
+        status: String(parsed.data.status ?? "completed"),
+        exit_code: exitCode,
+        stdout,
+        stderr,
+        chunk_count: parsed.data.chunk_count,
+        output_path: parsed.data.output_path,
+      };
+
+      return { content: [{ type: "text" as const, text: formatOutput(output) }] };
+    },
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[mcp] mineru-pdf-workflow MCP server ready (stdio)");

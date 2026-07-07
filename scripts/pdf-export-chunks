@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+_scripts_dir="${_this_file%/*}"
+
+json_mode="${PDF_EXPORT_CHUNKS_JSON:-0}"
+
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-export-chunks <package_dir> [output_path]
+
+说明:
+  将合并 Markdown 预处理为 chunks.jsonl，供下游向量化。
+  包含：## 标题切分、HTML 表格展开、图片占位符替换、Markdown 清洗、token 上限裁剪。
+
+参数:
+  package_dir    输出包根目录（含 <stem>.md 和 manifest.json）
+  output_path    可选，默认输出到 <package>/data/chunks.jsonl
+
+可选环境变量:
+  PDF_EXPORT_CHUNKS_JSON=1    输出 JSON（stdout），人类可读信息改到 stderr
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+  else
+    usage
+  fi
+  exit 0
+fi
+
+if [[ $# -lt 1 ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":2},sys.stdout); sys.stdout.write("\n")'
+  else
+    usage
+  fi
+  exit 2
+fi
+
+package_dir="$1"
+output_path="${2:-}"
+
+if [[ ! -d "$package_dir" ]]; then
+  log "错误：输出包目录不存在：$package_dir"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+package_dir="$(cd "$package_dir" && pwd)"
+
+python3 - "$_scripts_dir" "$package_dir" "$output_path" "$json_mode" <<'PY'
+import json, sys
+from pathlib import Path
+
+scripts_dir = Path(sys.argv[1])
+sys.path.insert(0, str(scripts_dir))
+from lib.chunk_utils import export_chunks
+
+package_dir = Path(sys.argv[2])
+output_path = sys.argv[3] if sys.argv[3] else None
+json_mode = sys.argv[4] == "1"
+
+try:
+    chunks, out_path = export_chunks(
+        package_dir,
+        Path(output_path) if output_path else None,
+    )
+
+    # 验证
+    for c in chunks:
+        assert "id" in c, f"chunk 缺少 id"
+        assert "content" in c, f"chunk 缺少 content"
+        assert "page" in c, f"chunk 缺少 page"
+        assert "section" in c, f"chunk 缺少 section"
+        assert "token_count" in c, f"chunk 缺少 token_count"
+        assert c["token_count"] <= 384, f"token {c['token_count']} > 384"
+
+    if json_mode:
+        output = {
+            "status": "completed",
+            "chunk_count": len(chunks),
+            "output_path": str(out_path),
+        }
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"chunks: {len(chunks)}")
+        print(f"输出: {out_path}")
+        # 打印前 5 个 chunk 的摘要
+        for c in chunks[:5]:
+            print(f"  {c['id']}: section={c['section']}, page={c['page']}, "
+                  f"tokens={c['token_count']}, preview={c['content'][:60]}...")
+
+except FileNotFoundError as e:
+    output = {"status": "error", "exit_code": 1, "error": str(e)}
+    if json_mode:
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"错误：{e}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    output = {"status": "error", "exit_code": 1, "error": str(e)}
+    if json_mode:
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"错误：{e}", file=sys.stderr)
+    sys.exit(1)
+PY

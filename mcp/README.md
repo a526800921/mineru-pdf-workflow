@@ -394,6 +394,42 @@ segment status 取值：`done` / `failed` / `no_markdown` / `skipped`。
 
 失败模式：输出包目录不存在、query 为空。
 
+### `export_chunks`（P3b 新增）
+
+封装 `scripts/pdf-export-chunks`（`PDF_EXPORT_CHUNKS_JSON=1`）。将合并 Markdown 预处理为 chunks.jsonl，供下游向量化。
+
+输入：
+
+```json
+{
+  "package_dir": "/abs/path/pdf/春风 150AURA",
+  "output_path": "/abs/path/pdf/春风 150AURA/data/chunks.jsonl"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `package_dir` | string | 是 | 输出包根目录的绝对路径 |
+| `output_path` | string | 否 | 自定义输出路径，默认 `<package>/data/chunks.jsonl` |
+
+输出：
+
+```json
+{
+  "status": "completed",
+  "chunk_count": 335,
+  "output_path": "/abs/path/pdf/春风 150AURA/data/chunks.jsonl"
+}
+```
+
+chunks.jsonl 每行格式：
+
+```json
+{"id": "春风 150AURA@seq_003", "content": "序列号...", "page": "12-14", "section": "序列号", "token_count": 42}
+```
+
+预处理步骤：## 标题切分 → HTML 表格展开 → 图片占位符替换 → Markdown 清洗 → token 上限裁剪（≤384）。
+
 ## Claude Code 配置
 
 MCP server 已实现，在 Claude Code 中添加：
@@ -490,6 +526,8 @@ npx @modelcontextprotocol/inspector node dist/index.js
 - ✅ `scripts/pdf-read-page` 已实现（P3a Step 1）。
 - ✅ `scripts/pdf-search-content` 已实现（P3a Step 2）。
 - ✅ P3a 2 个检索工具已实现并注册（共 8 个工具：6 旧 + `read_page` + `search_pdf_content`）。
+- ✅ `scripts/lib/chunk_utils.py` + `scripts/pdf-export-chunks` 已实现（P3b）。
+- ✅ P3b `export_chunks` 已实现并注册（共 9 个工具）。
 
 ## 安全边界
 
