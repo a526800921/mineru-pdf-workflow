@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+_scripts_dir="${_this_file%/*}"
+
+json_mode="${PDF_SEARCH_CONTENT_JSON:-0}"
+
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-search-content <package_dir> <query> [options]
+
+说明:
+  在输出包中搜索关键词，检索合并 Markdown 和 quick_lookup_draft.csv。
+  多个词用空格分隔，全部匹配（AND 逻辑）。
+
+参数:
+  package_dir    输出包根目录（含 <stem>.md 和 data/quick_lookup_draft.csv）
+  query          搜索关键词（支持空格分隔的多个词）
+
+选项:
+  -s, --source SRC    搜索数据源：all（默认）/ markdown / csv
+  -m, --max N         最大返回数（默认 10）
+
+可选环境变量:
+  PDF_SEARCH_CONTENT_JSON=1    输出 JSON（stdout），人类可读信息改到 stderr
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+  else
+    usage
+  fi
+  exit 0
+fi
+
+if [[ $# -lt 2 ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":2},sys.stdout); sys.stdout.write("\n")'
+  else
+    usage
+  fi
+  exit 2
+fi
+
+package_dir="$1"
+query="$2"
+shift 2
+
+source="all"
+max_results=10
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--source)
+      source="$2"; shift 2 ;;
+    -m|--max)
+      max_results="$2"; shift 2 ;;
+    *)
+      log "未知选项：$1"
+      shift ;;
+  esac
+done
+
+if [[ ! -d "$package_dir" ]]; then
+  log "错误：输出包目录不存在：$package_dir"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+if [[ -z "$query" ]]; then
+  log "错误：query 不能为空"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+if [[ "$source" != "all" && "$source" != "markdown" && "$source" != "csv" ]]; then
+  log "错误：source 必须为 all / markdown / csv：$source"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+package_dir="$(cd "$package_dir" && pwd)"
+
+python3 - "$package_dir" "$query" "$source" "$max_results" "$json_mode" <<'PY'
+import csv, json, re, sys
+from io import StringIO
+from pathlib import Path
+
+
+def search_csv(package_dir: Path, terms: list[str], max_results: int) -> list[dict]:
+    """Search quick_lookup_draft.csv for matching key/value/evidence_text rows."""
+    csv_path = package_dir / "data" / "quick_lookup_draft.csv"
+    if not csv_path.is_file():
+        return []
+
+    results = []
+    with open(csv_path, encoding="utf-8", errors="replace") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Build searchable text from key fields
+            search_text = " ".join(
+                row.get(f, "") or ""
+                for f in ["key", "value", "evidence_text", "section_path"]
+            ).lower()
+
+            if all(t.lower() in search_text for t in terms):
+                page_start = int(row.get("page_start", 0) or 0)
+                page_end = int(row.get("page_end", 0) or 0)
+                results.append({
+                    "source": "csv",
+                    "key": row.get("key", ""),
+                    "value": row.get("value", ""),
+                    "unit": row.get("unit", ""),
+                    "page_start": page_start,
+                    "page_end": page_end or page_start,
+                    "section_path": row.get("section_path", ""),
+                    "evidence_text": row.get("evidence_text", ""),
+                    "confidence": row.get("confidence", ""),
+                })
+                if len(results) >= max_results:
+                    break
+
+    return results
+
+
+def search_markdown(package_dir: Path, terms: list[str], max_results: int) -> list[dict]:
+    """Search merged Markdown for keyword matches, returning snippet + page context."""
+    # Find merged Markdown
+    md_path = None
+    for f in package_dir.glob("*.md"):
+        if f.name != "review.md":
+            md_path = f
+            break
+
+    if md_path is None:
+        return []
+
+    text = md_path.read_text(encoding="utf-8", errors="replace")
+
+    # Parse page anchors and split into segments
+    anchor_re = re.compile(r"^<!-- pages (\d+)-(\d+) -->\s*$", re.MULTILINE)
+    anchor_matches = list(anchor_re.finditer(text))
+
+    if not anchor_matches:
+        # No anchors — search whole file as one segment
+        if all(t.lower() in text.lower() for t in terms):
+            return [{
+                "source": "markdown",
+                "page_start": 1,
+                "page_end": 1,
+                "section_path": "",
+                "snippet": _make_snippet(text, terms),
+            }]
+        return []
+
+    results = []
+    heading_re = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
+
+    for i, m in enumerate(anchor_matches):
+        seg_start_page = int(m.group(1))
+        seg_end_page = int(m.group(2))
+
+        content_start = m.end()
+        # Skip the anchor line content to the next anchor or EOF
+        content_end = anchor_matches[i + 1].start() if i + 1 < len(anchor_matches) else len(text)
+        seg_text = text[content_start:content_end]
+
+        if not all(t.lower() in seg_text.lower() for t in terms):
+            continue
+
+        # Find the best-matching line for the snippet
+        snippet = _make_snippet(seg_text, terms)
+
+        # Extract nearest heading path
+        section_path = ""
+        all_headings = list(heading_re.finditer(text[:content_start]))
+        if all_headings:
+            # Build heading stack
+            stack = []
+            for hm in all_headings:
+                level = len(hm.group(1))
+                title = hm.group(2).strip()
+                while stack and stack[-1][0] >= level:
+                    stack.pop()
+                stack.append((level, title))
+            section_path = " / ".join(h for _, h in stack)
+
+        results.append({
+            "source": "markdown",
+            "page_start": seg_start_page,
+            "page_end": seg_end_page,
+            "section_path": section_path,
+            "snippet": snippet,
+        })
+
+        if len(results) >= max_results:
+            break
+
+    return results
+
+
+def _make_snippet(text: str, terms: list[str], context: int = 80) -> str:
+    """Extract the first matching context window as a snippet."""
+    text_lower = text.lower()
+    # Find the earliest position where all terms appear
+    best_pos = None
+    for t in terms:
+        pos = text_lower.find(t.lower())
+        if pos >= 0:
+            if best_pos is None or pos < best_pos:
+                best_pos = pos
+
+    if best_pos is None:
+        return text[:context * 2].strip()
+
+    start = max(0, best_pos - context)
+    end = min(len(text), best_pos + context)
+    snippet = text[start:end].strip()
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(text):
+        snippet = snippet + "..."
+
+    # Collapse whitespace for clean output
+    snippet = re.sub(r"\s+", " ", snippet)
+    return snippet
+
+
+# ---- Main ----
+package_dir = Path(sys.argv[1])
+query = sys.argv[2]
+source = sys.argv[3]
+max_results = int(sys.argv[4])
+json_mode = sys.argv[5] == "1"
+
+# Split query into terms for AND matching
+terms = [t.strip() for t in query.split() if t.strip()]
+if not terms:
+    output = {"status": "error", "exit_code": 1, "error": "empty_query"}
+    if json_mode:
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    sys.exit(1)
+
+results = []
+
+if source in ("all", "csv"):
+    results.extend(search_csv(package_dir, terms, max_results))
+
+if source in ("all", "markdown"):
+    remaining = max_results - len(results)
+    if remaining > 0:
+        results.extend(search_markdown(package_dir, terms, remaining))
+
+output = {
+    "status": "completed",
+    "query": query,
+    "total_matches": len(results),
+    "results": results,
+}
+
+if json_mode:
+    json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+else:
+    # Human-readable output
+    print(f"搜索: {query}")
+    print(f"匹配: {len(results)} 条")
+    print()
+    for i, r in enumerate(results):
+        src = r["source"]
+        pages = f"p{r['page_start']}-{r['page_end']}"
+        print(f"[{i+1}] [{src}] {pages}")
+        if src == "csv":
+            print(f"    key: {r['key']}")
+            print(f"    value: {r['value']} {r.get('unit','')}")
+            if r.get("section_path"):
+                print(f"    section: {r['section_path']}")
+        else:
+            if r.get("section_path"):
+                print(f"    section: {r['section_path']}")
+            print(f"    snippet: {r['snippet'][:200]}")
+        print()
+PY

@@ -968,6 +968,225 @@ async function main() {
     },
   );
 
+  // ==========================================================
+  // Tool 7: read_page
+  // ==========================================================
+
+  server.tool(
+    "read_page",
+    "按 PDF 页码读取合并 Markdown 中对应片段。\n" +
+      "封装 scripts/pdf-read-page，内部调用 PDF_READ_PAGE_JSON=1 scripts/pdf-read-page <package_dir> <page> [page_end]，\n" +
+      "将 CLI JSON 输出映射为结构化工具返回值。\n\n" +
+      "合并 Markdown 由 <!-- pages N-M --> 锚点分节，该工具按页码定位对应段并返回 Markdown 文本。\n" +
+      "若合并 Markdown 不存在，回退到 segments/ 目录查找。",
+    {
+      package_dir: z
+        .string()
+        .describe("输出包根目录（含 <stem>.md 和 segments/）的绝对路径"),
+      page: z
+        .number()
+        .int()
+        .min(1)
+        .describe("PDF 页码（1-based），会定位到包含该页的 <!-- pages N-M --> 段"),
+      page_end: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("结束页码，指定后返回连续多段的 Markdown"),
+    },
+    async ({ package_dir, page, page_end }) => {
+      console.error(
+        `[mcp] read_page: pkg=${package_dir}, page=${page}, page_end=${page_end ?? "auto"}`,
+      );
+
+      const validDir = await validateDir(package_dir, "package_dir");
+      if (!validDir.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(buildFailedOutput(1, "", validDir.error)),
+            },
+          ],
+        };
+      }
+
+      const scriptPath = path.join(PROJECT_ROOT, "scripts", "pdf-read-page");
+      const args = [package_dir, String(page)];
+      if (page_end !== undefined) {
+        args.push(String(page_end));
+      }
+
+      const result = await runScript({
+        scriptPath,
+        args,
+        env: { PDF_READ_PAGE_JSON: "1" },
+        logLabel: "read_page",
+      });
+
+      const { stdout, stderr, exitCode } = result;
+
+      if (exitCode !== 0) {
+        console.error(`[mcp] pdf-read-page exited with code ${exitCode}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(
+                buildFailedOutput(
+                  exitCode,
+                  stdout,
+                  stderr,
+                  `pdf-read-page exited with code ${exitCode}`,
+                ),
+              ),
+            },
+          ],
+        };
+      }
+
+      const parsed = parseCliJson(stdout);
+      if (!parsed.ok) {
+        console.error(`[mcp] Parse error: ${parsed.error}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(buildFailedOutput(1, stdout, stderr, parsed.error)),
+            },
+          ],
+        };
+      }
+
+      const output: MCPToolOutput = {
+        status: String(parsed.data.status ?? "completed"),
+        exit_code: exitCode,
+        stdout,
+        stderr,
+        page: parsed.data.page,
+        page_start: parsed.data.page_start,
+        page_end: parsed.data.page_end,
+        section_path: parsed.data.section_path,
+        segment_count: parsed.data.segment_count,
+        markdown: parsed.data.markdown,
+      };
+
+      return { content: [{ type: "text" as const, text: formatOutput(output) }] };
+    },
+  );
+
+  // ==========================================================
+  // Tool 8: search_pdf_content
+  // ==========================================================
+
+  server.tool(
+    "search_pdf_content",
+    "在输出包中搜索关键词，检索合并 Markdown 和 quick_lookup_draft.csv。\n" +
+      "封装 scripts/pdf-search-content，内部调用 PDF_SEARCH_CONTENT_JSON=1 scripts/pdf-search-content <package_dir> <query>，\n" +
+      "将 CLI JSON 输出映射为结构化工具返回值。\n\n" +
+      "多个词用空格分隔，全部匹配（AND 逻辑）。返回统一结果列表（含来源、页码、章节、原文片段）。",
+    {
+      package_dir: z
+        .string()
+        .describe("输出包根目录（含 <stem>.md 和 data/quick_lookup_draft.csv）的绝对路径"),
+      query: z
+        .string()
+        .describe("搜索关键词（支持空格分隔的多个词，AND 匹配）"),
+      max_results: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .default(10)
+        .describe("最大返回数，默认 10"),
+      source: z
+        .enum(["all", "markdown", "csv"])
+        .default("all")
+        .describe("搜索数据源：all（默认）/ markdown / csv"),
+    },
+    async ({ package_dir, query, max_results, source }) => {
+      console.error(
+        `[mcp] search_pdf_content: pkg=${package_dir}, query=${query}, max=${max_results}, src=${source}`,
+      );
+
+      const validDir = await validateDir(package_dir, "package_dir");
+      if (!validDir.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(buildFailedOutput(1, "", validDir.error)),
+            },
+          ],
+        };
+      }
+
+      if (!query.trim()) {
+        const output = buildFailedOutput(1, "", "query must not be empty");
+        return {
+          content: [{ type: "text" as const, text: formatOutput(output) }],
+        };
+      }
+
+      const scriptPath = path.join(PROJECT_ROOT, "scripts", "pdf-search-content");
+      const args = [package_dir, query, "-s", source, "-m", String(max_results)];
+
+      const result = await runScript({
+        scriptPath,
+        args,
+        env: { PDF_SEARCH_CONTENT_JSON: "1" },
+        logLabel: "search_pdf_content",
+      });
+
+      const { stdout, stderr, exitCode } = result;
+
+      if (exitCode !== 0) {
+        console.error(`[mcp] pdf-search-content exited with code ${exitCode}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(
+                buildFailedOutput(
+                  exitCode,
+                  stdout,
+                  stderr,
+                  `pdf-search-content exited with code ${exitCode}`,
+                ),
+              ),
+            },
+          ],
+        };
+      }
+
+      const parsed = parseCliJson(stdout);
+      if (!parsed.ok) {
+        console.error(`[mcp] Parse error: ${parsed.error}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(buildFailedOutput(1, stdout, stderr, parsed.error)),
+            },
+          ],
+        };
+      }
+
+      const output: MCPToolOutput = {
+        status: String(parsed.data.status ?? "completed"),
+        exit_code: exitCode,
+        stdout,
+        stderr,
+        query: parsed.data.query,
+        total_matches: parsed.data.total_matches,
+        results: parsed.data.results,
+      };
+
+      return { content: [{ type: "text" as const, text: formatOutput(output) }] };
+    },
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[mcp] mineru-pdf-workflow MCP server ready (stdio)");

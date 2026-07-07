@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+_scripts_dir="${_this_file%/*}"
+
+json_mode="${PDF_READ_PAGE_JSON:-0}"
+
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-read-page <package_dir> <page> [page_end]
+
+说明:
+  按 PDF 页码从输出包合并 Markdown 中提取对应段的文本。
+  合并 Markdown 由 <!-- pages N-M --> 锚点分节。
+
+  若合并 Markdown 不存在，回退到 segments/ 目录按分段名查找。
+
+参数:
+  package_dir    输出包根目录（含 <stem>.md 和 segments/）
+  page           PDF 页码（1-based）
+  page_end       可选，结束页码
+
+可选环境变量:
+  PDF_READ_PAGE_JSON=1    输出 JSON（stdout），人类可读信息改到 stderr
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+  else
+    usage
+  fi
+  exit 0
+fi
+
+if [[ $# -lt 2 ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":2},sys.stdout); sys.stdout.write("\n")'
+  else
+    usage
+  fi
+  exit 2
+fi
+
+package_dir="$1"
+page="$2"
+page_end="${3:-$page}"
+
+if [[ ! -d "$package_dir" ]]; then
+  log "错误：输出包目录不存在：$package_dir"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+if ! [[ "$page" =~ ^[0-9]+$ ]] || [[ "$page" -lt 1 ]]; then
+  log "错误：page 必须是正整数：$page"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+if ! [[ "$page_end" =~ ^[0-9]+$ ]] || [[ "$page_end" -lt "$page" ]]; then
+  log "错误：page_end 必须是正整数且 >= page：$page_end"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+package_dir="$(cd "$package_dir" && pwd)"
+pkg_name="$(basename "$package_dir")"
+
+python3 - "$package_dir" "$page" "$page_end" "$json_mode" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+
+def _extract_section_path(text: str, content_start: int) -> str:
+    """Extract nearest preceding heading path from Markdown text."""
+    heading_re = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
+    headings = []
+    for m in heading_re.finditer(text):
+        if m.start() >= content_start:
+            break
+        level = len(m.group(1))
+        title = m.group(2).strip()
+        # Keep only headings up to the current content position
+        while headings and headings[-1][0] >= level:
+            headings.pop()
+        headings.append((level, title))
+    return " / ".join(h for _, h in headings)
+
+package_dir = Path(sys.argv[1])
+page = int(sys.argv[2])
+page_end = int(sys.argv[3])
+json_mode = sys.argv[4] == "1"
+
+# Find merged Markdown
+md_path = None
+for f in package_dir.glob("*.md"):
+    if f.name != "review.md":
+        md_path = f
+        break
+
+if md_path is None:
+    # Fallback: try segments/ directory
+    segments_dir = package_dir / "segments"
+    if segments_dir.is_dir():
+        anchor_re = re.compile(r"^p(\d{4,})-(\d{4,})$")
+        for child in sorted(segments_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            m = anchor_re.match(child.name)
+            if not m:
+                continue
+            seg_start = int(m.group(1))
+            seg_end = int(m.group(2))
+            if seg_start <= page <= seg_end:
+                md_files = sorted(child.rglob("*.md"))
+                if md_files:
+                    md_path = md_files[0]
+                    break
+        if md_path is None:
+            output = {"status": "error", "exit_code": 1,
+                      "error": f"no_markdown_found_in_{package_dir}"}
+            if json_mode:
+                json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+                sys.stdout.write("\n")
+            else:
+                print(f"错误：输出包中未找到 Markdown 文件", file=sys.stderr)
+            sys.exit(1)
+
+if md_path is None:
+    output = {"status": "error", "exit_code": 1,
+              "error": f"no_markdown_in_{package_dir}"}
+    if json_mode:
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"错误：输出包中未找到 Markdown 文件", file=sys.stderr)
+    sys.exit(1)
+
+text = md_path.read_text(encoding="utf-8", errors="replace")
+
+# Parse page anchors
+anchor_re = re.compile(r"^<!-- pages (\d+)-(\d+) -->\s*$", re.MULTILINE)
+anchors = [(m.start(), int(m.group(1)), int(m.group(2))) for m in anchor_re.finditer(text)]
+
+if not anchors:
+    # No anchors found — return the whole file
+    pieces = [{
+        "page_start": 1,
+        "page_end": max(page, page_end),
+        "markdown": text.strip(),
+        "section_path": _extract_section_path(text, 0),
+    }]
+else:
+    pieces = []
+    for i, (pos, seg_start, seg_end) in enumerate(anchors):
+        if seg_end < page:
+            continue
+        if seg_start > page_end:
+            break
+        next_pos = anchors[i + 1][0] if i + 1 < len(anchors) else len(text)
+        # Extract content after the anchor line
+        content_start = text.index("\n", pos) + 1 if "\n" in text[pos:] else pos
+        seg_text = text[content_start:next_pos].strip()
+        section_path = _extract_section_path(text, content_start)
+        pieces.append({
+            "page_start": seg_start,
+            "page_end": seg_end,
+            "markdown": seg_text,
+            "section_path": section_path,
+        })
+
+if not pieces:
+    output = {"status": "error", "exit_code": 1,
+              "error": f"page_out_of_range_{page}_{page_end}",
+              "page": page}
+    if json_mode:
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"错误：页码超出范围：{page}-{page_end}", file=sys.stderr)
+    sys.exit(1)
+
+# Concatenate multiple segments
+combined_md = "\n\n".join(p["markdown"] for p in pieces)
+section_path = pieces[0].get("section_path", "")
+
+output = {
+    "status": "completed",
+    "page": page,
+    "page_start": pieces[0]["page_start"],
+    "page_end": pieces[-1]["page_end"],
+    "section_path": section_path,
+    "segment_count": len(pieces),
+    "markdown": combined_md,
+}
+
+if json_mode:
+    json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+else:
+    # Human-readable: just print the markdown
+    print(combined_md)
+PY

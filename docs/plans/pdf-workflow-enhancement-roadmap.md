@@ -61,7 +61,7 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 |---|---|---|---|---|
 | P1 | 提交未完成改动，清理工作区 | 有两个未提交的脚本改动 | 语法检查通过、detect_changes 低风险、提交成功 | 已完成 |
 | P2 | 拆分式 MCP 工具（5 个工具） | P1 已完成、MCP 工具设计已就绪 | `tools/list` 返回 6 个工具（1 旧 + 5 新）、端到端 CLI 封装验证 | 已完成 |
-| P3a | 关键词检索 + 按页读取（无新依赖） | P2 已完成、有完整输出包样本（春风 150AURA） | `search_pdf_content` 返回页码/章节/原文片段、`read_page` 返回指定页 Markdown | 待实施 |
+| P3a | 关键词检索 + 按页读取（无新依赖） | P2 已完成、有完整输出包样本（春风 150AURA） | `search_pdf_content` 返回页码/章节/原文片段、`read_page` 返回指定页 Markdown | 已完成 |
 | P3b | 向量索引 + 语义检索 | P3a 已完成、确定向量存储和 embedding 方案 | 语义检索端到端可用、检索质量可量化 | 候选 |
 | P4 | 评测体系 + 多模态增强 | P3a 或 P2 已完成、有表格和图片密集型 PDF 样本 | `table_accuracy.csv` 产出、TOC 条目级验证可用、VLM 描述产出 | 候选 |
 | P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
@@ -119,8 +119,8 @@ P3a 不引入任何新依赖，纯基于现有输出包文件的文本检索。
 
 - [x] P2 已完成（6 个 MCP 工具就绪）
 - [x] 有完整输出包样本：春风 150AURA（3212 行 Markdown + 390 行 CSV）
-- [ ] `scripts/pdf-read-page` 新建
-- [ ] `scripts/pdf-search-content` 新建
+- [x] `scripts/pdf-read-page` 新建
+- [x] `scripts/pdf-search-content` 新建
 
 ### 实施步骤
 
@@ -248,15 +248,15 @@ python3 scripts/check_plan_governance.py .
 
 ### 完成条件
 
-- [ ] `tools/list` 返回 8 个工具（6 旧 + `read_page` + `search_pdf_content`）
-- [ ] `read_page` 按页码正确返回 Markdown 段（含 `<!-- pages -->` 锚点对应的章节）
-- [ ] `read_page` 超范围页码返回明确错误
-- [ ] `search_pdf_content` 对 CSV 数据返回 key/value/page/section/evidence 结果
-- [ ] `search_pdf_content` 对 Markdown 全文返回页码/snippet 结果
-- [ ] `search_pdf_content` 多词搜索（空格分隔）支持 AND 逻辑
-- [ ] 非法输入（不存在的目录、空 query）返回明确错误
-- [ ] TypeScript 编译通过，`npm run build` 无错误
-- [ ] 治理检查通过
+- [x] `tools/list` 返回 8 个工具（6 旧 + `read_page` + `search_pdf_content`）。→ 编译产物确认。
+- [x] `read_page` 按页码正确返回 Markdown 段（含 `<!-- pages -->` 锚点对应的章节）。→ 春风 150AURA page 14 测试通过。
+- [x] `read_page` 超范围页码返回明确错误。→ page 999 返回 `page_out_of_range` 错误 JSON。
+- [x] `search_pdf_content` 对 CSV 数据返回 key/value/page/section/evidence 结果。→ "最大净功率" 查回 CSV 完整记录。
+- [x] `search_pdf_content` 对 Markdown 全文返回页码/snippet 结果。→ 同 query 同时返回 Markdown 来源结果。
+- [x] `search_pdf_content` 多词搜索（空格分隔）支持 AND 逻辑。→ "最大净功率 11.8" 返回精确匹配。
+- [x] 非法输入（不存在的目录、空 query）返回明确错误。→ 已验证。
+- [x] TypeScript 编译通过，`npm run build` 无错误。→ `tsc` 编译成功。
+- [x] 治理检查通过。→ `python3 scripts/check_plan_governance.py .` 通过。
 
 ## P3b-P5 后续阶段（粗粒度）
 

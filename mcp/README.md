@@ -304,6 +304,96 @@ segment status 取值：`done` / `failed` / `no_markdown` / `skipped`。
 }
 ```
 
+### `read_page`（P3a 新增）
+
+封装 `scripts/pdf-read-page`（`PDF_READ_PAGE_JSON=1`）。按 PDF 页码读取合并 Markdown 中对应段的文本。
+
+输入：
+
+```json
+{
+  "package_dir": "/abs/path/pdf/春风 150AURA",
+  "page": 14,
+  "page_end": 16
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `package_dir` | string | 是 | 输出包根目录（含 `<stem>.md` 和 `segments/`）的绝对路径 |
+| `page` | number | 是 | PDF 页码（1-based），定位到包含该页的 `<!-- pages N-M -->` 段 |
+| `page_end` | number | 否 | 结束页码，指定后返回连续多段的 Markdown |
+
+输出：
+
+```json
+{
+  "status": "completed",
+  "page": 14,
+  "page_start": 9,
+  "page_end": 16,
+  "section_path": "150 AURA 使用说明书 / 序列号",
+  "segment_count": 1,
+  "markdown": "## 序列号\n\n| 项目 | 规格 |\n| ..."
+}
+```
+
+失败模式：输出包目录不存在、合并 Markdown 不存在且无分段目录、页码超出范围。
+
+### `search_pdf_content`（P3a 新增）
+
+封装 `scripts/pdf-search-content`（`PDF_SEARCH_CONTENT_JSON=1`）。对合并 Markdown + `quick_lookup_draft.csv` 做关键词匹配（AND 逻辑）。
+
+输入：
+
+```json
+{
+  "package_dir": "/abs/path/pdf/春风 150AURA",
+  "query": "最大净功率",
+  "max_results": 10,
+  "source": "all"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `package_dir` | string | 是 | 输出包根目录的绝对路径 |
+| `query` | string | 是 | 搜索关键词（支持空格分隔的多个词，AND 匹配） |
+| `max_results` | number | 否 | 最大返回数，默认 10 |
+| `source` | enum | 否 | `all` / `markdown` / `csv`，默认 `all` |
+
+输出：
+
+```json
+{
+  "status": "completed",
+  "query": "最大净功率",
+  "total_matches": 2,
+  "results": [
+    {
+      "source": "csv",
+      "key": "最大净功率",
+      "value": "11.8 Kw / 8500",
+      "unit": "rpm",
+      "page_start": 14,
+      "page_end": 14,
+      "section_path": "150 AURA 使用说明书 / 序列号",
+      "evidence_text": "最大净功率: 11.8 Kw / 8500 rpm",
+      "confidence": "medium"
+    },
+    {
+      "source": "markdown",
+      "page_start": 9,
+      "page_end": 16,
+      "section_path": "150 AURA 使用说明书 / 序列号",
+      "snippet": "最大净功率 11.8 Kw / 8500 rpm..."
+    }
+  ]
+}
+```
+
+失败模式：输出包目录不存在、query 为空。
+
 ## Claude Code 配置
 
 MCP server 已实现，在 Claude Code 中添加：
@@ -397,6 +487,9 @@ npx @modelcontextprotocol/inspector node dist/index.js
 - ✅ `scripts/pdf-rerun` 已实现 `PDF_RERUN_JSON=1` JSON 输出（P2 Step 2）。
 - ✅ `scripts/pdf-review` + `scripts/lib/review_report.py` 已创建（P2 Step 0）。
 - ✅ P2 5 个拆分工具已实现并注册（共 6 个工具：1 旧 + 5 新）。
+- ✅ `scripts/pdf-read-page` 已实现（P3a Step 1）。
+- ✅ `scripts/pdf-search-content` 已实现（P3a Step 2）。
+- ✅ P3a 2 个检索工具已实现并注册（共 8 个工具：6 旧 + `read_page` + `search_pdf_content`）。
 
 ## 安全边界
 
