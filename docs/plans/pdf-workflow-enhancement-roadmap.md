@@ -180,9 +180,7 @@ python3 scripts/check_plan_governance.py .
 
 ### P2 遗留问题
 
-⚠️ **`pdf-auto` 未重构为使用 `lib/review_report.py`**：P2 新增了独立的 `scripts/pdf-review` + `scripts/lib/review_report.py`（含 `generate_review_report` 等 5 个函数），MCP `create_review_report` 工具正常工作。但 `pdf-auto` 中仍保留 9 处内联 review 生成代码（"人工兜底清单"），未像 P1 的 TOC repair 那样重构为调用 lib 模块。这导致 review 生成逻辑在两处独立维护，存在分叉风险。
-
-推荐处理：P3 前将 `pdf-auto` 中 review 生成替换为 `from lib.review_report import generate_review_report`，与 P1 的 `lib/toc_repair.py` 模式一致。
+✅ **`pdf-auto` 已重构为使用 `lib/review_report.py`**：3 处内联 review 生成 Python 代码（-424 行）已替换为 `from lib.review_report import generate_review_report`，与 P1 的 `lib/toc_repair.py` 模式一致。`lib/review_report.py` 是 review 生成的唯一事实源。
 
 ## P3-P5 后续阶段（粗粒度）
 
@@ -233,9 +231,9 @@ P2 不依赖 P3，但 P3 的检索工具体验依赖 P2 的拆分式工具基础
 | 多模态 VLM 选型（Claude Vision vs 本地模型） | P4 阶段 0 评估，取决于成本和精度要求 | 否 | 已延后 |
 | `pdf-auto` 的 `--rerun-only` 模式是否存在 | 已确认：`scripts/pdf-rerun` 已实现独立重跑+合并功能，可作为 `rerun_segments` MCP 工具的后端 | 否 | 已解决 |
 | `pdf-seg` / `pdf-rerun` 缺少 JSON 输出模式 | P2 实施 step 1/2 分别增加 `PDF_SEG_JSON=1` 和 `PDF_RERUN_JSON=1` | 是 | P2 实施中解决 |
-| review 生成无独立 CLI | P2 实施 step 0 从 `pdf-auto` 提取为 `scripts/pdf-review` + `lib/review_report.py` | 是 | P2 实施中解决 |
+| review 生成无独立 CLI | P2 已创建 `scripts/pdf-review` + `lib/review_report.py`，`pdf-auto` 已重构为调用 lib | 否 | 已解决 |
 | `pdf-rerun` 使用 1-based 页码 vs MCP 设计 0-based | MCP 工具统一使用 1-based（与 CLI 一致），更新 MCP README 中的 schema 示例 | 否 | 设计决策已记录 |
-| `pdf-auto` review 代码未重构为 lib | P3 前将 `pdf-auto` 中 3 处内联 review 生成替换为 `from lib.review_report import generate_review_report`，消除与 `pdf-review` 的代码重复 | 否 | P2 遗留，P3 前处理 |
+| `pdf-auto` review 代码已重构为 lib | 3 处内联 review 生成替换为 `from lib.review_report import generate_review_report`（共 -424 行），`lib/review_report.py` 为唯一事实源 | 否 | 已解决 |
 
 ## 风险和回滚
 

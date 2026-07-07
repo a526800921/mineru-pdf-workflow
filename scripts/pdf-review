@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 优先使用隔离 venv 中的 mineru（兼容 transformers 4.57.x）
+if [[ -d "$HOME/Documents/models/.venv/bin" ]]; then
+  export PATH="$HOME/Documents/models/.venv/bin:$PATH"
+fi
+
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+_scripts_dir="${_this_file%/*}"
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-review <validate_json> <review_output> <threshold> <pdf_path> <segments_dir> [rerun_failures] [include_page_type]
+
+说明:
+  从 pdf-validate 的 JSON 报告生成人工兜底清单 Markdown。
+  所有参数均为必填（rerun_failures 和 include_page_type 可选）。
+
+参数:
+  validate_json       pdf-validate PDF_VALIDATE_JSON=1 输出的 JSON 文件路径
+  review_output       输出 review.md 路径
+  threshold           覆盖率阈值（如 0.82）
+  pdf_path            原始 PDF 路径
+  segments_dir        分段目录路径
+  rerun_failures      可选，空格分隔的重跑失败分段名
+  include_page_type   可选，"true" 则在逐页详情中显示页面类型和处理决策列
+
+示例:
+  pdf-review /tmp/validate.json ./review.md 0.82 ./demo.pdf ./segments
+  pdf-review /tmp/validate.json ./review.md 0.82 ./demo.pdf ./segments "p0001-0008 p0040-0048" true
+
+可选环境变量:
+  PDF_REVIEW_JSON=1           输出机器可读 JSON（stdout），人类可读信息改到 stderr
+EOF
+}
+
+json_mode="${PDF_REVIEW_JSON:-0}"
+
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+  else
+    usage
+  fi
+  exit 0
+fi
+
+if [[ $# -lt 5 ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+    python3 -c 'import json, sys; json.dump({"status":"error","exit_code":2,"review_markdown":None}, sys.stdout); sys.stdout.write("\n")'
+  else
+    usage
+  fi
+  exit 2
+fi
+
+validate_json="$1"
+review_output="$2"
+threshold="$3"
+pdf_path="$4"
+segments_dir="$5"
+rerun_failures="${6:-}"
+include_page_type="${7:-false}"
+
+if [[ ! -f "$validate_json" ]]; then
+  log "错误：找不到 validate JSON 文件：$validate_json"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json, sys; json.dump({"status":"error","exit_code":1,"review_markdown":None}, sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+python3 - "$_scripts_dir" "$validate_json" "$review_output" "$threshold" "$pdf_path" "$segments_dir" "$rerun_failures" "$include_page_type" <<'PY'
+import sys
+from pathlib import Path
+
+scripts_dir = sys.argv[1]
+sys.path.insert(0, scripts_dir)
+from lib.review_report import generate_review_report
+
+validate_json_path = sys.argv[2]
+review_output_path = sys.argv[3]
+threshold = float(sys.argv[4])
+pdf_path = sys.argv[5]
+segments_dir = sys.argv[6]
+rerun_failures = sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] else None
+include_page_type = sys.argv[8].lower() == "true" if len(sys.argv) > 8 else False
+
+generate_review_report(
+    validate_json_path=validate_json_path,
+    review_output_path=review_output_path,
+    threshold=threshold,
+    pdf_path=pdf_path,
+    segments_dir=segments_dir,
+    rerun_failures=rerun_failures,
+    include_page_type=include_page_type,
+)
+PY

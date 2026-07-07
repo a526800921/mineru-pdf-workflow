@@ -11,6 +11,16 @@ _this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 _scripts_dir="${_this_file%/*}"
 source "$_scripts_dir/lib/modelpad-pdf-service"
 
+json_mode="${PDF_RERUN_JSON:-0}"
+
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
 usage() {
   cat <<'EOF'
 用法:
@@ -30,11 +40,61 @@ usage() {
   MINERU_METHOD=auto
   MINERU_LANG=ch
   PDF_MERGE_OUTPUT           合并输出路径（默认自动推导）
+  PDF_RERUN_JSON=1           输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
 }
 
+# JSON 输出函数
+emit_json() {
+  local status="$1"
+  local exit_code="$2"
+  local rerun_count="$3"
+  local merge_output="$4"
+  shift 4
+  # remaining args are result tuples: segment_name:start_page:end_page:seg_status
+
+  python3 - "$status" "$exit_code" "$rerun_count" "$merge_output" "$@" <<'PY'
+import json, sys
+
+status = sys.argv[1]
+exit_code = int(sys.argv[2])
+rerun_count = int(sys.argv[3])
+merge_output = sys.argv[4] if sys.argv[4] and sys.argv[4] != "none" else None
+
+results = []
+for arg in sys.argv[5:]:
+    if not arg.strip():
+        continue
+    parts = arg.split(":")
+    if len(parts) != 4:
+        continue
+    name, start, end, seg_status = parts
+    results.append({
+        "name": name,
+        "start_page": int(start),
+        "end_page": int(end),
+        "status": seg_status,
+    })
+
+output = {
+    "status": status,
+    "exit_code": exit_code,
+    "rerun_count": rerun_count,
+    "merged_markdown": merge_output,
+    "segments": results,
+}
+json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+sys.stdout.write("\n")
+PY
+}
+
 if [[ $# -lt 3 ]]; then
-  usage
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+    python3 -c 'import json, sys; json.dump({"status":"error","exit_code":2}, sys.stdout); sys.stdout.write("\n")'
+  else
+    usage
+  fi
   exit 2
 fi
 
@@ -44,17 +104,27 @@ segments_dir="$1"
 shift
 
 if [[ "$pdf" == "-h" || "$pdf" == "--help" ]]; then
-  usage
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+  else
+    usage
+  fi
   exit 0
 fi
 
 if [[ ! -f "$pdf" ]]; then
-  echo "错误：找不到 PDF 文件：$pdf" >&2
+  log "错误：找不到 PDF 文件：$pdf"
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 0 "" ""
+  fi
   exit 1
 fi
 
 if [[ ! -d "$segments_dir" ]]; then
-  echo "错误：找不到分段目录：$segments_dir" >&2
+  log "错误：找不到分段目录：$segments_dir"
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 0 "" ""
+  fi
   exit 1
 fi
 
@@ -75,14 +145,16 @@ export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-8}"
 # 自动检测 API 端口
 ensure_pdf_api echo
 
-trap 'modelpad_stop_pdf_if_started echo' EXIT
+trap 'modelpad_stop_pdf_if_started log' EXIT
 
-echo "PDF: $pdf_path"
-echo "分段目录: $segments_dir"
-echo "精度: $effort, 后端: $backend"
-[[ -n "$api_url" ]] && echo "API: $api_url"
+log "PDF: $pdf_path"
+log "分段目录: $segments_dir"
+log "精度: $effort, 后端: $backend"
+[[ -n "$api_url" ]] && log "API: $api_url"
 
 rerun_count=0
+# 收集结果用于 JSON 输出
+_rerun_results=()
 
 for target in "$@"; do
   if [[ "$target" =~ ^p[0-9]{4,}-[0-9]{4,}$ ]]; then
@@ -90,7 +162,8 @@ for target in "$@"; do
     seg_name="$target"
     seg_dir="$segments_dir/$seg_name"
     if [[ ! -d "$seg_dir" ]]; then
-      echo "  ✗ 分段不存在：$seg_name，跳过" >&2
+      log "  ✗ 分段不存在：$seg_name，跳过"
+      _rerun_results+=("${seg_name}:0:0:skipped")
       continue
     fi
     start_page="${seg_name#p}"
@@ -115,16 +188,17 @@ for target in "$@"; do
       fi
     done
     if [[ -z "$seg_dir" ]]; then
-      echo "  ✗ 页码 ${target} 无对应分段，跳过" >&2
+      log "  ✗ 页码 ${target} 无对应分段，跳过"
+      _rerun_results+=("page_${target}:0:0:skipped")
       continue
     fi
   else
-    echo "  ✗ 无法识别：$target（需要页码或 p0000-0000 分段名），跳过" >&2
+    log "  ✗ 无法识别：$target（需要页码或 p0000-0000 分段名），跳过"
     continue
   fi
 
-  echo
-  echo "重跑: $seg_name (PDF 第 ${start_page} 页)"
+  log
+  log "重跑: $seg_name (PDF 第 ${start_page} 页)"
   rm -rf "$seg_dir"
   mkdir -p "$seg_dir"
 
@@ -145,21 +219,31 @@ for target in "$@"; do
     find_md="$(find "$seg_dir" -name "*.md" -type f | head -1)"
     if [[ -n "$find_md" && -f "$find_md" ]]; then
       cp "$find_md" "$seg_dir/${pdf_stem}.md"
-      echo "  ✓ 完成"
+      log "  ✓ 完成"
       rerun_count=$((rerun_count + 1))
+      _rerun_results+=("${seg_name}:${start_page}:${end_page}:done")
     else
-      echo "  ✗ 完成但无 Markdown 输出" >&2
+      log "  ✗ 完成但无 Markdown 输出"
+      _rerun_results+=("${seg_name}:${start_page}:${end_page}:no_markdown")
     fi
   else
-    echo "  ✗ 失败" >&2
+    log "  ✗ 失败"
+    _rerun_results+=("${seg_name}:${start_page}:${end_page}:failed")
   fi
 done
 
-echo
-echo "重跑完成: $rerun_count 段"
+log
+log "重跑完成: $rerun_count 段"
 
 
 # 自动合并
-echo
-echo "=== 合并 ==="
+log
+log "=== 合并 ==="
 "$_scripts_dir/pdf-merge" "$segments_dir"
+
+# JSON 模式：输出结构化 JSON 到 stdout
+if [[ "$json_mode" == "1" ]]; then
+  _pkg_dir="$(dirname "$segments_dir")"
+  merge_out="${PDF_MERGE_OUTPUT:-$_pkg_dir/${pdf_stem}.md}"
+  emit_json "completed" 0 "$rerun_count" "$merge_out" "${_rerun_results[@]}"
+fi

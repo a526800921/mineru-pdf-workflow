@@ -10,6 +10,16 @@ fi
 _this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 source "${_this_file%/*}/lib/modelpad-pdf-service"
 
+json_mode="${PDF_SEG_JSON:-0}"
+
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
 usage() {
   cat <<'EOF'
 用法:
@@ -30,30 +40,91 @@ usage() {
   MINERU_LANG=ch
   MINERU_PDF_RENDER_THREADS=2
   MINERU_PROCESSING_WINDOW_SIZE=8
+  PDF_SEG_JSON=1                        输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
 }
 
+# JSON 输出函数
+emit_json() {
+  local segments_dir="$1"
+  local manifest_path="$2"
+  local total_pages="$3"
+  local segment_size="$4"
+  shift 4
+  # remaining args are segment_name:start_page:end_page tuples
+
+  python3 - "$segments_dir" "$manifest_path" "$total_pages" "$segment_size" "$@" <<'PY'
+import json, sys
+
+segments_dir = sys.argv[1]
+manifest_path = sys.argv[2]
+total_pages = int(sys.argv[3])
+segment_size = int(sys.argv[4])
+
+segments = []
+for arg in sys.argv[5:]:
+    if not arg.strip():
+        continue
+    parts = arg.split(":")
+    if len(parts) != 3:
+        continue
+    name, start, end = parts
+    segments.append({
+        "name": name,
+        "start_page": int(start),
+        "end_page": int(end),
+        "status": "done",
+    })
+
+output = {
+    "status": "completed",
+    "total_pages": total_pages,
+    "segment_size": segment_size,
+    "segments_dir": segments_dir,
+    "manifest_path": manifest_path,
+    "segments": segments,
+}
+json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+sys.stdout.write("\n")
+PY
+}
+
 if [[ $# -ne 1 ]]; then
-  usage
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+    python3 -c 'import json, sys; json.dump({"status":"error","exit_code":2}, sys.stdout); sys.stdout.write("\n")'
+  else
+    usage
+  fi
   exit 2
 fi
 
 input="$1"
 
 if [[ "$input" == "-h" || "$input" == "--help" ]]; then
-  usage
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+  else
+    usage
+  fi
   exit 0
 fi
 
 if [[ ! -f "$input" ]]; then
-  echo "错误：找不到 PDF 文件：$input" >&2
+  log "错误：找不到 PDF 文件：$input"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json, sys; json.dump({"status":"error","exit_code":1}, sys.stdout); sys.stdout.write("\n")'
+  fi
   exit 1
 fi
 
 case "$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]')" in
   *.pdf) ;;
   *)
-    echo "错误：输入文件不是 PDF：$input" >&2
+    log "错误：输入文件不是 PDF：$input"
+    if [[ "$json_mode" == "1" ]]; then
+      python3 -c 'import json, sys; json.dump({"status":"error","exit_code":1}, sys.stdout); sys.stdout.write("\n")'
+    fi
     exit 1
     ;;
 esac
@@ -78,7 +149,10 @@ export MINERU_API_MAX_CONCURRENT_REQUESTS="${MINERU_API_MAX_CONCURRENT_REQUESTS:
 export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-8}"
 
 if ! [[ "$segment_size" =~ ^[0-9]+$ ]] || [[ "$segment_size" -lt 1 ]]; then
-  echo "错误：MINERU_SEGMENT_SIZE 必须是正整数，当前是：$segment_size" >&2
+  log "错误：MINERU_SEGMENT_SIZE 必须是正整数，当前是：$segment_size"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json, sys; json.dump({"status":"error","exit_code":1}, sys.stdout); sys.stdout.write("\n")'
+  fi
   exit 1
 fi
 
@@ -96,21 +170,27 @@ PY
 )"
 
 if ! [[ "$pages" =~ ^[0-9]+$ ]] || [[ "$pages" -lt 1 ]]; then
-  echo "错误：无法读取 PDF 页数：$pdf_path" >&2
+  log "错误：无法读取 PDF 页数：$pdf_path"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json, sys; json.dump({"status":"error","exit_code":1}, sys.stdout); sys.stdout.write("\n")'
+  fi
   exit 1
 fi
 
 root_output_dir="${MINERU_SEGMENT_DIR:-$pdf_dir/segments}"
 mkdir -p "$root_output_dir"
 
-echo "PDF: $pdf_path"
-echo "总页数: $pages"
-echo "每段页数: $segment_size"
-echo "输出根目录: $root_output_dir"
-echo "后端: $backend, method: $method, effort: $effort, lang: $lang"
-echo "API 服务: $api_url"
-trap 'modelpad_stop_pdf_if_started echo' EXIT
-echo
+log "PDF: $pdf_path"
+log "总页数: $pages"
+log "每段页数: $segment_size"
+log "输出根目录: $root_output_dir"
+log "后端: $backend, method: $method, effort: $effort, lang: $lang"
+log "API 服务: $api_url"
+trap 'modelpad_stop_pdf_if_started log' EXIT
+log
+
+# 收集分段信息用于 JSON 输出
+_seg_info=()
 
 start=0
 while [[ "$start" -lt "$pages" ]]; do
@@ -120,9 +200,9 @@ while [[ "$start" -lt "$pages" ]]; do
   segment_name="$(printf 'p%04d-%04d' "$((start + 1))" "$((end + 1))")"
   segment_output_dir="$root_output_dir/$segment_name"
 
-  echo
-  echo "开始分段: $segment_name"
-  echo "输出目录: $segment_output_dir"
+  log
+  log "开始分段: $segment_name"
+  log "输出目录: $segment_output_dir"
 
   {
     printf '\n===== %s =====\n' "$segment_name"
@@ -141,7 +221,8 @@ while [[ "$start" -lt "$pages" ]]; do
         --api-url "$api_url"
   } 2>&1
 
-  echo "✓ 分段完成: $segment_name"
+  log "✓ 分段完成: $segment_name"
+  _seg_info+=("${segment_name}:$((start + 1)):$((end + 1))")
   start=$((end + 1))
 done
 
@@ -183,8 +264,13 @@ with open(manifest_path, "w", encoding="utf-8") as f:
 print(f"manifest: {manifest_path}", file=sys.stderr)
 PY
 
-echo
-echo "全部分段完成。"
-echo "输出包根目录: $pdf_dir"
-echo "  segments: $root_output_dir"
-echo "  manifest: $manifest_path"
+log
+log "全部分段完成。"
+log "输出包根目录: $pdf_dir"
+log "  segments: $root_output_dir"
+log "  manifest: $manifest_path"
+
+# JSON 模式：输出结构化 JSON 到 stdout
+if [[ "$json_mode" == "1" ]]; then
+  emit_json "$root_output_dir" "$manifest_path" "$pages" "$segment_size" "${_seg_info[@]}"
+fi
