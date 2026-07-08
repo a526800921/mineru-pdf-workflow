@@ -83,7 +83,8 @@
 | pdf-workflow-enhancement-roadmap | mcp/README.md | P2 拆分式 MCP 工具设计已就绪 |
 | pdf-evaluation-suite | pdf-workflow-enhancement-roadmap | P4 从路线图拆分为独立评测套件专项计划 |
 | pdf-evaluation-suite | coverage-validation-optimization | P4a TOC 条目字段方案（`toc_entries`/`toc_stats`）事实源 |
-| pdf-evaluation-suite | 春风 150AURA 输出包 | P4b 表格结构自检以 104 个 HTML 表格为 Step 0 样本 |
+| pdf-evaluation-suite | 春风 150AURA 输出包 | P4b 表格结构自检以 content_list.json 的 115 个 table 元素（104 含 table_body）为 Step 0 样本 |
+| pdf-evaluation-suite | fitz（pymupdf）整页渲染 | P4c 对 image_or_sparse 页整页渲染喂 VLM，复用现有依赖零新增 |
 
 ## 替代、合并和废弃
 
