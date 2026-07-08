@@ -28,8 +28,9 @@
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
 | [modelpad-dynamic-env-cleanup](plans/modelpad-dynamic-env-cleanup.md) | 已完成 | 全阶段（0-4） | modelpad-pdf-service-orchestration、ModelPad API | [阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
-| [pdf-workflow-enhancement-roadmap](plans/pdf-workflow-enhancement-roadmap.md) | 实施中 | P4 拆分至 pdf-evaluation-suite（P4a 已完成，P4b 待实施），P1-P3b 已完成 | 所有已完成计划、P3a 检索工具、春风 150AURA 输出包 | [P3b 完成](plans/pdf-workflow-enhancement-roadmap.md#完成条件) |
-| [pdf-evaluation-suite](plans/pdf-evaluation-suite.md) | 实施中 | P4a 已完成；P4b 表格结构自检 待实施；P4c 本地 VLM 候选 | pdf-workflow-enhancement-roadmap、coverage-validation-optimization、春风 150AURA 输出包 | [P4a 验收记录](plans/pdf-evaluation-suite.md#验收记录2026-07-08) |
+| [pdf-workflow-enhancement-roadmap](plans/pdf-workflow-enhancement-roadmap.md) | 实施中 | P4 拆分至 pdf-evaluation-suite（P4a/P4b 已完成，P4c 候选），P1-P3b 已完成 | 所有已完成计划、P3a 检索工具、春风 150AURA 输出包 | [P3b 完成](plans/pdf-workflow-enhancement-roadmap.md#完成条件) |
+| [pdf-evaluation-suite](plans/pdf-evaluation-suite.md) | 实施中 | P4a/P4b 已完成；P4c 本地 VLM 候选 | pdf-workflow-enhancement-roadmap、coverage-validation-optimization、春风 150AURA 输出包 | [P4a](plans/pdf-evaluation-suite.md#验收记录2026-07-08)、[P4b](plans/pdf-evaluation-suite.md#验收记录p4b2026-07-08) |
+| [per-page-anchors](plans/per-page-anchors.md) | 设计中 | 阶段 0/1：合并 md 逐页锚点（A′ + X） | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、structured-data-extraction、春风 150AURA 输出包 | [Step 0 证据](plans/per-page-anchors.md#step-0-证据本会话2026-07-08) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -47,7 +48,8 @@
 10. `minimal-automation-runbook`
 11. `modelpad-dynamic-env-cleanup`
 12. `pdf-workflow-enhancement-roadmap`
-13. `pdf-evaluation-suite`（P4；P4a 已完成，P4b 待实施，P4c 候选）
+13. `pdf-evaluation-suite`（P4；P4a/P4b 已完成，P4c 候选）
+14. `per-page-anchors`（合并 md 逐页锚点；设计中）
 
 ## 依赖关系
 
@@ -85,6 +87,11 @@
 | pdf-evaluation-suite | coverage-validation-optimization | P4a TOC 条目字段方案（`toc_entries`/`toc_stats`）事实源 |
 | pdf-evaluation-suite | 春风 150AURA 输出包 | P4b 表格结构自检以 content_list.json 的 115 个 table 元素（104 含 table_body）为 Step 0 样本 |
 | pdf-evaluation-suite | fitz（pymupdf）整页渲染 | P4c 对 image_or_sparse 页整页渲染喂 VLM，复用现有依赖零新增 |
+| per-page-anchors | automated-pdf-pipeline | 逐页锚点在 `pdf-merge` 生成阶段实现 |
+| per-page-anchors | pdf-output-package-layout | 扩展合并 md 锚点格式（段级锚点保留，新增逐页锚点） |
+| per-page-anchors | coverage-validation-optimization | TOC 段由 `toc_repair` 后处理，逐页锚点需识别并回退段级 |
+| per-page-anchors | structured-data-extraction | 阶段 4 复用逐页锚点收窄 `page_start/page_end` |
+| per-page-anchors | 春风 150AURA 输出包 | Step 0 保真度实测与 `content_list.json` `page_idx` 基线 |
 
 ## 替代、合并和废弃
 
@@ -128,3 +135,4 @@
 | modelpad-pdf-service-orchestration | 阶段 0-3 | 详见 [ModelPad PDF 服务按需编排阶段 3 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-3-完成证据2026-07-04) |
 | modelpad-dynamic-env-cleanup | 阶段 0-4 | 详见 [ModelPad 动态 env 与临时输出清理阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
 | pdf-evaluation-suite | P4a（TOC 条目级验证） | 详见 [PDF 评测套件 P4a 验收记录](plans/pdf-evaluation-suite.md#验收记录2026-07-08) |
+| pdf-evaluation-suite | P4b（表格结构自检评测） | 详见 [PDF 评测套件 P4b 验收记录](plans/pdf-evaluation-suite.md#验收记录p4b2026-07-08) |

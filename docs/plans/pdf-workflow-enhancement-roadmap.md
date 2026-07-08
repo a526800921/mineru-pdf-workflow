@@ -73,7 +73,7 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 | P3a | 关键词检索 + 按页读取（无新依赖） | P2 已完成、有完整输出包样本（春风 150AURA） | `search_pdf_content` 返回页码/章节/原文片段、`read_page` 返回指定页 Markdown | 已完成 |
 | P3b | 向量化前置准备（无新依赖） | P3a 已完成 | `<package>/data/chunks.jsonl` 产出、每块含页码/章节/纯文本/字数 | 已完成 |
 | P4a | TOC 条目级验证（无新依赖） | P3a 已完成、有含目录页样本（春风 150AURA） | `toc_entries`/`toc_stats` 字段产出、review.md 逐条目报告缺失 | 已完成 |
-| P4b | 表格结构自检评测（无新依赖） | P3a 已完成、有表格密集样本（春风 150AURA，104 表格） | `data/table_accuracy.csv` 产出、结构自检指标与破损信号 | 待实施 |
+| P4b | 表格结构自检评测（无新依赖） | P3a 已完成、有表格密集样本（春风 150AURA，104 表格） | `data/table_accuracy.csv` 产出、结构自检指标与破损信号 | 已完成 |
 | P4c | 多模态 VLM 图表理解（本地 VLM） | P4b 已完成、本地 VLM 选型与环境评估完成 | VLM 结构化描述产出 | 候选 |
 | P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
 
@@ -251,7 +251,7 @@ python3 scripts/check_plan_governance.py .
 P4 已从粗粒度候选拆分为可独立验收的子阶段。**实施细节、字段方案、Step 0 证据、验证方式和完成条件事实源为 [PDF 评测套件计划](pdf-evaluation-suite.md)**，本处不复制。
 
 - **P4a**：TOC 条目级验证（已完成，[验收记录 2026-07-08](pdf-evaluation-suite.md#验收记录2026-07-08)）—— 条目字段方案沿用 [coverage-validation-optimization.md#后续增强候选](coverage-validation-optimization.md#后续增强候选)。
-- **P4b**：表格结构自检评测（待实施）—— 结构自检指标（表格数/行列数/空单元格率/列一致性），非 TEDS，无需人工标注 ground truth。
+- **P4b**：表格结构自检评测（已完成，[验收记录 2026-07-08](pdf-evaluation-suite.md#验收记录p4b2026-07-08)）—— 结构自检指标（表格数/行列数/空单元格率/列一致性），非 TEDS，无需人工标注 ground truth。
 - **P4c**：多模态 VLM 图表理解（候选）—— 选型倾向本地 VLM，待环境评估与 `image_or_sparse` 页基线统计。
 
 ### P5：远期 / 依赖外部

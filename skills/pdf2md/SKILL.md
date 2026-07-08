@@ -71,6 +71,7 @@ MODELPAD_PDF_START_TIMEOUT=120
     review_overrides.csv
     ingest_batch.jsonl
     ingest_manifest.json
+    table_accuracy.csv       ← 表格结构自检评测（P4b，只读）
 ```
 
 也可以按主题组织到子目录，例如 `~/manuals/honda-cbr/pdf/xxx.pdf`——产物会出现在 `~/manuals/honda-cbr/pdf/` 下。
@@ -82,6 +83,7 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-extract-data /path/to` 写入 `<pdf_dir>/data/`。
 - `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
 - `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
+- `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 
 ## 核心流程

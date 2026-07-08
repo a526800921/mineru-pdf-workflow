@@ -23,7 +23,7 @@ TOC 条目级验证的字段方案（`toc_entries` / `toc_stats` Schema、抽取
 ## 范围
 
 - **P4a（已完成）**：目录页在 `pdf-validate` 输出中新增条目级验证字段，`review.md` 逐条目报告缺失。
-- **P4b（待实施）**：对 `content_list.json`（v1）的 table 元素做结构自检，产出 `<package>/data/table_accuracy.csv`。
+- **P4b（已完成）**：对 `content_list.json`（v1）的 table 元素做结构自检，产出 `<package>/data/table_accuracy.csv`。
 - **P4c（候选）**：对 `image_or_sparse` 页调本地 VLM 产出结构化描述。仅记录边界与阻塞，不进首批。
 
 ## 非目标
@@ -48,18 +48,19 @@ P4a（TOC 条目级验证）：
 - `scripts/pdf-validate`：`detect_page_type` 已识别 `toc` 页；新增条目抽取与 `toc_entries` / `toc_stats` 字段。
 - `scripts/lib/review_report.py`：`review.md` 生成逐条目缺失报告。
 
-P4b（表格结构自检评测）：
+P4b（表格结构自检评测，已完成）：
 
-- `scripts/pdf-eval-tables`（需新建）：读取输出包 `content_list.json`（v1）的 table 元素，产出 `data/table_accuracy.csv`。
-- `scripts/lib/table_eval.py`（需新建）：HTML 表格结构解析与自检指标计算。
-- MCP `eval_tables`（可选）：`mcp/server/src/index.ts` 注册，`runScript` 调用 CLI。
+- `scripts/pdf-eval-tables`（已建）：读取输出包 `content_list.json`（v1）的 table 元素，产出 `data/table_accuracy.csv`；选段复用 pdf-merge 段名正则口径。
+- `scripts/lib/table_eval.py`（已建）：HTML 表格结构解析（含 rowspan/colspan 网格展开）、选段口径、section 段级定位与自检指标计算。
+- `tests/test_table_eval.py`（已建）：15 个零依赖单测覆盖解析/选段/section 三组纯逻辑。
+- MCP `eval_tables`：未实现（决定 CLI-only，见未决问题）。
 
 P4c（候选）：`scripts/pdf-eval-vlm`（未建，用 `fitz` 整页渲染 `image_or_sparse` 页 + 调本地 VLM）、本地 VLM 后端（未定）。
 
 ## 公共契约变化
 
 - P4a：`pdf-validate` JSON 中 `toc` 页新增 `toc_entries` / `toc_stats` 字段（字段语义链接 coverage 计划）。
-- P4b：新增产物 `<package>/data/table_accuracy.csv`（Schema 见下）。若实现 MCP `eval_tables`，`tools/list` 由 9 增至 10。
+- P4b：新增产物 `<package>/data/table_accuracy.csv`（Schema 见下）。CLI-only，未新增 MCP 工具（`tools/list` 维持 9）。
 - P4c：无（候选）。
 
 ## P4a：TOC 条目级验证（已完成）
@@ -122,7 +123,7 @@ print('P4a: toc_entries/toc_stats 字段完整且自洽')
 
 skill 同步：P4a 仅扩展 `pdf-validate` 字段与 `review.md`（人工兜底清单），不涉及 PDF 解析流程、输出包结构、`run_pdf_auto` 契约或入库导出流程，**无需同步 `pdf2md` skill**。
 
-## P4b：表格结构自检评测（待实施）
+## P4b：表格结构自检评测（已完成）
 
 ### 设计原理
 
@@ -134,8 +135,9 @@ skill 同步：P4a 仅扩展 `pdf-validate` 字段与 `review.md`（人工兜底
 
 - 春风 150AURA 全样本核实：v1 有 **115 个 table 元素，104 含 `table_body`**（另 11 空表 → `parse_status="empty"`）。
 - **必须用 v1**：v2 虽也有 115 个 table 元素，但只带 `content`（纯文本）、无 `table_body`/HTML 结构，无法做结构自检；`pdf-validate`/coverage 用 v2 做逐页文本覆盖率，P4b 用 v1 做表格 HTML 结构，两者按目的分工，非口径漂移。
+- **选段口径（实现决策）**：复用 pdf-merge 段名正则 `^p(\d{4,})-(\d{4,})$`，只取有效段，排除 `p0185-0191-rerun` 等遗留/临时目录与 `.DS_Store`。全扫所有子目录会把已被覆盖的旧段与 rerun 目录重复计数（实测 121 表），merge 口径为 115。
 - 全局页码 = 段目录名起始页 + `page_idx`（`page_idx` 为**段内相对 0-based**，每段 8 页）。
-- 解析复用标准库 `html.parser`，文本清洗复用 `pdf-validate` 的 `_strip_html`。
+- 解析用标准库 `html.parser`：单元格文本经 parser 的 data 事件天然与标签分离（`convert_charrefs=True` 自动解码实体），判空无需再过 `_strip_html`。
 
 ### 输出契约
 
@@ -194,13 +196,32 @@ python3 scripts/check_plan_governance.py .
 
 ### 完成条件
 
-- [ ] `data/table_accuracy.csv` 产出，每行一个表格，含全部 11 个字段。
-- [ ] 表格数量与 `content_list.json` table 元素数一致（春风 150AURA：115，其中 104 含 `table_body`、11 记 `empty`）。
-- [ ] `col_consistent` / `parse_status` 能标出列数不一致或解析失败的表格。
-- [ ] 非法输入（不存在目录、无 content_list）返回明确 error，不产出半成品 CSV。
-- [ ] 若实现 MCP `eval_tables`：TypeScript 编译通过，`tools/list` 返回 10 个工具。
-- [ ] `python3 scripts/check_plan_governance.py .` 通过。
-- [ ] 同步 `mcp/README.md`（若新增工具）与项目级 `skills/pdf2md/SKILL.md`（新增 `data/table_accuracy.csv` 产物说明）及用户级 skill。
+- [x] `data/table_accuracy.csv` 产出，每行一个表格，含全部 11 个字段。→ 春风 150AURA 115 行、11 字段完整。
+- [x] 表格数量与 `content_list.json` table 元素数一致（春风 150AURA：115，其中 104 含 `table_body`、11 记 `empty`）。→ merge 口径 115/104/11 逐项吻合。
+- [x] `col_consistent` / `parse_status` 能标出列数不一致或解析失败的表格。→ 15 单测 + 负样本包端到端标出 malformed（col_consistent=False）/empty。
+- [x] 非法输入（不存在目录、无 content_list）返回明确 error，不产出半成品 CSV。→ 三类非法输入均 exit=1 + 明确 error，未产 CSV。
+- [—] 若实现 MCP `eval_tables`：TypeScript 编译通过，`tools/list` 返回 10 个工具。→ 决定 CLI-only，未实现，不适用。
+- [x] `python3 scripts/check_plan_governance.py .` 通过。
+- [x] 同步 `mcp/README.md`（若新增工具）与项目级 `skills/pdf2md/SKILL.md`（新增 `data/table_accuracy.csv` 产物说明）及用户级 skill。→ 未新增 MCP 工具，`mcp/README.md` 无需改；项目级 + 用户级 skill 已同步。
+
+### 验收记录（P4b，2026-07-08）
+
+**结论：P4b 达到"已完成"标准，功能性完成条件全部达标（MCP 封装按决策不实现）。**
+
+代码新增（未提交）：`scripts/lib/table_eval.py`（`parse_table_html` 网格解析 + `parse_segment_name` 选段口径 + `build_section_index`/`section_for_page` + `eval_package_tables` 编排）、`scripts/pdf-eval-tables`（bash wrapper + JSON 模式）、`tests/test_table_eval.py`（15 单测）。
+
+严格验收证据：
+
+- **TDD 全绿**：15 个零依赖单测（`python3 tests/test_table_eval.py`）覆盖规整/colspan/rowspan 占位/列不一致/空表/空单元格率/th/真实告警表 + 选段口径（rerun 排除）+ section 段级定位三分支。rowspan 网格占位由 red→green 驱动而出。
+- **真实样本吻合**：春风 150AURA 产出 115 行、104 ok、11 empty、0 malformed，与计划 Step 0（merge 口径 115/104/11）逐项吻合。
+- **选段口径根因闭环**：全扫所有段子目录得 121 表（`p0185-0191` 与遗留 `p0185-0191-rerun` 重复计数），复用 pdf-merge 段名正则后得 115。pdf-rerun 标准流程原地 `rm -rf` 覆盖原段、不产 `-rerun` 目录，该目录为手动实验残留。
+- **网格逻辑真实核对**：最复杂的 rowspan+colspan 混合表（p14 62×3 merged=60、p140 17×6 merged=10）逐行展开列数正确、consistent=True，证明 malformed=0 是真实数据质量而非漏标；21 个含合并单元格的表全部未误报。
+- **破损信号端到端**：构造负样本包（列不一致表 + 空表 + rerun 脏段），CSV 正确标出 malformed（col_consistent=False）与 empty，rerun 段被排除（3 行而非 4）。
+- **非法输入门禁**：不存在目录 / 无 segments / 有段无 content_list 三类均 exit=1 + 明确 error，均不产出半成品 CSV。
+
+section 精度：段级近似（合并 md 每段 8 页锚点内首个 `##`），已知不精确到页内、缺省空串——见未决问题。
+
+skill 同步：P4b 新增 `data/table_accuracy.csv` 产物，属输出包结构变更，已同步项目级 `skills/pdf2md/SKILL.md` 与用户级 skill。
 
 ## P4c：多模态 VLM 图表理解（候选）
 
@@ -271,10 +292,10 @@ python3 scripts/check_plan_governance.py .
 
 | 问题 | 推荐方案 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|
-| P4b 是否实现 MCP `eval_tables` | CLI 优先；工具数达阈值再评估封装 | 否 | 待实施时决定 |
-| P4b `section` 定位精度 | 从合并 Markdown 按页锚点就近取最近 `##`，缺省空串 | 否 | 已记录 |
+| P4b 是否实现 MCP `eval_tables` | CLI 优先；工具数达阈值再评估封装 | 否 | 已决：CLI-only，本轮不实现（未新增工具，`tools/list` 维持 9） |
+| P4b `section` 定位精度 | 从合并 Markdown 按页锚点就近取最近 `##`，缺省空串 | 否 | 已实现为段级近似（8 页锚点内首个 `##`），页内精度待增强 |
 | P4c 本地 VLM 选型与验收基准 | 进入设计中前先做 Step 0 待办 | 否（P4c 候选） | 已延后 |
-| P4b 产物需同步 `pdf2md` skill | 实施 P4b 时新增 `data/table_accuracy.csv` 产物说明到项目级 + 用户级 skill | 否 | 补同步动作已登记 |
+| P4b 产物需同步 `pdf2md` skill | 实施 P4b 时新增 `data/table_accuracy.csv` 产物说明到项目级 + 用户级 skill | 否 | 已同步（项目级 + 用户级） |
 | P4a `partial` 中文字符级判定偏宽（命中率≥0.5 易高估 partial/低估 missing） | 未来收紧为词级或连续子串匹配；当前样本仅 1 例、影响极小 | 否 | 已记录（P4a 验收观察） |
 | P4a `found` 语义边界易被误读为"正文章节存在" | 已在验收记录明确口径为"该页目录解析完整性"；如扩展需在字段文档注明 | 否 | 已记录 |
 | P4a `extract_toc_entries` 无持久化单测（靠验收临时单测覆盖 missing 分支） | 建议补 `tests/` 回归单测固化三分支与跨行合并 | 否 | 后续 enhancement |
