@@ -195,6 +195,98 @@ def detect_page_type(
     return "unknown"
 
 
+# --- TOC 条目级验证（P4a） ---
+# 字段方案事实源见 coverage-validation-optimization.md。
+# 先单行完整匹配，再合并相邻行（春风 150AURA 目录 100% 跨行：标题/点线/页码分行）。
+_TOC_ENTRY_RE = re.compile(r"(.+?)\s*[.]{4,}\s*(\d+)\s*$")   # 单行：标题 + 点线 + 页码
+_TOC_TITLE_DOTS_RE = re.compile(r"^(.+?)\s*[.]{4,}\s*$")     # 跨行上半：标题 + 点线（无页码）
+_TOC_DOTS_PAGE_RE = re.compile(r"^\s*[.]{4,}\s*(\d+)\s*$")   # 跨行下半：点线 + 页码（无标题）
+
+
+def _extract_toc_candidates(pdf_page_text: str):
+    """从目录页 PDF 文本层抽取 (title, page_ref, match_text) 候选，含跨行合并。
+
+    检查顺序按特异性排列：纯点线+页码(DP) > 标题+点线(TD) > 单行完整(FULL)。
+    DP 优先可避免跨行下半被 FULL 误捕获成 title='.'（点号归一化后为空）。
+    """
+    candidates = []
+    pending_title = None
+    pending_line = None
+    for raw_line in pdf_page_text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        # 1. 跨行下半：纯点线 + 页码（无标题）→ 与上一行 pending 标题合并
+        m_dp = _TOC_DOTS_PAGE_RE.match(line)
+        if m_dp:
+            if pending_title:
+                match_text = f"{pending_line} {line}".strip()
+                candidates.append((pending_title, int(m_dp.group(1)), match_text))
+            pending_title = None
+            continue
+        # 2. 跨行上半：标题 + 点线（无页码）→ 记为 pending，等下一行页码
+        m_td = _TOC_TITLE_DOTS_RE.match(line)
+        if m_td:
+            pending_title = m_td.group(1).strip()
+            pending_line = line
+            continue
+        # 3. 单行完整：标题 + 点线 + 页码
+        m_full = _TOC_ENTRY_RE.search(line)
+        if m_full:
+            candidates.append((m_full.group(1).strip(), int(m_full.group(2)), line))
+            pending_title = None
+            continue
+    return candidates
+
+
+def extract_toc_entries(pdf_page_text: str, md_page_text: str):
+    """从 PDF 文本层抽取目录条目，用 MinerU 该页输出验证是否解析出。
+
+    仅用于 review.md 逐条目展示，不改变页面决策（P4a 实施决策：初期仅展示）。
+    found 判定口径：目录条目标题（归一化后）是否出现在 MinerU 该页 Markdown 输出中。
+
+    Returns:
+        (entries, stats)：
+        - entries: [{title, page_ref, found, match_text}]
+        - stats: {total, found, missing, partial}，满足 total == found + missing + partial
+    """
+    md_norm = normalize(md_page_text)
+    entries = []
+    found = missing = partial = 0
+    for title, page_ref, match_line in _extract_toc_candidates(pdf_page_text):
+        title_norm = normalize(title)
+        if not title_norm:
+            continue
+        if title_norm in md_norm:
+            entry_found = True
+            match_text = match_line
+            found += 1
+        else:
+            entry_found = False
+            match_text = None
+            # 部分匹配：标题去重字符命中率 >= 0.5 记为 partial，否则完全丢失
+            title_chars = set(title_norm)
+            hit = sum(1 for ch in title_chars if ch in md_norm)
+            ratio = hit / len(title_chars) if title_chars else 0.0
+            if ratio >= 0.5:
+                partial += 1
+            else:
+                missing += 1
+        entries.append({
+            "title": title,
+            "page_ref": page_ref,
+            "found": entry_found,
+            "match_text": match_text,
+        })
+    stats = {
+        "total": len(entries),
+        "found": found,
+        "missing": missing,
+        "partial": partial,
+    }
+    return entries, stats
+
+
 doc = fitz.open(pdf_path)
 
 segments = []
@@ -383,7 +475,7 @@ for start, end, segment in segments:
             page_reason = "low_text_coverage"
             page_rerunnable = True
 
-        pages_data.append({
+        page_entry = {
             "page": page_idx,
             "coverage": round(page_cov, 4) if page_cov is not None else None,
             "status": "suspicious" if (page_cov is not None and page_cov < threshold) else "passed",
@@ -394,7 +486,13 @@ for start, end, segment in segments:
             "pdf_tokens": len(pdf_page_tokens),
             "md_tokens": len(md_page_tokens),
             "missing_tokens": [[t, c] for t, c in page_missing[:10]],
-        })
+        }
+        # P4a: 目录页新增条目级验证字段（仅展示，不改变上方 decision/rerunnable）
+        if page_type == "toc":
+            toc_entries, toc_stats = extract_toc_entries(pdf_page_text, md_page_text)
+            page_entry["toc_entries"] = toc_entries
+            page_entry["toc_stats"] = toc_stats
+        pages_data.append(page_entry)
 
     # --- 段级汇总：基于页面类型更新决策（阶段 3） ---
     seg_status = "suspicious" if coverage < threshold else "passed"

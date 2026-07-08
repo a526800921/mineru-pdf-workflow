@@ -28,7 +28,8 @@
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
 | [modelpad-dynamic-env-cleanup](plans/modelpad-dynamic-env-cleanup.md) | 已完成 | 全阶段（0-4） | modelpad-pdf-service-orchestration、ModelPad API | [阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
-| [pdf-workflow-enhancement-roadmap](plans/pdf-workflow-enhancement-roadmap.md) | 已完成 | P3b：向量化前置准备（chunks.jsonl 导出） | 所有已完成计划、P3a 检索工具、春风 150AURA 输出包 | [P3b 完成](plans/pdf-workflow-enhancement-roadmap.md#完成条件) |
+| [pdf-workflow-enhancement-roadmap](plans/pdf-workflow-enhancement-roadmap.md) | 实施中 | P4 拆分至 pdf-evaluation-suite（P4a 已完成，P4b 待实施），P1-P3b 已完成 | 所有已完成计划、P3a 检索工具、春风 150AURA 输出包 | [P3b 完成](plans/pdf-workflow-enhancement-roadmap.md#完成条件) |
+| [pdf-evaluation-suite](plans/pdf-evaluation-suite.md) | 实施中 | P4a 已完成；P4b 表格结构自检 待实施；P4c 本地 VLM 候选 | pdf-workflow-enhancement-roadmap、coverage-validation-optimization、春风 150AURA 输出包 | [P4a 验收记录](plans/pdf-evaluation-suite.md#验收记录2026-07-08) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -46,6 +47,7 @@
 10. `minimal-automation-runbook`
 11. `modelpad-dynamic-env-cleanup`
 12. `pdf-workflow-enhancement-roadmap`
+13. `pdf-evaluation-suite`（P4；P4a 已完成，P4b 待实施，P4c 候选）
 
 ## 依赖关系
 
@@ -79,6 +81,9 @@
 | modelpad-dynamic-env-cleanup | ModelPad API | start 请求体传入 `env` 覆盖，stop 后清理临时目录 |
 | pdf-workflow-enhancement-roadmap | automated-pdf-pipeline | P2-P5 增强均基于现有流水线能力 |
 | pdf-workflow-enhancement-roadmap | mcp/README.md | P2 拆分式 MCP 工具设计已就绪 |
+| pdf-evaluation-suite | pdf-workflow-enhancement-roadmap | P4 从路线图拆分为独立评测套件专项计划 |
+| pdf-evaluation-suite | coverage-validation-optimization | P4a TOC 条目字段方案（`toc_entries`/`toc_stats`）事实源 |
+| pdf-evaluation-suite | 春风 150AURA 输出包 | P4b 表格结构自检以 104 个 HTML 表格为 Step 0 样本 |
 
 ## 替代、合并和废弃
 
@@ -104,6 +109,7 @@
 | PDF 服务生命周期将由 ModelPad app 托管 | 全阶段（0-3）已完成：脚本不再管理服务进程/shared 输出目录，`pdf-auto` 重跑失败安全兜底，`pdf-merge` 图片同名冲突检测 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 已解决 |
 | PDF 服务未启动时需要按需调用 ModelPad start/stop | 全阶段（0-3）已完成：helper 封装启停逻辑，三个入口已接入；无服务时自启、用完自停；已有服务时只复用不停止；失败路径可诊断 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、ModelPad API | 否 | 已解决 |
 | `pdf-prepare-ingest` 对真实手册表格产生冲突误报 | `conflict-context-ingestion-fix` 全阶段（0-3）已完成：上下文感知冲突判定 + rowspan 父级识别，春风样本冲突 35→0 组，已知误报全部消除 | `pdf-extract-data`、`pdf-prepare-ingest`、`conflicts.csv`、`ingest_ready.csv` | 否 | 已解决 |
+| P4c 多模态 VLM 需本地模型选型与环境评估 | 进入"设计中"前先做 Step 0 待办（选型、`image_or_sparse` 页基线、验收基准） | `pdf-evaluation-suite` P4c、本地 VLM 后端 | 否（P4c 候选，不阻塞 P4a/P4b） | 待评估 |
 
 ## 完成证据
 
@@ -120,3 +126,4 @@
 | modelpad-pdf-service-lifecycle | 阶段 0-3 | 详见 [ModelPad 托管 PDF 服务阶段 3 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-3-完成证据2026-07-03) |
 | modelpad-pdf-service-orchestration | 阶段 0-3 | 详见 [ModelPad PDF 服务按需编排阶段 3 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-3-完成证据2026-07-04) |
 | modelpad-dynamic-env-cleanup | 阶段 0-4 | 详见 [ModelPad 动态 env 与临时输出清理阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
+| pdf-evaluation-suite | P4a（TOC 条目级验证） | 详见 [PDF 评测套件 P4a 验收记录](plans/pdf-evaluation-suite.md#验收记录2026-07-08) |

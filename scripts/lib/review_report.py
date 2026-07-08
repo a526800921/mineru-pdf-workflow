@@ -73,6 +73,9 @@ def generate_review_report(
     # --- 逐页详情 ---
     _append_page_details(lines, issues, threshold, include_page_type)
 
+    # --- 目录页条目级验证（P4a） ---
+    _append_toc_entry_details(lines, report)
+
     content = "\n".join(lines)
     if file is not None:
         file.write(content)
@@ -253,6 +256,48 @@ def _append_page_details(
                     f"{p['md_tokens']} | {missing} |"
                 )
 
+        lines.append("")
+
+
+def _append_toc_entry_details(lines: list[str], report: dict) -> None:
+    """P4a：对目录页逐条目列出缺失标题，而非仅"整页覆盖率低"。
+
+    数据源为 pdf-validate 在 toc 页写入的 toc_entries/toc_stats 字段。
+    仅展示，不改变任何页面决策。
+    """
+    toc_pages = [
+        (seg, p)
+        for seg in report["segments"]
+        for p in seg.get("pages", [])
+        if p.get("page_type") == "toc" and "toc_entries" in p
+    ]
+    if not toc_pages:
+        return
+
+    lines.append("## 目录页条目级验证")
+    lines.append("")
+
+    for seg, p in toc_pages:
+        st = p.get("toc_stats", {})
+        pdf_page_num = p["page"] + 1
+        lines.append(
+            f"### 第 {pdf_page_num} 页目录（{seg['name']}）"
+        )
+        lines.append("")
+        lines.append(
+            f"- 条目总数 {st.get('total', 0)}，找到 {st.get('found', 0)}，"
+            f"完全丢失 {st.get('missing', 0)}，部分匹配 {st.get('partial', 0)}"
+        )
+        lines.append("")
+
+        unfound = [e for e in p.get("toc_entries", []) if not e.get("found")]
+        if unfound:
+            lines.append("| 缺失/部分条目 | 目录标注页码 |")
+            lines.append("|----------------|--------------|")
+            for e in unfound:
+                lines.append(f"| {e.get('title', '')} | {e.get('page_ref', '')} |")
+        else:
+            lines.append("目录条目全部在 MinerU 输出中找到。")
         lines.append("")
 
 
