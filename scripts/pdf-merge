@@ -41,21 +41,37 @@ output="${PDF_MERGE_OUTPUT:-$pkg_dir/${pkg_name}.md}"
 pkg_images_dir="$pkg_dir/images"
 mkdir -p "$pkg_images_dir"
 
-python - "$segments_dir" "$output" "$pkg_images_dir" <<'PY'
+_this_dir="$(cd "$(dirname "$0")" && pwd)"
+
+python - "$_this_dir" "$segments_dir" "$output" "$pkg_images_dir" <<'PY'
 import hashlib
+import json
 import re
 import shutil
 import sys
 from pathlib import Path
+
+scripts_dir = sys.argv[1]
+sys.path.insert(0, scripts_dir)
+from lib.page_anchors import insert_page_anchors
+
 
 def file_sha256(p: Path) -> str:
     """计算文件内容 SHA-256。"""
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-segments_dir = Path(sys.argv[1])
-output = Path(sys.argv[2])
-pkg_images = Path(sys.argv[3])
+def find_v1_content_list(seg_md_dir: Path):
+    """段 md 同目录的 v1 content_list.json（排除 v2）。"""
+    for f in sorted(seg_md_dir.rglob("*_content_list.json")):
+        if not f.name.endswith("_content_list_v2.json"):
+            return f
+    return None
+
+
+segments_dir = Path(sys.argv[2])
+output = Path(sys.argv[3])
+pkg_images = Path(sys.argv[4])
 
 segment_re = re.compile(r"^p(\d{4,})-(\d{4,})$")
 
@@ -84,20 +100,49 @@ if missing:
     raise SystemExit("以下分段缺少 Markdown：\n" + "\n".join(missing))
 
 pieces = []
+anchor_warnings = {}  # 段名 -> 逐页锚点 warning（近似定位 / 整段回退）
+page_anchor_total = 0
 for index, (start, end, name, md_path) in enumerate(segments):
     text = md_path.read_text(encoding="utf-8").strip()
     if not text:
         raise SystemExit(f"分段 Markdown 为空：{md_path}")
+    text += "\n"  # 保证尾换行，使段末逐页锚点落在行首（独立注释行，不粘正文）
+
+    # 逐页锚点（A′ + X）：读同目录 content_list.json(v1)，按 page_idx 插 <!-- page N -->
+    cl = find_v1_content_list(md_path.parent)
+    if cl is not None:
+        items = json.loads(cl.read_text(encoding="utf-8"))
+        text, warns = insert_page_anchors(
+            text, items if isinstance(items, list) else [], start, end)
+        page_anchor_total += text.count("<!-- page ")
+        if warns:
+            anchor_warnings[name] = warns
 
     if index:
         pieces.append("\n\n---\n\n")
     pieces.append(f"<!-- pages {start}-{end} -->\n\n")
-    pieces.append(text)
-    pieces.append("\n")
+    pieces.append(text)  # text 已以 \n 结尾
 
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text("".join(pieces), encoding="utf-8")
 
+# 逐页锚点 warning 写入 manifest.json（存在才更新，不新建）
+manifest_path = output.parent / "manifest.json"
+if manifest_path.exists():
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["page_anchors"] = {
+            "total_anchors": page_anchor_total,
+            "segments_with_warnings": len(anchor_warnings),
+            "warnings": anchor_warnings,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+    except (ValueError, OSError):
+        pass
+
+print(f"逐页锚点: {page_anchor_total} 个，{len(anchor_warnings)} 段有近似/回退 warning")
 print(f"已合并分段数: {len(segments)}")
 print(f"输出文件: {output}")
 for start, end, name, md_path in segments:

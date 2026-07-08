@@ -48,7 +48,7 @@
 4. 边界处理（方案 X，保证段内锚点连续、宁缺毋误）：
    - 段内**个别页**首尾都失配 → 用相邻两个可靠锚点之间的位置补 `<!-- page N -->`，`manifest.json` 记该页为「近似定位」；
    - 某页在 `content_list` 里无任何内容块（纯空白页）→ 仍按顺序补空的 `<!-- page N -->`（锚点严格连续）；
-   - 段内**多数页**失配（典型：TOC 段被 `toc_repair` 整段替换）→ **整段回退**，只保留段级锚点 `<!-- pages N-M -->`，`manifest.json` 记 warning。
+   - 段内**多数页**失配 → **整段回退**，只保留段级锚点 `<!-- pages N-M -->`，`manifest.json` 记 warning。整段回退是**按失配率触发的通用兜底，不预设 TOC 段**：`toc_repair` 差异为字符级、非整段替换，A′ 不重建内容，故 TOC 段实测仍逐页命中（见 Step 0）。
 
 段级锚点始终保留（叠加），现有 `read_page`/`extract-data` 的 `<!-- pages N-M -->` 正则不受影响。
 
@@ -78,8 +78,8 @@
 
 | 阶段 | 目标 | 进入条件 | 验证方向 | 状态 |
 |---|---|---|---|---|
-| 0 | 设计与 Step 0 证据固化 | 有完整输出包样本（春风 150AURA） | 本会话实测数据固化为可复现脚本/记录 | 实施中 |
-| 1 | `pdf-merge` 逐页锚点（A′ + X） | 阶段 0 完成、用户批准实施 | 春风包合并 md 每正文段逐页锚点连续，TOC 段回退段级，manifest 记 warning | 待实施 |
+| 0 | 设计与 Step 0 证据固化 | 有完整输出包样本（春风 150AURA） | 本会话实测数据固化为可复现脚本/记录 | 已完成 |
+| 1 | `pdf-merge` 逐页锚点（A′ + X） | 阶段 0 完成、用户批准实施 | 春风包合并 md 每正文段逐页锚点连续，失配段回退段级，manifest 记 warning | 已完成 |
 | 2 | 回填旧包 | 阶段 1 完成 | 对现有 `segments/` 重跑 merge，锚点正确、正文内容与旧 md 一致 | 待实施 |
 | 3 | `read_page` 单页 | 阶段 1 完成 | 输入单页返回该页 md；无逐页锚点段回退段级 | 待实施 |
 | 4 | 结构化数据逐页 | 阶段 1、3 完成 | `page_start==page_end` 精确到单页；与 `refine_page_numbers` 现状对比无回归 | 待实施 |
@@ -95,6 +95,7 @@
 - **路线 A 重建保真实测**（全包，丢弃 header/footer/aside_text/page_number）：22/25 段逐字零差异；共 10 行差异集中在 3 段。
 - **差异根因**：`p0001-0008` LCD/CD 系 `toc_repair` 只改 md 不改 `content_list`（`content_list` 为修复前）；`p0161-0168` 图注顺序；`p0185-0191-rerun` `image.content` 的 `<details>` 渲染遗漏。
 - **后处理边界**：`toc_repair.py:191` 是唯一「只改 md 不改 content_list」的后处理，仅作用于 TOC 段；rerun 段 md 与 `content_list` 配套一致，不失配。
+- **A′ 命中率实测（2026-07-08，阶段 0 收尾）**：首尾双指纹（块文本 / `table_body` / `img_path` 去空白前 40 字符）+ 前向单调游标。正文段 p0009-0016 **8/8**（page15/16 首块失配、尾块命中——正是双指纹优于路线 B 单块 7/8 之处）；TOC 段 p0001-0008 **8/8**（`toc_repair` 字符级差异未落在指纹前缀，A′ 不重建故不受影响）。**修正原假设**：整段回退按失配率触发，TOC 段不预设回退。
 
 ## 验证方式
 
@@ -117,14 +118,41 @@ PY
 
 治理检查：`python3 scripts/check_plan_governance.py .`
 
+## 阶段 1 验收记录（2026-07-08）
+
+`scripts/lib/page_anchors.py`（新建，A′+X 核心）+ `scripts/pdf-merge`（集成）+ `tests/test_page_anchors.py`（10 单测）。独立 subagent 对抗性验收：**有条件通过**。
+
+自测 + 独立复核达标：
+- **10 单测全绿**：首块 exact / 尾块 tail / 多数失配回退 / 空白页顺序补 / 正文零改动 / 绝对页码 + 真实段 p0009-0016 8/8。
+- **春风端到端**（临时输出，未覆盖原包）：191 逐页锚点，1-191 连续无缺无重；段级锚点 24 保留；strip 逐页锚点后与原 md 逐字节一致。
+- **manifest**：`total_anchors=191`、7 段 warning、0 整段回退。
+- **影响**：`impact` / `detect_changes` LOW、affected_processes 空，向后兼容叠加。
+- 独立验收另确认：跨页相同前缀未误配、191 锚点全在行首无破行、pdf-merge 集成（argv/import/v1 选择/段级保留）正确。
+
+独立验收发现（放行前待处理）：
+- **M-1（中，待修）**：近似页（miss/tail）用 `last_off` 补位，与**前一可靠页**锚点同 offset 堆叠 → 前一可靠页 read region 塌空。实测 9 对（前页 14/20/65/71/75/127/129/187/189 读空），且这些可靠页未进 manifest warning，会误导阶段 3 `read_page`/阶段 4 `extract-data`。修复：近似页锚点放**下一个**可靠锚点处 + 受连累页写 manifest。
+- **M-2（中，待修）**：`page_idx` 不与段声明页范围 `pXXXX-YYYY` 交叉校验，越界/尾部缺口静默（春风规整未触发）。加段范围校验 + warning。
+- **L-3（低）**：段缺 `content_list.json` → 整段逐页锚点缺失且不记 warning。
+- **L-4（低）**：`strip_page_anchors` 正则自校验，源 md 若本含 `<!-- page N -->` 会误判（当前样本 0 行不触发）。
+
+### 修复复验（2026-07-08）
+
+**M-1 / M-2 已修，独立 subagent 复验确认；复验发现的粘行回归也已修。阶段 1 放行。**
+
+- **M-1 修**：近似页（tail/miss/blank）改放「下一个 exact 锚点」处（段尾放段末），近似页诚实读空、前一可靠页 read region 保全。独立复验：9 个受连累可靠页（14/20/65/71/75/127/129/187/189）read region 全部非空且内容正确归位，空 region 严格 ⊆ 近似页集合。
+- **M-2 修**：`seg_end` 段范围校验——越界 `page_idx` 记 `page_idx_out_of_range` 不溢出、尾部缺口补 blank 不静默；独立负样本验证通过。
+- **粘行回归修**（复验发现的新缺陷）：`next_exact=len` + `pdf-merge` `.strip()` 去尾换行 → 段尾锚点粘正文行尾（3 处）。修法：`pdf-merge` 段 text 补尾换行使段末锚点落行首。端到端复验：**0 粘行**、strip 后与现有 md 逐字节一致（零改动不回归）、191 连续、M-1 不回归。
+- **14 单测全绿**（新增 read region 不被偷 / 越界 / 尾部缺口 / 锚点独立行 4 个用例）。
+- L-3 / L-4 / 整段全 tail 段未修，延后（见未决问题）。
+
 ## 完成条件
 
-- [ ] 阶段 1：正文段逐页锚点连续且落点正确；TOC/近似失败段回退段级并记 warning；正文内容零改动。
+- [x] 阶段 1：正文段逐页锚点连续且落点正确；近似段记 warning；正文内容零改动。→ 191 锚点连续、零改动、0 粘行、M-1/M-2/粘行已修并独立复验、14 单测（见修复复验）。
 - [ ] 阶段 2：旧包回填后正文内容与旧 md 一致，逐页锚点正确。
 - [ ] 阶段 3：`read_page` 单页返回；无逐页锚点段回退段级；MCP 编译通过。
 - [ ] 阶段 4：`page_start==page_end` 精确到单页；对比现状无回归。
-- [ ] 每阶段同步 `skills/pdf2md/SKILL.md` 及用户级副本。
-- [ ] `detect_changes()` 仅影响预期符号；治理检查通过。
+- [~] 每阶段同步 `skills/pdf2md/SKILL.md` 及用户级副本。→ 阶段 1 `pdf-merge` 已能生成逐页锚点，但现有包未回填、`read_page` 未消费，合并 md 格式 skill 描述推迟到阶段 2 回填后统一更新（补同步动作已登记）。
+- [x] `detect_changes()` 仅影响预期符号；治理检查通过。→ detect_changes LOW、affected_processes 空；治理检查通过。
 
 ## 风险和回滚
 
@@ -148,6 +176,9 @@ PY
 | 「近似定位」页是否需在 md 锚点上标注（vs 仅 manifest） | 阶段 1 决定，默认仅 manifest，md 锚点保持纯净 | 否 | 待定 |
 | `read_page` 对回退段级的段是否需返回粒度提示字段 | 阶段 3 评估，倾向复用现有 `segment_count`/`page_start!=page_end` 表达 | 否 | 待定 |
 | pdf2md skill 同步时机 | 各阶段实施完成即同步项目级 + 用户级 skill；若无法同步在此表记录补同步动作 | 否 | 待跟踪 |
+| L-3：整段缺 `content_list.json` → 整段逐页锚点缺失且不记 warning | 走 `cl is None` 分支加段级 warning；阶段 2 回填时处理 | 否 | 待处理（阶段 1 复验发现） |
+| L-4：`strip_page_anchors` 自校验对源 md 本含 `<!-- page N -->` 行会误判 | 罕见（样本 0 行），阶段 3 `read_page` 前评估 | 否 | 已登记 |
+| 整段全 tail 段（每页首失配尾命中，miss=0 不回退）逐页定位退化为无效 | 真实样本未出现；如出现按失配率纳入回退判定 | 否 | 已登记边角 |
 
 ## 关联
 
