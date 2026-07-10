@@ -293,22 +293,27 @@ fi
 if [[ "$action" == "merge" ]]; then
   merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
 
-  # --- TOC 段修复：用 PDF 文本层重生成目录页 Markdown（含层级）---
   step_start "$_step_total" "合并 Markdown"
   log "  → 路径: $merge_output"
-  python3 - "$_scripts_dir" "$pdf_path" "$segments_dir" "$validate_tmp" <<'PY'
+  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
+
+  # --- 合并级 TOC 修复：用 <!-- page N --> 锚点精确替换目录页内容 ---
+  python3 - "$_scripts_dir" "$pdf_path" "$merge_output" "$validate_tmp" <<'PY'
 import sys
 from pathlib import Path
 scripts_dir = sys.argv[1]
 sys.path.insert(0, scripts_dir)
-from lib.toc_repair import repair, verify_entry_recall
-fixed = repair(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+pdf_path = Path(sys.argv[2])
+merged_md = Path(sys.argv[3])
+segments_dir = merged_md.parent / "segments"
+validate_tmp = sys.argv[4]
+from lib.toc_repair import repair_merged, verify_entry_recall
+fixed = repair_merged(pdf_path, merged_md, validate_tmp)
 if fixed:
-    verify_entry_recall(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+    verify_entry_recall(pdf_path, segments_dir, validate_tmp)
 PY
 
   log "  → 输出: $merge_output"
-  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
 
   # 检查是否有 review_only 段，生成人工复核清单
   review_count="$(python3 -c "
@@ -573,16 +578,18 @@ if echo "$decision" | grep -q "^all_passed$"; then
   log
   log "=== 合并 ==="
 
-  python3 - "$_scripts_dir" "$pdf_path" "$segments_dir" "$validate2_tmp" <<'PY'
+  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
+
+  # --- 合并级 TOC 修复：用 <!-- page N --> 锚点精确替换目录页内容 ---
+  python3 - "$_scripts_dir" "$pdf_path" "$merge_output" "$validate2_tmp" <<'PY'
 import sys
 from pathlib import Path
 scripts_dir = sys.argv[1]
 sys.path.insert(0, scripts_dir)
-from lib.toc_repair import repair
-repair(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+from lib.toc_repair import repair_merged
+repair_merged(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
 PY
 
-  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
   log "合并完成: $merge_output"
 
 

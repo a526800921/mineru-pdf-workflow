@@ -319,6 +319,70 @@ function buildFailedOutput(
 }
 
 // ============================================================
+// Page-to-segment resolution
+// ============================================================
+
+const SEGMENT_DIR_RE = /^p(\d{4,})-(\d{4,})$/;
+
+async function resolvePagesToSegments(
+  segmentsDir: string,
+  pages: number[],
+): Promise<{ ok: true; segments: string[] } | { ok: false; error: string }> {
+  let segDirs: string[];
+  try {
+    segDirs = await fs.readdir(segmentsDir);
+  } catch (err) {
+    return { ok: false, error: `Cannot read segments directory: ${err}` };
+  }
+
+  // Build segment index from directory names
+  const segIndex: Array<{ name: string; start: number; end: number }> = [];
+  for (const entry of segDirs) {
+    const m = SEGMENT_DIR_RE.exec(entry);
+    if (m) {
+      segIndex.push({
+        name: entry,
+        start: parseInt(m[1], 10),
+        end: parseInt(m[2], 10),
+      });
+    }
+  }
+
+  if (segIndex.length === 0) {
+    return { ok: false, error: "No segments found in segments directory" };
+  }
+
+  // Sort by start page for deterministic resolution
+  segIndex.sort((a, b) => a.start - b.start);
+
+  // Resolve each page number to a segment, dedup
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const page of pages) {
+    let matched = false;
+    for (const seg of segIndex) {
+      if (page >= seg.start && page <= seg.end) {
+        if (!seen.has(seg.name)) {
+          seen.add(seg.name);
+          result.push(seg.name);
+        }
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      return {
+        ok: false,
+        error: `Page ${page} does not fall into any segment in ${segmentsDir}`,
+      };
+    }
+  }
+
+  return { ok: true, segments: result };
+}
+
+// ============================================================
 // Main — MCP Server
 // ============================================================
 
@@ -716,10 +780,25 @@ async function main() {
         };
       }
 
+      // 页码 → 段名解析与去重（避免多页码落入同段重复跑）
+      const resolved = await resolvePagesToSegments(segments_dir, pages);
+      if (!resolved.ok) {
+        console.error(`[mcp] Page resolution failed: ${resolved.error}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: formatOutput(buildFailedOutput(1, "", resolved.error)),
+            },
+          ],
+        };
+      }
+      console.error(`[mcp] resolved ${pages.length} pages to ${resolved.segments.length} unique segments: ${resolved.segments.join(", ")}`);
+
       const scriptPath = path.join(PROJECT_ROOT, "scripts", "pdf-rerun");
       const result = await runScript({
         scriptPath,
-        args: [pdf_path, segments_dir, ...pages.map(String)],
+        args: [pdf_path, segments_dir, ...resolved.segments],
         env: {
           PDF_RERUN_JSON: "1",
           MINERU_EFFORT: effort,

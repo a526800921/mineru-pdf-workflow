@@ -2,7 +2,8 @@
 
 用法：
   import toc_repair
-  toc_repair.repair(pdf_path, segments_dir, validate_tmp)
+  toc_repair.repair(pdf_path, segments_dir, validate_tmp)     # 段级（纯 TOC 段覆盖写）
+  toc_repair.repair_merged(pdf_path, merged_md, validate_tmp) # 合并级（锚点感知，不丢失非目录页）
 
 产出：
   - 更新 TOC 段的 Markdown，带缩进层级
@@ -116,6 +117,163 @@ def _compute_depths(entries: list[dict]) -> None:
         e["depth"] = best_idx
 
 
+# ── 合并 md 级修复 ─────────────────────────────────────────────────
+
+def _build_page_char_set(page_text: str) -> set:
+    """从页文本构建非空白字符集，用于模糊匹配。"""
+    return set(re.sub(r'\s', '', page_text))
+
+
+def _assign_to_toc_pages(
+    entries: list[dict], doc, toc_page_nums: list[int]
+) -> dict[int, list]:
+    """通过逐页文本精确匹配 + 字符集模糊回退，将条目分配到实际目录页。
+
+    优先 title in page_text（乱码只是重复，不改变字符顺序），
+    未匹配的条目用字符集重合度做模糊分配。
+    """
+    page_texts = {}
+    for pn in toc_page_nums:
+        page_texts[pn] = doc[pn - 1].get_text("text")  # PyMuPDF page index 是 0-based
+
+    assigned = {pn: [] for pn in toc_page_nums}
+    unassigned = []
+
+    # 第一轮：精确匹配（利用乱码不改变字符顺序的特点）
+    for e in entries:
+        title = e["title"]
+        found = False
+        for pn in toc_page_nums:
+            if title in page_texts[pn]:
+                assigned[pn].append(e)
+                found = True
+                break
+        if not found:
+            unassigned.append(e)
+
+    # 第二轮：模糊回退（字符集重合度）
+    if unassigned:
+        page_chars = {
+            pn: _build_page_char_set(t) for pn, t in page_texts.items()
+        }
+        for e in unassigned:
+            chars = _build_page_char_set(e["title"])
+            if not chars:
+                assigned[toc_page_nums[0]].append(e)
+                continue
+            best_page = max(
+                toc_page_nums,
+                key=lambda p: len(chars & page_chars[p]),
+            )
+            assigned[best_page].append(e)
+
+    return assigned
+
+
+def _build_merged_toc_block(
+    first_page: int, last_page: int, by_page: dict[int, list]
+) -> str:
+    """生成合并 md 中替换 TOC 页的文本块，保留逐页锚点。"""
+    lines = []
+    for page in range(first_page, last_page + 1):
+        lines.append(f"<!-- page {page} -->")
+        if page == first_page:
+            lines.append("## 目录\n")
+        for e in by_page.get(page, []):
+            indent = "  " * e["depth"]
+            lines.append(f"{indent}- {e['title']} {e['page']}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> int:
+    """在合并 Markdown 上用 <!-- page N --> 锚点精确替换目录页内容。
+    只替换 TOC 页范围的文本，非目录页完全保留。
+    """
+    with open(validate_tmp) as f:
+        report = json.load(f)
+
+    toc_segs = [
+        s for s in report["segments"]
+        if s.get("page_type_summary", {}).get("toc", 0) > 0
+    ]
+    if not toc_segs:
+        return 0
+
+    doc = fitz.open(str(pdf_path))
+
+    # 方案 A：PDF 内置大纲
+    entries = _build_from_outline(doc)
+    source = "PDF 内置大纲"
+
+    # 方案 B：文本层 fallback
+    if not entries:
+        entries = []
+        for seg in toc_segs:
+            for p in range(seg["start_page"] - 1, min(seg["end_page"], doc.page_count)):
+                entries.extend(_extract_entries_from_page(doc, p))
+        if entries:
+            _compute_depths(entries)
+            source = "文本层 x 坐标"
+
+    if not entries:
+        doc.close()
+        return 0
+
+    # 收集所有 TOC 页号（转成全局 1-based，对齐合并 md 的 <!-- page N --> 锚点）
+    all_toc_pages = set()
+    for seg in toc_segs:
+        start = seg["start_page"]
+        for p in seg.get("pages", []):
+            if p.get("page_type") == "toc":
+                all_toc_pages.add(start + p["page"])
+    if not all_toc_pages:
+        doc.close()
+        return 0
+
+    first_toc = min(all_toc_pages)
+    last_toc = max(all_toc_pages)
+    md_text = merged_md_path.read_text(encoding="utf-8")
+
+    # 按实际目录页分配条目
+    toc_page_nums = sorted(all_toc_pages)
+    by_page = _assign_to_toc_pages(entries, doc, toc_page_nums)
+
+    # 构造替换用 TOC 块
+    toc_block = _build_merged_toc_block(first_toc, last_toc, by_page)
+
+    # 定位替换范围：从 <!-- page {first_toc} --> 到 <!-- page {last_toc + 1} -->（或文件尾）
+    anchor_first = f"<!-- page {first_toc} -->"
+    idx_start = md_text.find(anchor_first)
+    if idx_start == -1:
+        print(f"  ! 合并 md 中未找到 {anchor_first} 锚点，跳过", file=sys.stderr)
+        doc.close()
+        return 0
+
+    next_page = last_toc + 1
+    anchor_next = f"<!-- page {next_page} -->"
+    idx_end = md_text.find(anchor_next, idx_start + len(anchor_first))
+
+    if idx_end != -1:
+        new_text = md_text[:idx_start] + toc_block + md_text[idx_end:]
+    else:
+        # 最后一页无后续锚点，替换到文件尾
+        new_text = md_text[:idx_start] + toc_block
+
+    merged_md_path.write_text(new_text, encoding="utf-8")
+
+    # 写入 toc_tree.json
+    _write_toc_tree(merged_md_path.parent, entries)
+
+    print(
+        f"  合并级 TOC 修复: 页码 {first_toc}–{last_toc}, "
+        f"{len(entries)} 条目（{_depth_distribution(entries)}），来源: {source}",
+        file=sys.stderr,
+    )
+    doc.close()
+    return 1
+
+
 # ── 公共 ───────────────────────────────────────────────────────────
 
 def _build_markdown(entries: list[dict]) -> str:
@@ -181,8 +339,17 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
         doc.close()
         return 0
 
-    # 写回 TOC 段的 Markdown
+    # 写回纯 TOC 段的 Markdown（跳过混合段：有非目录页，避免覆盖丢失内容）
     for seg in toc_segs:
+        total_pages = seg["end_page"] - seg["start_page"] + 1
+        toc_pages = seg.get("page_type_summary", {}).get("toc", 0)
+        if toc_pages < total_pages:
+            print(
+                f"  {seg['name']}: 跳过混合段（{toc_pages}/{total_pages} 页目录），"
+                f"保留 MinerU 原始输出",
+                file=sys.stderr,
+            )
+            continue
         seg_dir = segments_dir / seg["name"]
         md_files = sorted(seg_dir.rglob("*.md"))
         if not md_files:
