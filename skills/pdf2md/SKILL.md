@@ -146,7 +146,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 `pdf-auto` / `run_pdf_auto`：
 
 - `all_passed` / `passed`：验证通过，已合并 Markdown。
-- `merged_with_issues` / `needs_review`：生成 `review.md`，需要人工复核。
+- `needs_review` / `needs_review`：已合并 Markdown，同时生成 `review.md`，需要人工复核。
 - `error` / `failed`：脚本或输入错误。
 
 常见产物：

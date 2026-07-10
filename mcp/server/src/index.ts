@@ -405,7 +405,7 @@ async function main() {
       "将 CLI JSON 输出映射为结构化工具返回值。\n\n" +
       "状态说明：\n" +
       "- passed：全部段通过验证，合并完成\n" +
-      "- needs_review：存在需人工复核的段，未合并。确认后运行 pdf-merge 手动合并。\n" +
+      "- needs_review：已合并 Markdown，存在需人工复核的段\n" +
       "- failed：脚本错误或调用失败",
     {
       pdf_path: z

@@ -138,10 +138,8 @@ review = sys.argv[4] if sys.argv[4] else None
 with open(manifest_path) as f:
     m = json.load(f)
 m["parse_status"] = status
-if merged:
-    m["files"]["markdown"] = merged
-if review:
-    m["files"]["review"] = review
+m["files"]["markdown"] = merged if merged else None
+m["files"]["review"] = review if review else None
 with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(m, f, ensure_ascii=False, indent=2)
     f.write("\n")
@@ -155,7 +153,7 @@ usage() {
 
 说明:
   逐页验证覆盖率、对可疑段高精度重跑、再验证。
-  如果全部通过则直接合并；如果仍有未通过段则输出人工兜底清单，不合并。
+  无论是否全部通过都执行合并；仍有未通过段时额外输出人工兜底清单。
   默认合并输出：<package>/<原始PDF文件名>.md
 
 可选环境变量:
@@ -356,8 +354,9 @@ fi
 
 if [[ "$action" == "needs_review" ]]; then
   review_output="$(dirname "$segments_dir")/review.md"
+  merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
 
-
+  #--- 步骤 2: TOC 段级修复 ---
   _step_total=$((_step_total + 1))
   step_start "$_step_total" "TOC 段修复"
 
@@ -371,6 +370,27 @@ repair(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
 PY
 
   step_done
+
+  #--- 步骤 3: 合并 ---
+  _step_total=$((_step_total + 1))
+  step_start "$_step_total" "合并 Markdown"
+  log "  → 路径: $merge_output"
+  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
+
+  # 合并级 TOC 兜底修复
+  python3 - "$_scripts_dir" "$pdf_path" "$merge_output" "$validate_tmp" <<'PY'
+import sys
+from pathlib import Path
+scripts_dir = sys.argv[1]
+sys.path.insert(0, scripts_dir)
+from lib.toc_repair import repair_merged
+repair_merged(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+PY
+
+  step_done
+
+  #--- 步骤 4: 人工兜底清单 ---
+  _step_total=$((_step_total + 1))
   step_start "$_step_total" "生成人工兜底清单"
 
   python3 - "$_scripts_dir" "$validate_tmp" "$review_output" "$threshold" "$pdf_path" "$segments_dir" "" "false" <<'PY'
@@ -390,12 +410,11 @@ generate_review_report(
 )
 PY
 
-
   step_done
   if [[ "$json_mode" == "1" ]]; then
-    emit_json "needs_review" 2 "" "$review_output" "$validate_tmp"
+    emit_json "needs_review" 2 "$merge_output" "$review_output" "$validate_tmp"
   fi
-  update_manifest "needs_review" "${pdf_stem}.md" "review.md"
+  update_manifest "needs_review" "$(basename "$merge_output")" "review.md"
   exit 2
 fi
 
@@ -601,10 +620,12 @@ PY
   exit 0
 fi
 
-# --- 有未通过段：只出 review，不合并 ---
+# --- 有未通过段：先修复、再合并、最后出兜底清单 ---
 if echo "$decision" | grep -q "^has_issues$"; then
   review_output="$(dirname "$segments_dir")/review.md"
+  merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
 
+  #--- TOC 段级修复 ---
   _step_total=$((_step_total + 1))
   step_start "$_step_total" "TOC 段修复"
 
@@ -618,6 +639,27 @@ repair(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
 PY
 
   step_done
+
+  #--- 合并 ---
+  _step_total=$((_step_total + 1))
+  step_start "$_step_total" "合并 Markdown"
+  log "  → 路径: $merge_output"
+  PDF_MERGE_OUTPUT="$merge_output" "$_scripts_dir/pdf-merge" "$segments_dir" >"$_subprocess_stdout"
+
+  # 合并级 TOC 兜底修复
+  python3 - "$_scripts_dir" "$pdf_path" "$merge_output" "$validate2_tmp" <<'PY'
+import sys
+from pathlib import Path
+scripts_dir = sys.argv[1]
+sys.path.insert(0, scripts_dir)
+from lib.toc_repair import repair_merged
+repair_merged(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+PY
+
+  step_done
+
+  #--- 生成人工兜底清单 ---
+  _step_total=$((_step_total + 1))
   step_start "$_step_total" "生成人工兜底清单"
 
   python3 - "$_scripts_dir" "$validate2_tmp" "$review_output" "$threshold" "$pdf_path" "$segments_dir" "$rerun_failures" "false" <<'PY'
@@ -645,9 +687,9 @@ PY
 
   step_done
   if [[ "$json_mode" == "1" ]]; then
-    emit_json "needs_review" 2 "" "$review_output" "$validate2_tmp"
+    emit_json "needs_review" 2 "$merge_output" "$review_output" "$validate2_tmp"
   fi
-  update_manifest "needs_review" "${pdf_stem}.md" "review.md"
+  update_manifest "needs_review" "$(basename "$merge_output")" "review.md"
   exit 2
 fi
 

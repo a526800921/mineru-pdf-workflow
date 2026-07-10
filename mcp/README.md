@@ -94,7 +94,7 @@ JSON 模式应保留现有退出码语义：
 CLI `status` 当前取值：
 
 - `all_passed`：`pdf-auto` 退出码为 0，合并完成且无人工兜底项。
-- `merged_with_issues`：`pdf-auto` 退出码为 2，合并完成但生成人工兜底清单。
+- `needs_review`：`pdf-auto` 退出码为 2，合并完成但生成人工兜底清单。
 - `error`：`pdf-auto` 退出码为 1，或调用前校验失败。
 
 MCP server 第一版必须读取 stdout JSON 判断状态；stderr 只作为诊断日志返回或记录，不能依赖中文日志解析决定工具状态。MCP 对外返回可以把 CLI 状态映射为 `passed`、`needs_review`、`failed`。
@@ -495,7 +495,7 @@ npx @modelcontextprotocol/inspector node dist/index.js
 | MCP status | CLI status | exit_code | 含义 |
 |---|---|---|---|
 | `passed` | `all_passed` | 0 | 全部段验证通过，合并完成 |
-| `needs_review` | `merged_with_issues` | 2 | 合并完成，有段需人工复核 |
+| `needs_review` | `needs_review` | 2 | 合并完成，有段需人工复核（合并 md 已生成） |
 | `failed` | `error` 或调用失败 | 1 | 脚本错误或输入校验失败 |
 
 ### 端到端验证证据（阶段 6）

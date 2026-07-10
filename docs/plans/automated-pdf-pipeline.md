@@ -126,7 +126,7 @@
 - Zod schema 校验 `pdf_path`、`segments_dir`（必填）和 `threshold`、`rerun_effort`、`merge_output`（可选）。
 - 运行时校验在启动子进程前检查 PDF 路径扩展名、文件存在性、分段目录存在性。
 - stdout JSON 是状态判断的唯一事实来源；stderr 作为诊断信息返回。
-- CLI 状态映射：`all_passed` → `passed`，`merged_with_issues` → `needs_review`，`error`/调用失败 → `failed`。
+- CLI 状态映射：`all_passed` → `passed`，`needs_review` → `needs_review`，`error`/调用失败 → `failed`。
 - 子进程使用白名单环境变量（`PDF_AUTO_JSON=1`、`PDF_VALIDATE_THRESHOLD`、`MINERU_RERUN_EFFORT`、`PDF_AUTO_MERGE_OUTPUT`），无其他 env 注入。
 - 项目根通过源文件位置推导（`__dirname` → 上溯 3 层），确保从任意 cwd 启动都能找到 `scripts/pdf-auto`。
 - MCP 协议验证通过：`initialize` 和 `tools/list` 响应正确，`run_pdf_auto` 工具含完整 inputSchema。

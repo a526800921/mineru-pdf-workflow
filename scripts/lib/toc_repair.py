@@ -226,7 +226,8 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
         start = seg["start_page"]
         for p in seg.get("pages", []):
             if p.get("page_type") == "toc":
-                all_toc_pages.add(start + p["page"])
+                # pages[].page 是文档级 0-based 页索引（pdf-validate 产出）
+                all_toc_pages.add(p["page"] + 1)
     if not all_toc_pages:
         doc.close()
         return 0
