@@ -84,10 +84,16 @@ modelpad_start_pdf() {
 
   "$log_fn" "正在通过 ModelPad 启动 PDF 服务..."
   local start_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_PDF_MODEL_ID}/start"
+  local env_json="{\"MINERU_API_OUTPUT_ROOT\":\"$_MODELPAD_PDF_OUTPUT_DIR\""
+  if [[ -n "${MINERU_PROCESSING_WINDOW_SIZE:-}" ]]; then
+    env_json+=",\"MINERU_PROCESSING_WINDOW_SIZE\":\"$MINERU_PROCESSING_WINDOW_SIZE\""
+  fi
+  env_json+="}"
+
   local resp
   resp="$(curl -s -X POST "$start_url" \
     -H "Content-Type: application/json" \
-    -d "{\"env\":{\"MINERU_API_OUTPUT_ROOT\":\"$_MODELPAD_PDF_OUTPUT_DIR\"}}" 2>&1)" || true
+    -d "{\"env\":$env_json}" 2>&1)" || true
 
   # 检查 ModelPad API 是否响应
   if [[ -z "$resp" ]]; then

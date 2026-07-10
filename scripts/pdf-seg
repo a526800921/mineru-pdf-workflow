@@ -39,7 +39,7 @@ usage() {
   MINERU_METHOD=auto|txt|ocr
   MINERU_LANG=ch
   MINERU_PDF_RENDER_THREADS=2
-  MINERU_PROCESSING_WINDOW_SIZE=8
+  MINERU_PROCESSING_WINDOW_SIZE=10
   PDF_SEG_JSON=1                        输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
 }
@@ -140,13 +140,13 @@ effort="${MINERU_EFFORT:-medium}"
 method="${MINERU_METHOD:-auto}"
 lang="${MINERU_LANG:-ch}"
 
-# 检测或启动 PDF API 服务
-ensure_pdf_api echo
-
 export MINERU_DEVICE_MODE="${MINERU_DEVICE_MODE:-mps}"
 export MINERU_PDF_RENDER_THREADS="${MINERU_PDF_RENDER_THREADS:-2}"
 export MINERU_API_MAX_CONCURRENT_REQUESTS="${MINERU_API_MAX_CONCURRENT_REQUESTS:-1}"
-export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-8}"
+export MINERU_PROCESSING_WINDOW_SIZE="${MINERU_PROCESSING_WINDOW_SIZE:-$segment_size}"
+
+# 检测或启动 PDF API 服务
+ensure_pdf_api echo
 
 if ! [[ "$segment_size" =~ ^[0-9]+$ ]] || [[ "$segment_size" -lt 1 ]]; then
   log "错误：MINERU_SEGMENT_SIZE 必须是正整数，当前是：$segment_size"
