@@ -72,6 +72,7 @@ MODELPAD_PDF_START_TIMEOUT=120
     ingest_batch.jsonl
     ingest_manifest.json
     table_accuracy.csv       ← 表格结构自检评测（P4b，只读）
+    vlm_eval.jsonl           ← VLM 图表理解描述（P4c，每页一行 JSON）
 ```
 
 也可以按主题组织到子目录，例如 `~/manuals/honda-cbr/pdf/xxx.pdf`——产物会出现在 `~/manuals/honda-cbr/pdf/` 下。
@@ -84,6 +85,7 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
 - `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
+- `scripts/pdf-eval-vlm /path/to` 写入 `<pdf_dir>/data/vlm_eval.jsonl`（VLM 图表理解描述，10 页抽样验证；渲染 DPI / API 端点通过环境变量配置）。
 - `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 和**逐页锚点** `<!-- page N -->` 的合并 md。回填旧包时直接重跑此命令。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 

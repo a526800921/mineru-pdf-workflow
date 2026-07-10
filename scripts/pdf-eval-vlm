@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+_scripts_dir="${_this_file%/*}"
+
+json_mode="${PDF_EVAL_VLM_JSON:-0}"
+
+log() {
+  if [[ "$json_mode" == "1" ]]; then
+    echo "$@" >&2
+  else
+    echo "$@"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+用法:
+  pdf-eval-vlm <package_dir>
+
+说明:
+  对输出包中 image_or_sparse 页渲染为图片并调用本地 VLM（qwen3-vl-8b）
+  产出结构化描述，写入 <package>/data/vlm_eval.jsonl（每页一行 JSON）。
+
+参数:
+  package_dir    输出包根目录（含 segments/ 和原始 PDF）
+
+可选环境变量:
+  PDF_EVAL_VLM_JSON=1        输出 JSON（stdout），人类可读信息改到 stderr
+  VLM_API_BASE=http://...    默认 http://127.0.0.1:9005
+  VLM_MODEL=qwen3-vl-8b     默认 qwen3-vl-8b
+  VLM_DPI=200                渲染 DPI，默认 200
+  VLM_KEEP_IMAGES=0          是否保留渲染图片到 data/page_images/
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  if [[ "$json_mode" == "1" ]]; then usage >&2; else usage; fi
+  exit 0
+fi
+
+if [[ $# -lt 1 ]]; then
+  if [[ "$json_mode" == "1" ]]; then
+    usage >&2
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":2},sys.stdout); sys.stdout.write("\n")'
+  else
+    usage
+  fi
+  exit 2
+fi
+
+package_dir="$1"
+
+if [[ ! -d "$package_dir" ]]; then
+  log "错误：输出包目录不存在：$package_dir"
+  if [[ "$json_mode" == "1" ]]; then
+    python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1},sys.stdout); sys.stdout.write("\n")'
+  fi
+  exit 1
+fi
+
+package_dir="$(cd "$package_dir" && pwd)"
+
+VLM_API_BASE="${VLM_API_BASE:-http://127.0.0.1:9005}"
+VLM_MODEL="${VLM_MODEL:-qwen3-vl-8b}"
+VLM_DPI="${VLM_DPI:-200}"
+VLM_KEEP_IMAGES="${VLM_KEEP_IMAGES:-0}"
+
+python3 - "$_scripts_dir" "$package_dir" "$VLM_API_BASE" "$VLM_MODEL" \
+         "$VLM_DPI" "$VLM_KEEP_IMAGES" "$json_mode" <<'PY'
+import json, sys, os
+from pathlib import Path
+
+scripts_dir = Path(sys.argv[1])
+sys.path.insert(0, str(scripts_dir))
+from lib.vlm_eval import eval_vlm_package
+
+package_dir = Path(sys.argv[2])
+api_base = sys.argv[3]
+model = sys.argv[4]
+dpi = int(sys.argv[5])
+keep_images = sys.argv[6] == "1"
+json_mode = sys.argv[7] == "1"
+
+try:
+    rows, out_path = eval_vlm_package(
+        package_dir=package_dir,
+        api_base=api_base,
+        model=model,
+        dpi=dpi,
+        keep_images=keep_images,
+    )
+    status_counts = {}
+    for r in rows:
+        s = r.get("parse_status", "unknown")
+        status_counts[s] = status_counts.get(s, 0) + 1
+    if json_mode:
+        output = {
+            "status": "completed",
+            "page_count": len(rows),
+            "parse_status_counts": status_counts,
+            "output_path": str(out_path),
+        }
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"image_or_sparse 页数: {len(rows)}")
+        print(f"  ok={status_counts.get('ok',0)}, failed={status_counts.get('failed',0)}")
+        print(f"输出: {out_path}")
+        for r in rows[:5]:
+            summary = (r.get("page_summary") or "")[:50]
+            status = r.get("parse_status", "?")
+            print(f"  page {r['page']}: [{status}] {summary}")
+except FileNotFoundError as e:
+    if json_mode:
+        json.dump({"status":"error","exit_code":1,"error":str(e)},
+                  sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"错误：{e}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    if json_mode:
+        json.dump({"status":"error","exit_code":1,"error":str(e)},
+                  sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"错误：{e}", file=sys.stderr)
+    sys.exit(1)
+PY
