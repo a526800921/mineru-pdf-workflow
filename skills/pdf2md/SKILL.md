@@ -153,6 +153,40 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 - `review_markdown`：人工复核清单 `<pdf所在目录>/review.md`。
 - `rerun_segments`：真正执行 high 重跑的段。目录页、图片稀疏页、表格页通常进入 review_only，不做无效 high 重跑。
 
+## 其他 MCP 工具
+
+除 `run_pdf_auto` 外，流水线还提供若干只读查询和导出工具：
+
+### read_page — 按页码读取 Markdown
+
+```bash
+scripts/pdf-read-page <package_dir> <page> [page_end]
+# 或通过 MCP: read_page
+```
+
+返回合并 Markdown 中指定页的内容。合并 md 由 `<!-- pages N-M -->` 段级锚点和 `<!-- page N -->` 逐页锚点共同定位：
+
+- **逐页锚点存在时**：`page_start==page_end==N`，精确到单页。
+- **无逐页锚点时**：回退段级，`page_start`/`page_end` 反映段范围（向后兼容）。
+
+### search_pdf_content — 关键词检索
+
+```bash
+scripts/pdf-search-content <package_dir> <query>
+# 或通过 MCP: search_pdf_content
+```
+
+在合并 Markdown 和 `quick_lookup_draft.csv` 中搜索关键词，返回页码、章节、原文片段。
+
+### export_chunks — 向量化前置导出
+
+```bash
+scripts/pdf-export-chunks <package_dir>
+# 或通过 MCP: export_chunks
+```
+
+将合并 Markdown 预处理为 `data/chunks.jsonl`（纯文本块，按 `##` 切分、HTML 表格展开、图片替换、token 上限 384）。
+
 ## 结构化数据与入库准备
 
 生成结构化草案：

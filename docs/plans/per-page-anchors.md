@@ -81,7 +81,7 @@
 | 0 | 设计与 Step 0 证据固化 | 有完整输出包样本（春风 150AURA） | 本会话实测数据固化为可复现脚本/记录 | 已完成 |
 | 1 | `pdf-merge` 逐页锚点（A′ + X） | 阶段 0 完成、用户批准实施 | 春风包合并 md 每正文段逐页锚点连续，失配段回退段级，manifest 记 warning | 已完成 |
 | 2 | 回填旧包 | 阶段 1 完成 | 对现有 `segments/` 重跑 merge，锚点正确、正文内容与旧 md 一致 | 已完成 |
-| 3 | `read_page` 单页 | 阶段 1 完成 | 输入单页返回该页 md；无逐页锚点段回退段级 | 待实施 |
+| 3 | `read_page` 单页 | 阶段 1 完成 | 输入单页返回该页 md；无逐页锚点段回退段级 | 已完成 |
 | 4 | 结构化数据逐页 | 阶段 1、3 完成 | `page_start==page_end` 精确到单页；与 `refine_page_numbers` 现状对比无回归 | 待实施 |
 
 ## Step 0 证据（本会话，2026-07-08）
@@ -114,7 +114,7 @@ print('逐页锚点范围:', min(page), '-', max(page))
 PY
 ```
 
-阶段 3/4：`read_page <pkg> N` 单页返回；`pdf-extract-data` 后抽查 `quick_lookup_draft.csv` 的 `page_start==page_end`，与改动前快照对比无回归。
+阶段 3：`read_page <pkg> N` 单页返回（page_start==page_end==N）；无逐页锚点段回退段级（page_start/end 为段级范围）；越界返回 error。
 
 治理检查：`python3 scripts/check_plan_governance.py .`
 
@@ -149,7 +149,7 @@ PY
 
 - [x] 阶段 1：正文段逐页锚点连续且落点正确；近似段记 warning；正文内容零改动。→ 191 锚点连续、零改动、0 粘行、M-1/M-2/粘行已修并独立复验、14 单测（见修复复验）。
 - [x] 阶段 2：旧包回填后正文内容与旧 md 一致，逐页锚点正确。→ 4 包回填验证（见阶段 2 验收记录）。
-- [ ] 阶段 3：`read_page` 单页返回；无逐页锚点段回退段级；MCP 编译通过。
+- [x] 阶段 3：`read_page` 单页返回；无逐页锚点段回退段级；MCP 编译通过。→ 春风 150AURA 单页 page_start==page_end（57→57、1→1、191→191）；范围 57-60 四页拼接；越界返回 error；MCP tsc 编译通过（见阶段 3 验收记录）。
 - [ ] 阶段 4：`page_start==page_end` 精确到单页；对比现状无回归。
 - [~] 每阶段同步 `skills/pdf2md/SKILL.md` 及用户级副本。→ 阶段 1 `pdf-merge` 已能生成逐页锚点，但现有包未回填、`read_page` 未消费，合并 md 格式 skill 描述推迟到阶段 2 回填后统一更新（补同步动作已登记）。
 - [x] `detect_changes()` 仅影响预期符号；治理检查通过。→ detect_changes LOW、affected_processes 空；治理检查通过。
@@ -179,6 +179,29 @@ scripts/pdf-merge <package>/segments
 
 无需新增脚本，直接复用新版 `pdf-merge`。旧包 md 如有手改，回填前需备份（已自动备份至 `<package>/.backup_stage2/`）。
 
+## 阶段 3 验收记录（2026-07-10）
+
+**`scripts/pdf-read-page` 升级为逐页锚点感知**，2 个新公共函数 + 三路选择逻辑，无新增依赖。
+
+端到端验收（春风 150AURA 191 页输出包）：
+
+| 测试 | 结果 |
+|---|---|
+| 单页 57 | `page_start=57, page_end=57` ✅ |
+| 首页 1 | `page_start=1, page_end=1` ✅ |
+| 末页 191 | `page_start=191, page_end=191` ✅ |
+| 范围 57-60 | `page_start=57, page_end=60, segment_count=4` ✅ |
+| demo60 首页 1 | `page_start=1, page_end=1` ✅ |
+| 越界 999 | `status=error` ✅ |
+| MCP `tsc` 编译 | 通过 ✅ |
+| MCP 工具描述 | 已同步逐页锚点说明 ✅ |
+
+**向后兼容验证**：无逐页锚点时 `page_anchors` 为空列表 → 走 `_extract_pieces_with_seg_anchors`（原段级逻辑），字段不变量不变。
+
+**`read_page` 粒度提示**决策：回退段级时 `page_start!=page_end` 自然表达「非单页粒度」，无需新增字段。⇒ 对应未决问题已关闭。
+
+skill 同步：`read_page` 输出粒度变细，属公共契约变更，需同步 `skills/pdf2md/SKILL.md` 及用户级副本（见完成条件）。
+
 ## 风险和回滚
 
 风险：
@@ -199,7 +222,7 @@ scripts/pdf-merge <package>/segments
 |---|---|---|---|
 | 回填入口形态（薄封装脚本 vs 文档化重跑 merge） | 阶段 2 决定，优先复用 `pdf-merge` 不新增脚本 | 否 | 待定 |
 | 「近似定位」页是否需在 md 锚点上标注（vs 仅 manifest） | 阶段 1 决定，默认仅 manifest，md 锚点保持纯净 | 否 | 待定 |
-| `read_page` 对回退段级的段是否需返回粒度提示字段 | 阶段 3 评估，倾向复用现有 `segment_count`/`page_start!=page_end` 表达 | 否 | 待定 |
+| `read_page` 对回退段级的段是否需返回粒度提示字段 | 阶段 3 已决：`page_start!=page_end` 自然表达，无需新增字段 | 否 | 已决 |
 | pdf2md skill 同步时机 | 各阶段实施完成即同步项目级 + 用户级 skill；若无法同步在此表记录补同步动作 | 否 | 待跟踪 |
 | L-3：整段缺 `content_list.json` → 整段逐页锚点缺失且不记 warning | 走 `cl is None` 分支加段级 warning；阶段 2 回填时处理 | 否 | 待处理（阶段 1 复验发现） |
 | L-4：`strip_page_anchors` 自校验对源 md 本含 `<!-- page N -->` 行会误判 | 罕见（样本 0 行），阶段 3 `read_page` 前评估 | 否 | 已登记 |

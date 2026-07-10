@@ -977,7 +977,7 @@ async function main() {
     "按 PDF 页码读取合并 Markdown 中对应片段。\n" +
       "封装 scripts/pdf-read-page，内部调用 PDF_READ_PAGE_JSON=1 scripts/pdf-read-page <package_dir> <page> [page_end]，\n" +
       "将 CLI JSON 输出映射为结构化工具返回值。\n\n" +
-      "合并 Markdown 由 <!-- pages N-M --> 锚点分节，该工具按页码定位对应段并返回 Markdown 文本。\n" +
+      "合并 Markdown 由 <!-- pages N-M --> 段级锚点和 <!-- page N --> 逐页锚点共同定位。逐页锚点存在时精确到单页（page_start==page_end）；无逐页锚点时回退段级。\n" +
       "若合并 Markdown 不存在，回退到 segments/ 目录查找。",
     {
       package_dir: z

@@ -30,7 +30,7 @@
 | [modelpad-dynamic-env-cleanup](plans/modelpad-dynamic-env-cleanup.md) | 已完成 | 全阶段（0-4） | modelpad-pdf-service-orchestration、ModelPad API | [阶段 4 完成证据](plans/modelpad-dynamic-env-cleanup.md#阶段-4-完成证据2026-07-04) |
 | [pdf-workflow-enhancement-roadmap](plans/pdf-workflow-enhancement-roadmap.md) | 实施中 | P4 拆分至 pdf-evaluation-suite（P4a/P4b 已完成，P4c 候选），P1-P3b 已完成 | 所有已完成计划、P3a 检索工具、春风 150AURA 输出包 | [P3b 完成](plans/pdf-workflow-enhancement-roadmap.md#完成条件) |
 | [pdf-evaluation-suite](plans/pdf-evaluation-suite.md) | 实施中 | P4a/P4b 已完成；P4c 本地 VLM 候选 | pdf-workflow-enhancement-roadmap、coverage-validation-optimization、春风 150AURA 输出包 | [P4a](plans/pdf-evaluation-suite.md#验收记录2026-07-08)、[P4b](plans/pdf-evaluation-suite.md#验收记录p4b2026-07-08) |
-| [per-page-anchors](plans/per-page-anchors.md) | 实施中 | 阶段 3/4 待实施（阶段 0/1/2 已完成，M-1/M-2/粘行已修并独立复验，4 包回填完成） | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、structured-data-extraction、春风 150AURA 输出包 | [阶段 1 验收记录](plans/per-page-anchors.md#阶段-1-验收记录2026-07-08)、[阶段 2 验收记录](plans/per-page-anchors.md#阶段-2-验收记录2026-07-09) |
+| [per-page-anchors](plans/per-page-anchors.md) | 实施中 | 阶段 4 待实施（阶段 0/1/2/3 已完成；M-1/M-2/粘行已修并独立复验，4 包回填完成，`read_page` 已升级逐页） | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、structured-data-extraction、春风 150AURA 输出包 | [阶段 1 验收](plans/per-page-anchors.md#阶段-1-验收记录2026-07-08)、[阶段 2 验收](plans/per-page-anchors.md#阶段-2-验收记录2026-07-09)、[阶段 3 验收](plans/per-page-anchors.md#阶段-3-验收记录2026-07-10) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 

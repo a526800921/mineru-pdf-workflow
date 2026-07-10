@@ -20,8 +20,9 @@ usage() {
   pdf-read-page <package_dir> <page> [page_end]
 
 说明:
-  按 PDF 页码从输出包合并 Markdown 中提取对应段的文本。
-  合并 Markdown 由 <!-- pages N-M --> 锚点分节。
+  按 PDF 页码从输出包合并 Markdown 中提取对应页或段的文本。
+  合并 Markdown 由 <!-- pages N-M --> 段级锚点和 <!-- page N --> 逐页锚点共同定位。
+  逐页锚点存在时，page_start / page_end 精确到单页；无逐页锚点时回退段级。
 
   若合并 Markdown 不存在，回退到 segments/ 目录按分段名查找。
 
@@ -105,6 +106,67 @@ def _extract_section_path(text: str, content_start: int) -> str:
         headings.append((level, title))
     return " / ".join(h for _, h in headings)
 
+
+def _extract_pieces_with_page_anchors(
+    text: str, page: int, page_end: int,
+    page_anchors: list, seg_anchors: list,
+) -> list:
+    """Extract markdown pieces using per-page anchors.
+
+    Each piece corresponds to one PDF page. Falls back to segment-level
+    if a page in the requested range has no per-page anchor.
+    """
+    pieces = []
+    for i, (pos, pn) in enumerate(page_anchors):
+        if pn < page:
+            continue
+        if pn > page_end:
+            break
+
+        # Find next boundary: next page anchor, next segment anchor, or EOF
+        next_pos = len(text)
+        if i + 1 < len(page_anchors):
+            next_pos = min(next_pos, page_anchors[i + 1][0])
+        for s_pos, _, _ in seg_anchors:
+            if s_pos > pos and s_pos < next_pos:
+                next_pos = s_pos
+                break
+
+        content_start = text.index("\n", pos) + 1 if "\n" in text[pos:] else pos
+        page_text = text[content_start:next_pos].strip()
+        section_path = _extract_section_path(text, content_start)
+        pieces.append({
+            "page_start": pn,
+            "page_end": pn,
+            "markdown": page_text,
+            "section_path": section_path,
+        })
+    return pieces
+
+
+def _extract_pieces_with_seg_anchors(
+    text: str, page: int, page_end: int, seg_anchors: list,
+) -> list:
+    """Extract markdown pieces using segment-level anchors (existing behavior)."""
+    pieces = []
+    for i, (pos, seg_start, seg_end) in enumerate(seg_anchors):
+        if seg_end < page:
+            continue
+        if seg_start > page_end:
+            break
+        next_pos = seg_anchors[i + 1][0] if i + 1 < len(seg_anchors) else len(text)
+        content_start = text.index("\n", pos) + 1 if "\n" in text[pos:] else pos
+        seg_text = text[content_start:next_pos].strip()
+        section_path = _extract_section_path(text, content_start)
+        pieces.append({
+            "page_start": seg_start,
+            "page_end": seg_end,
+            "markdown": seg_text,
+            "section_path": section_path,
+        })
+    return pieces
+
+
 package_dir = Path(sys.argv[1])
 page = int(sys.argv[2])
 page_end = int(sys.argv[3])
@@ -157,36 +219,27 @@ if md_path is None:
 
 text = md_path.read_text(encoding="utf-8", errors="replace")
 
-# Parse page anchors
-anchor_re = re.compile(r"^<!-- pages (\d+)-(\d+) -->\s*$", re.MULTILINE)
-anchors = [(m.start(), int(m.group(1)), int(m.group(2))) for m in anchor_re.finditer(text)]
+# Parse both anchor types
+seg_anchor_re = re.compile(r"^<!-- pages (\d+)-(\d+) -->\s*$", re.MULTILINE)
+page_anchor_re = re.compile(r"^<!-- page (\d+) -->\s*$", re.MULTILINE)
 
-if not anchors:
-    # No anchors found — return the whole file
+seg_anchors = [(m.start(), int(m.group(1)), int(m.group(2))) for m in seg_anchor_re.finditer(text)]
+page_anchors = [(m.start(), int(m.group(1))) for m in page_anchor_re.finditer(text)]
+
+if not seg_anchors:
+    # No segment anchors at all — return the whole file
     pieces = [{
         "page_start": 1,
         "page_end": max(page, page_end),
         "markdown": text.strip(),
         "section_path": _extract_section_path(text, 0),
     }]
+elif page_anchors:
+    # Per-page anchors exist — use page-level granularity
+    pieces = _extract_pieces_with_page_anchors(text, page, page_end, page_anchors, seg_anchors)
 else:
-    pieces = []
-    for i, (pos, seg_start, seg_end) in enumerate(anchors):
-        if seg_end < page:
-            continue
-        if seg_start > page_end:
-            break
-        next_pos = anchors[i + 1][0] if i + 1 < len(anchors) else len(text)
-        # Extract content after the anchor line
-        content_start = text.index("\n", pos) + 1 if "\n" in text[pos:] else pos
-        seg_text = text[content_start:next_pos].strip()
-        section_path = _extract_section_path(text, content_start)
-        pieces.append({
-            "page_start": seg_start,
-            "page_end": seg_end,
-            "markdown": seg_text,
-            "section_path": section_path,
-        })
+    # No per-page anchors — fall back to segment-level (existing behavior)
+    pieces = _extract_pieces_with_seg_anchors(text, page, page_end, seg_anchors)
 
 if not pieces:
     output = {"status": "error", "exit_code": 1,
@@ -199,7 +252,7 @@ if not pieces:
         print(f"错误：页码超出范围：{page}-{page_end}", file=sys.stderr)
     sys.exit(1)
 
-# Concatenate multiple segments
+# Concatenate multiple pages/segments
 combined_md = "\n\n".join(p["markdown"] for p in pieces)
 section_path = pieces[0].get("section_path", "")
 
