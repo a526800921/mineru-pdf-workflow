@@ -171,7 +171,7 @@ def detect_image_or_sparse_pages(pdf_path: Path, segments_dir: Path) -> list[int
 
             for page_idx, cl_page in enumerate(cl_data):
                 page_num = seg_start + page_idx
-                # 段可能不满 8 页，超出实际 PDF 页数则跳过
+                # 段可能不满 segment_size 页，超出实际 PDF 页数则跳过
                 if page_num > doc.page_count:
                     break
 

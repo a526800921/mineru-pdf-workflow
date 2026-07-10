@@ -2,7 +2,7 @@
 
 ## 背景
 
-当前 `pdf-merge` 按分段（默认 8 页/段）合并 Markdown，只在每段前插入段级锚点 `<!-- pages N-M -->`。因此合并 md 只能区分到「段」（8 页一块），无法区分具体是第几页；`read_page` 输入单页也只能返回整段，结构化数据 `page_start/page_end` 也只能定位到段级（再靠 `refine_page_numbers` 用 PyMuPDF 文本搜索做启发式单页收窄）。
+当前 `pdf-merge` 按分段（默认 10 页/段）合并 Markdown，只在每段前插入段级锚点 `<!-- pages N-M -->`。因此合并 md 只能区分到「段」（10 页一块），无法区分具体是第几页；`read_page` 输入单页也只能返回整段，结构化数据 `page_start/page_end` 也只能定位到段级（再靠 `refine_page_numbers` 用 PyMuPDF 文本搜索做启发式单页收窄）。
 
 用户目标：合并 md 里能**逐页区分**——每一页有独立锚点，`read_page` 能真正按单页返回，结构化数据精确到单页。
 
@@ -88,7 +88,7 @@
 
 样本：`pdf/春风 150AURA`（191 页，25 个 `content_list.json`）。
 
-- **现状**：`pdf-merge:92-96` 仅插段级 `<!-- pages N-M -->`；合并 md 共 24 段锚点（`pages 1-8` … `pages 185-191`）。
+- **现状**：`pdf-merge:92-96` 仅插段级 `<!-- pages N-M -->`；合并 md 共 24 段锚点（`pages 1-8` … `pages 185-191`，当时默认 8 页/段）。
 - **数据可用性**：`content_list.json` 每块带 `page_idx`；字段含 `text_level`（标题层级）、`table_body`、`img_path`；每页有 `page_number` 块（印刷页码）。
 - **全包 type 分布**：text 1205 / page_number 195 / image 175 / table 121 / header 4 / aside_text 2 / footer 1。
 - **路线 B 实测**（p0009-0016）：页首单块 + 贪心游标 = 7/8，page15 因跨页表格误配、page16 丢失。

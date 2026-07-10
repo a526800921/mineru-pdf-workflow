@@ -117,7 +117,7 @@ def parse_segment_name(name: str):
 def build_section_index(md_text: str) -> list:
     """解析合并 Markdown，返回 [(seg_start, seg_end, section_title), ...]。
 
-    section 取每个页锚点区间内第一个 ## 标题（段级近似）。合并 md 按 8 页一段的
+    section 取每个页锚点区间内第一个 ## 标题（段级近似）。合并 md 按 segment_size 页一段的
     `<!-- pages N-M -->` 锚点分节，节内无页级边界，故 section 精度到段级、缺省空串。
     """
     if not md_text:

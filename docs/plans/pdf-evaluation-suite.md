@@ -136,7 +136,7 @@ skill 同步：P4a 仅扩展 `pdf-validate` 字段与 `review.md`（人工兜底
 - 春风 150AURA 全样本核实：v1 有 **115 个 table 元素，104 含 `table_body`**（另 11 空表 → `parse_status="empty"`）。
 - **必须用 v1**：v2 虽也有 115 个 table 元素，但只带 `content`（纯文本）、无 `table_body`/HTML 结构，无法做结构自检；`pdf-validate`/coverage 用 v2 做逐页文本覆盖率，P4b 用 v1 做表格 HTML 结构，两者按目的分工，非口径漂移。
 - **选段口径（实现决策）**：复用 pdf-merge 段名正则 `^p(\d{4,})-(\d{4,})$`，只取有效段，排除 `p0185-0191-rerun` 等遗留/临时目录与 `.DS_Store`。全扫所有子目录会把已被覆盖的旧段与 rerun 目录重复计数（实测 121 表），merge 口径为 115。
-- 全局页码 = 段目录名起始页 + `page_idx`（`page_idx` 为**段内相对 0-based**，每段 8 页）。
+- 全局页码 = 段目录名起始页 + `page_idx`（`page_idx` 为**段内相对 0-based**，每段页数由 `segment_size` 决定，默认 10）。
 - 解析用标准库 `html.parser`：单元格文本经 parser 的 data 事件天然与标签分离（`convert_charrefs=True` 自动解码实体），判空无需再过 `_strip_html`。
 
 ### 输出契约
@@ -219,7 +219,7 @@ python3 scripts/check_plan_governance.py .
 - **破损信号端到端**：构造负样本包（列不一致表 + 空表 + rerun 脏段），CSV 正确标出 malformed（col_consistent=False）与 empty，rerun 段被排除（3 行而非 4）。
 - **非法输入门禁**：不存在目录 / 无 segments / 有段无 content_list 三类均 exit=1 + 明确 error，均不产出半成品 CSV。
 
-section 精度：段级近似（合并 md 每段 8 页锚点内首个 `##`），已知不精确到页内、缺省空串——见未决问题。
+section 精度：段级近似（合并 md 每段锚点内首个 `##`），已知不精确到页内、缺省空串——见未决问题。
 
 skill 同步：P4b 新增 `data/table_accuracy.csv` 产物，属输出包结构变更，已同步项目级 `skills/pdf2md/SKILL.md` 与用户级 skill。
 
@@ -374,7 +374,7 @@ python3 scripts/check_plan_governance.py .
 | 问题 | 推荐方案 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|
 | P4b 是否实现 MCP `eval_tables` | CLI 优先；工具数达阈值再评估封装 | 否 | 已决：CLI-only，本轮不实现（未新增工具，`tools/list` 维持 9） |
-| P4b `section` 定位精度 | 从合并 Markdown 按页锚点就近取最近 `##`，缺省空串 | 否 | 已实现为段级近似（8 页锚点内首个 `##`），页内精度待增强 |
+| P4b `section` 定位精度 | 从合并 Markdown 按页锚点就近取最近 `##`，缺省空串 | 否 | 已实现为段级近似（段锚点内首个 `##`），页内精度待增强 |
 | P4c 本地 VLM 选型与验收基准 | 已完成 Step 0：模型、Schema、JSON mode、10 页混合抽样和人审门槛均已固定 | 否 | 已完成，可进入待实施 |
 | P4b 产物需同步 `pdf2md` skill | 实施 P4b 时新增 `data/table_accuracy.csv` 产物说明到项目级 + 用户级 skill | 否 | 已同步（项目级 + 用户级） |
 | P4a `partial` 中文字符级判定偏宽（命中率≥0.5 易高估 partial/低估 missing） | 未来收紧为词级或连续子串匹配；当前样本仅 1 例、影响极小 | 否 | 已记录（P4a 验收观察） |
