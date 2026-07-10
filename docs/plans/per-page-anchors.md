@@ -80,7 +80,7 @@
 |---|---|---|---|---|
 | 0 | 设计与 Step 0 证据固化 | 有完整输出包样本（春风 150AURA） | 本会话实测数据固化为可复现脚本/记录 | 已完成 |
 | 1 | `pdf-merge` 逐页锚点（A′ + X） | 阶段 0 完成、用户批准实施 | 春风包合并 md 每正文段逐页锚点连续，失配段回退段级，manifest 记 warning | 已完成 |
-| 2 | 回填旧包 | 阶段 1 完成 | 对现有 `segments/` 重跑 merge，锚点正确、正文内容与旧 md 一致 | 待实施 |
+| 2 | 回填旧包 | 阶段 1 完成 | 对现有 `segments/` 重跑 merge，锚点正确、正文内容与旧 md 一致 | 已完成 |
 | 3 | `read_page` 单页 | 阶段 1 完成 | 输入单页返回该页 md；无逐页锚点段回退段级 | 待实施 |
 | 4 | 结构化数据逐页 | 阶段 1、3 完成 | `page_start==page_end` 精确到单页；与 `refine_page_numbers` 现状对比无回归 | 待实施 |
 
@@ -148,11 +148,36 @@ PY
 ## 完成条件
 
 - [x] 阶段 1：正文段逐页锚点连续且落点正确；近似段记 warning；正文内容零改动。→ 191 锚点连续、零改动、0 粘行、M-1/M-2/粘行已修并独立复验、14 单测（见修复复验）。
-- [ ] 阶段 2：旧包回填后正文内容与旧 md 一致，逐页锚点正确。
+- [x] 阶段 2：旧包回填后正文内容与旧 md 一致，逐页锚点正确。→ 4 包回填验证（见阶段 2 验收记录）。
 - [ ] 阶段 3：`read_page` 单页返回；无逐页锚点段回退段级；MCP 编译通过。
 - [ ] 阶段 4：`page_start==page_end` 精确到单页；对比现状无回归。
 - [~] 每阶段同步 `skills/pdf2md/SKILL.md` 及用户级副本。→ 阶段 1 `pdf-merge` 已能生成逐页锚点，但现有包未回填、`read_page` 未消费，合并 md 格式 skill 描述推迟到阶段 2 回填后统一更新（补同步动作已登记）。
 - [x] `detect_changes()` 仅影响预期符号；治理检查通过。→ detect_changes LOW、affected_processes 空；治理检查通过。
+
+## 阶段 2 验收记录（2026-07-09）
+
+**回填 4 个旧包**（demo5/春风 150AURA/demo20/demo60），全部通过验证：
+
+- **demo5**（5 页，5 段）：5 个逐页锚点，3 段有 `tail_page` warning（单页段首块失配但尾块命中，符合预期）。
+- **春风 150AURA**（191 页，24 段）：191 个逐页锚点，7 段有 warning（`miss_page`/`tail_page`），与阶段 1 一致。
+- **demo20**（20 页，2 段）：20 个逐页锚点，1 段有 warning（`tail_page:15, miss_page:16`）。
+- **demo60**（60 页，8 段）：60 个逐页锚点，2 段有 warning。
+
+**正文一致性**：`strip_page_anchors` 后与备份的旧 md **逐字节一致**（demo5 4612 字符、春风 150AURA 96626 字符）。
+
+**锚点连续性**：4 包逐页锚点均连续无缺无重（1-5、1-191、1-20、1-60）。
+
+**manifest 更新**：4 包 `manifest.json` 均写入 `page_anchors` 字段（`total_anchors`、`segments_with_warnings`、`warnings`）。
+
+**图片处理**：demo20 收集 13 张新图片，demo60 收集 76 张新图片，春风 150AURA 跳过 314 张幂等图片。
+
+**回填命令**（文档化）：
+
+```bash
+scripts/pdf-merge <package>/segments
+```
+
+无需新增脚本，直接复用新版 `pdf-merge`。旧包 md 如有手改，回填前需备份（已自动备份至 `<package>/.backup_stage2/`）。
 
 ## 风险和回滚
 
