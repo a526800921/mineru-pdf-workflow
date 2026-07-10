@@ -134,7 +134,7 @@ pdf_dir="$(dirname "$pdf_path")"
 pdf_name="$(basename "$pdf_path")"
 pdf_stem="${pdf_name%.*}"
 
-segment_size="${MINERU_SEGMENT_SIZE:-8}"
+segment_size="${MINERU_SEGMENT_SIZE:-10}"
 backend="${MINERU_BACKEND:-hybrid-engine}"
 effort="${MINERU_EFFORT:-medium}"
 method="${MINERU_METHOD:-auto}"

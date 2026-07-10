@@ -28,7 +28,7 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 - 脚本位于 `<project>/scripts/`，可通过绝对路径调用，也可将 `scripts/` 加入 `PATH`。
 - MCP 工具 `run_pdf_auto` 封装了 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`，可直接使用。
 - 如果 MCP 工具不可用，可直接运行同等 CLI 命令。
-- ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9786`。
+- ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9999`。
 
 ## ModelPad PDF 服务
 
@@ -42,7 +42,7 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 可选环境变量：
 
 ```bash
-MODELPAD_API_BASE=http://127.0.0.1:9786
+MODELPAD_API_BASE=http://127.0.0.1:9999
 MODELPAD_PDF_MODEL_ID=40621169-461C-4018-974E-9FAC92A542E7
 MODELPAD_PDF_START_TIMEOUT=120
 ```
@@ -58,8 +58,8 @@ MODELPAD_PDF_START_TIMEOUT=120
   review.md                ← 人工复核清单
   manifest.json            ← 解析状态元数据
   segments/                ← 分段解析产物
-    p0001-0008/
-    p0009-0016/
+    p0001-0010/
+    p0011-0020/
     ...
   images/                  ← 提取的图片（预留）
   data/                    ← 结构化数据
@@ -313,7 +313,7 @@ data/ingest_manifest.json
 | 症状 | 处理 |
 |---|---|
 | `segments_dir does not exist` | 先跑 `scripts/pdf-seg <pdf>` |
-| ModelPad API 无响应 | 先启动 `/Users/jafish/Documents/work/ModelPad` app，并确认 `GET http://127.0.0.1:9786/api/health` 返回可用 |
+| ModelPad API 无响应 | 先启动 `/Users/jafish/Documents/work/ModelPad` app，并确认 `GET http://127.0.0.1:9999/api/health` 返回可用 |
 | PDF 服务启动超时 | 检查 ModelPad 中 `pdf` 模型状态，必要时调大 `MODELPAD_PDF_START_TIMEOUT` |
 | MCP 工具找不到 | 确认项目 `.mcp.json` 指向 `mcp/server/dist/index.js`，必要时在 `mcp/server` 执行 `npm run build` 并重启 Claude Code |
 | `needs_review` 但用户要先看结果 | 可降低 `PDF_VALIDATE_THRESHOLD` 或手动运行 `scripts/pdf-merge <segments_dir>` |

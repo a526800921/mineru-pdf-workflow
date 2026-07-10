@@ -444,8 +444,8 @@ async function main() {
         .number()
         .int()
         .min(1)
-        .default(8)
-        .describe("每段页数，默认 8"),
+        .default(10)
+        .describe("每段页数，默认 10"),
       backend: z
         .enum(["hybrid-engine", "vlm-engine", "pipeline"])
         .default("hybrid-engine")

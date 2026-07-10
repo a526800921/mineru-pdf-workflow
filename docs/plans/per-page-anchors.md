@@ -30,7 +30,7 @@
 
 ## 非目标
 
-- 不改 MinerU 解析引擎，不改 `segment_size`（仍默认 8 页/段）。
+- 不改 MinerU 解析引擎，不改 `segment_size`（仍默认 10 页/段）。
 - 不重新解析 PDF；逐页信息全部来自已有 `content_list.json`。
 - 不修改合并 md 的**正文内容**（A′ 只插注释行，不重建内容）。
 - 不改 TOC 段的 md（保留 `toc_repair` 成果）。
