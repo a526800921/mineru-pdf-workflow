@@ -1,0 +1,21 @@
+PDF 服务已在运行: http://127.0.0.1:9000（复用，不启动）
+pdf-auto: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo20/demo20.pdf
+分段目录: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo20/segments
+阈值: 0.5
+重跑精度: high
+
+[1/2] 验证分段覆盖率
+通过: 2 段
+需重跑: 0 段
+  [pass] p0001-0010: 覆盖率 0.5607 (coverage_ok)
+  [pass] p0011-0020: 覆盖率 0.8333 (coverage_ok)
+  → 耗时 0.2s
+[2/2] 合并 Markdown
+  → 路径: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo20/demo20.md
+  合并级 TOC 修复: 页码 2–8, 121 条目（0级:28, 1级:93），来源: 文本层 x 坐标
+  p0001-0010: 条目召回 61/116 (53%) → suspicious
+TOC 再验证完成: 1 段，仍有未通过
+  → 输出: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo20/demo20.md
+存在 1 个需人工复核段，生成: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo20/review.md
+人工兜底清单已生成: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo20/review.md
+  → 耗时 0.3s

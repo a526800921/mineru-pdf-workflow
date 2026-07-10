@@ -1,0 +1,58 @@
+PDF 服务已在运行: http://127.0.0.1:9000（复用，不启动）
+pdf-auto: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/春风 150AURA/春风 150AURA.pdf
+分段目录: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/春风 150AURA/segments
+阈值: 0.82
+重跑精度: high
+清理残留重跑目录: p0185-0191-rerun
+
+[1/2] 验证分段覆盖率
+通过: 23 段
+需重跑: 1 段
+需人工复核: 1 段
+  需重跑: p0185-0191 (覆盖率 0.9748)
+  → 耗时 0.5s
+[2/4] 重跑可疑段
+
+重跑分段: p0185-0191 (7 页)
+    ✓ 完成
+
+[3/4] 二次验证
+  [review_only] p0001-0008: 需人工复核 — 覆盖率 0.4746 (review_only_pages)
+  [pass] p0009-0016: 通过 — 覆盖率 0.9932 (coverage_ok)
+  [pass] p0017-0024: 通过 — 覆盖率 0.9966 (coverage_ok)
+  [pass] p0025-0032: 通过 — 覆盖率 0.9921 (coverage_ok)
+  [pass] p0033-0040: 通过 — 覆盖率 0.986 (coverage_ok)
+  [pass] p0041-0048: 通过 — 覆盖率 0.9893 (coverage_ok)
+  [pass] p0049-0056: 通过 — 覆盖率 0.9948 (coverage_ok)
+  [pass] p0057-0064: 通过 — 覆盖率 0.9938 (coverage_ok)
+  [pass] p0065-0072: 通过 — 覆盖率 0.9891 (coverage_ok)
+  [pass] p0073-0080: 通过 — 覆盖率 0.9764 (coverage_ok)
+  [pass] p0081-0088: 通过 — 覆盖率 0.8968 (coverage_ok)
+  [pass] p0089-0096: 通过 — 覆盖率 0.9092 (coverage_ok)
+  [pass] p0097-0104: 通过 — 覆盖率 0.9592 (coverage_ok)
+  [pass] p0105-0112: 通过 — 覆盖率 0.9669 (coverage_ok)
+  [pass] p0113-0120: 通过 — 覆盖率 0.9373 (coverage_ok)
+  [pass] p0121-0128: 通过 — 覆盖率 0.9859 (coverage_ok)
+  [pass] p0129-0136: 通过 — 覆盖率 0.997 (coverage_ok)
+  [pass] p0137-0144: 通过 — 覆盖率 0.9103 (coverage_ok)
+  [pass] p0145-0152: 通过 — 覆盖率 0.9543 (coverage_ok)
+  [pass] p0153-0160: 通过 — 覆盖率 0.9887 (coverage_ok)
+  [pass] p0161-0168: 通过 — 覆盖率 0.995 (coverage_ok)
+  [pass] p0169-0176: 通过 — 覆盖率 0.9717 (coverage_ok)
+  [pass] p0177-0184: 通过 — 覆盖率 0.9972 (coverage_ok)
+  [rerun] p0185-0191: 需重跑 — 覆盖率 0.9748 (low_text_coverage)
+  → 耗时 0.5s
+[4/5] TOC 段修复
+  p0001-0008: 跳过混合段（7/8 页目录），保留 MinerU 原始输出
+  0 个 TOC 段: 121 条目（0级:28, 1级:93），来源: PDF 内置大纲
+  → 耗时 0.1s
+[5/6] 合并 Markdown
+  → 路径: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/春风 150AURA/春风 150AURA.md
+  合并级 TOC 修复: 页码 2–8, 121 条目（0级:28, 1级:93），来源: PDF 内置大纲
+  → 耗时 0.3s
+[6/7] 生成人工兜底清单
+人工兜底清单已生成: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/春风 150AURA/review.md
+需要人工复核的分段：
+  ISSUE:p0001-0008:review_only:review_only_pages:0.4746
+  ISSUE:p0185-0191:rerun:low_text_coverage:0.9748
+  → 耗时 0.0s

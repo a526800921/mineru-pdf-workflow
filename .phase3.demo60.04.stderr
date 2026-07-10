@@ -1,0 +1,25 @@
+PDF 服务已在运行: http://127.0.0.1:9000（复用，不启动）
+pdf-auto: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo60/demo60.pdf
+分段目录: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo60/segments
+阈值: 0.4
+重跑精度: high
+
+[1/2] 验证分段覆盖率
+通过: 8 段
+需重跑: 0 段
+  [pass] p0001-0008: 覆盖率 0.4746 (coverage_ok)
+  [pass] p0009-0016: 覆盖率 0.9932 (coverage_ok)
+  [pass] p0017-0024: 覆盖率 0.9966 (coverage_ok)
+  [pass] p0025-0032: 覆盖率 0.9921 (coverage_ok)
+  [pass] p0033-0040: 覆盖率 0.986 (coverage_ok)
+  [pass] p0041-0048: 覆盖率 0.9893 (coverage_ok)
+  [pass] p0049-0056: 覆盖率 0.9948 (coverage_ok)
+  [pass] p0057-0060: 覆盖率 0.9942 (coverage_ok)
+  → 耗时 0.2s
+[2/2] 合并 Markdown
+  → 路径: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo60/demo60.md
+  合并级 TOC 修复: 页码 2–8, 121 条目（0级:28, 1级:93），来源: 文本层 x 坐标
+  p0001-0008: 条目召回 110/116 (95%) → passed
+TOC 再验证完成: 1 段，全部通过
+  → 输出: /Users/jafish/Documents/work/mineru-pdf-workflow/pdf/demo60/demo60.md
+  → 耗时 0.3s
