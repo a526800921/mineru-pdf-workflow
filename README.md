@@ -18,12 +18,12 @@
 
 - 如果 PDF 服务已在运行，脚本只复用服务，结束时不停止它。
 - 如果 PDF 服务未运行，脚本会通过 ModelPad API 启动 `pdf` 模型，等待 MinerU API 就绪，运行完成后只停止本次脚本启动的服务。
-- ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9786`。
+- ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9999`。
 
 可选环境变量：
 
 ```bash
-MODELPAD_API_BASE=http://127.0.0.1:9786
+MODELPAD_API_BASE=http://127.0.0.1:9999
 MODELPAD_PDF_MODEL_ID=40621169-461C-4018-974E-9FAC92A542E7
 MODELPAD_PDF_START_TIMEOUT=120
 ```

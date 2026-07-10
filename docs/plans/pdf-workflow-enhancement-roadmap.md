@@ -74,7 +74,7 @@ P2 将新增 5 个 MCP 工具，设计已就绪于 [MCP 接入设计](../../mcp/
 | P3b | 向量化前置准备（无新依赖） | P3a 已完成 | `<package>/data/chunks.jsonl` 产出、每块含页码/章节/纯文本/字数 | 已完成 |
 | P4a | TOC 条目级验证（无新依赖） | P3a 已完成、有含目录页样本（春风 150AURA） | `toc_entries`/`toc_stats` 字段产出、review.md 逐条目报告缺失 | 已完成 |
 | P4b | 表格结构自检评测（无新依赖） | P3a 已完成、有表格密集样本（春风 150AURA，104 表格） | `data/table_accuracy.csv` 产出、结构自检指标与破损信号 | 已完成 |
-| P4c | 多模态 VLM 图表理解（本地 VLM） | P4b 已完成、10 页混合抽样全部通过 | `data/vlm_eval.jsonl` 产出、38 单测全绿 | 已完成 |
+| P4c | 多模态 VLM 图表理解（本地 VLM） | P4b 已完成、10 页文档指定混合抽样全部通过 | `data/vlm_eval.jsonl` 产出、67 个项目测试全绿 | 已完成 |
 | P5 | 远期（数据库直连 + 批量处理） | 依赖外部系统配合 | — | 候选 |
 
 P4 实施细节、字段方案、Step 0 证据、完成条件事实源为 [PDF 评测套件计划](pdf-evaluation-suite.md)。
@@ -278,7 +278,7 @@ P3b 不引入新依赖，只做数据准备。下游项目拿 `chunks.jsonl` 自
 |---|---|---|---|
 | P2 是否需要拆分 tools/ 目录 | 初期单文件实现，等工具数 ≥6 再拆分 | 否 | 已记录 |
 | 向量索引选型（ChromaDB vs sqlite-vec） | P3b 已重定位为"向量化前置准备"，只产出 chunks.jsonl，不做索引。下游项目自行选型 | 否 | 设计决策：不在此项目做向量存储 |
-| 多模态 VLM 选型（Claude Vision vs 本地模型） | P4 阶段 0 评估，取决于成本和精度要求 | 否 | 已延后 |
+| 多模态 VLM 选型（Claude Vision vs 本地模型） | 已确定使用 ModelPad 托管的 qwen3-vl-8b（MLX 8bit）；P4c 已完成抽样验收，详见评测套件计划 | 否 | 已解决 |
 | `pdf-auto` 的 `--rerun-only` 模式是否存在 | 已确认：`scripts/pdf-rerun` 已实现独立重跑+合并功能，可作为 `rerun_segments` MCP 工具的后端 | 否 | 已解决 |
 | `pdf-seg` / `pdf-rerun` 缺少 JSON 输出模式 | P2 实施 step 1/2 分别增加 `PDF_SEG_JSON=1` 和 `PDF_RERUN_JSON=1` | 是 | P2 实施中解决 |
 | review 生成无独立 CLI | P2 已创建 `scripts/pdf-review` + `lib/review_report.py`，`pdf-auto` 已重构为调用 lib | 否 | 已解决 |

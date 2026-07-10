@@ -34,7 +34,7 @@
 
 | 项 | 默认值 |
 |---|---|
-| ModelPad API base | `http://127.0.0.1:9786` |
+| ModelPad API base | `http://127.0.0.1:9999` |
 | PDF 模型 id | `40621169-461C-4018-974E-9FAC92A542E7` |
 | 启动接口 | `POST /api/models/:id/start` |
 | 停止接口 | `POST /api/models/:id/stop` |
@@ -45,7 +45,7 @@
 
 | 环境变量 | 默认值 | 用途 |
 |---|---|---|
-| `MODELPAD_API_BASE` | `http://127.0.0.1:9786` | ModelPad API 地址 |
+| `MODELPAD_API_BASE` | `http://127.0.0.1:9999` | ModelPad API 地址 |
 | `MODELPAD_PDF_MODEL_ID` | `40621169-461C-4018-974E-9FAC92A542E7` | PDF 模型 id |
 | `MODELPAD_PDF_START_TIMEOUT` | `120` | 启动后等待 MinerU API 可用的秒数 |
 
@@ -152,7 +152,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 
 - 静态验收：`bash -n scripts/pdf-seg scripts/pdf-auto scripts/pdf-rerun scripts/pdf-merge scripts/lib/modelpad-pdf-service` 通过。
 - 治理验收：`python3 scripts/check_plan_governance.py .` 通过；`git diff --check` 通过。
-- ModelPad API 健康检查：`GET http://127.0.0.1:9786/api/health` 返回 `ok: true`。
+- ModelPad API 健康检查：`GET http://127.0.0.1:9999/api/health` 返回 `ok: true`。
 - helper mock 验收：
   - 无已存在 PDF 服务时，`ensure_pdf_api` 调用 `POST /api/models/40621169-461C-4018-974E-9FAC92A542E7/start`，随后 `modelpad_stop_pdf_if_started` 调用 `POST .../stop`。
   - 已有 PDF 服务时，`ensure_pdf_api` 只复用端口，不调用 start；`modelpad_stop_pdf_if_started` 不调用 stop。
@@ -164,7 +164,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 | 问题 | 推荐方案 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|
 | 运行完成后是否总是 stop | 只停止本次脚本启动的服务；脚本开始前已有的服务不停止 | 否 | 已确认 |
-| ModelPad API base 是否固定 | 默认 `http://127.0.0.1:9786`，允许 `MODELPAD_API_BASE` 覆盖 | 否 | 已确认 |
+| ModelPad API base 是否固定 | 默认 `http://127.0.0.1:9999`，允许 `MODELPAD_API_BASE` 覆盖 | 否 | 已确认 |
 | PDF 模型 id 是否硬编码 | 默认使用已记录 id，允许 `MODELPAD_PDF_MODEL_ID` 覆盖 | 否 | 已确认 |
 
 ## 关联计划
