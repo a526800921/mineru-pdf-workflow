@@ -64,6 +64,9 @@ def _extract_entries_from_page(doc, page_index: int) -> list[dict]:
             continue
         for line in b.get("lines", []):
             text = "".join(s.get("text", "") for s in line.get("spans", []))
+            # 归一化 C0 控制字符（如 \x08 退格）为空白：某些 PDF 目录行用 \x08
+            # 分隔标题与点线、且页码行以 \x08 开头，否则点线正则无法匹配
+            text = re.sub(r'[\x00-\x1f]', ' ', text)
             y = line["bbox"][1]
             x0 = line["bbox"][0]
             text_lines.append((y, x0, text))

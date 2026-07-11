@@ -235,6 +235,7 @@ class TestPhysicalPageAttribution(unittest.TestCase):
     """
 
     DEMO20 = Path(__file__).parent / ".." / "pdf" / "demo20" / "demo20.pdf"
+    DEMO20TOC = Path(__file__).parent / ".." / "pdf" / "demo20toc" / "demo20toc.pdf"
 
     def _prefix_conflict_pdf(
         self, longer: str, shorter: str, longer_pg: int, shorter_pg: int
@@ -335,6 +336,24 @@ class TestPhysicalPageAttribution(unittest.TestCase):
         finally:
             doc.close()
             os.unlink(path)
+
+    def test_control_char_toc_line_extraction(self):
+        """目录行含控制字符（\\x08 分隔标题与点线）时仍能提取条目（demo20toc 乱码样本）。"""
+        if not self.DEMO20TOC.exists():
+            self.skipTest("demo20toc.pdf not available")
+        doc = fitz.open(str(self.DEMO20TOC))
+        try:
+            p2 = _extract_entries_from_page(doc, 1)  # 物理页 2 目录
+            titles = {e["title"]: e["page"] for e in p2}
+            self.assertGreater(len(p2), 0, "含 \\x08 的目录行应能提取条目")
+            self.assertEqual(titles.get("前言"), 7)  # 前言 → 指向页 7
+            # 提取的标题不应残留控制字符
+            self.assertFalse(
+                any("\x08" in e["title"] for e in p2),
+                "提取的标题不得残留 \\x08 控制字符",
+            )
+        finally:
+            doc.close()
 
 
 class TestMergedAndCompatPaths(unittest.TestCase):
