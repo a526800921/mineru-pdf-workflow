@@ -29,11 +29,11 @@ usage() {
 说明:
   分段解析 PDF，默认每 1 页一段。
   每段输出到 PDF 所在目录的 segments/ 子目录：
-  <PDF所在目录>/segments/p0001-0020/
+  <PDF所在目录>/segments/p0001-0001/
 
 可选环境变量:
   MINERU_SEGMENT_DIR=/path/to/segments  自定义分段输出目录（覆盖默认路径）
-  MINERU_SEGMENT_SIZE=8
+  MINERU_SEGMENT_SIZE=10
   MINERU_BACKEND=hybrid-engine|vlm-engine|pipeline
   MINERU_EFFORT=medium|high
   MINERU_METHOD=auto|txt|ocr
