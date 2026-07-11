@@ -565,6 +565,9 @@ for page_num in sorted(succeeded_pages.keys()):
     name = succeeded_pages[page_num]
     page_idx = page_num - 1
     pdf_text = doc[page_idx].get_text()
+    pdf_words = doc[page_idx].get_text("words")
+    page_width = doc[page_idx].rect.width
+    page_height = doc[page_idx].rect.height
 
     orig_dir = segments_dir / name
     fb_dir = segments_dir / f"{name}-fallback"
@@ -579,8 +582,10 @@ for page_num in sorted(succeeded_pages.keys()):
     orig_md = omd[0].read_text(encoding="utf-8", errors="replace")
     fb_md = fmd[0].read_text(encoding="utf-8", errors="replace")
 
-    orig_res = assess_page_quality(orig_md, pdf_text)
-    fb_res = assess_page_quality(fb_md, pdf_text)
+    orig_res = assess_page_quality(orig_md, pdf_text, pdf_words=pdf_words,
+                                   page_width=page_width, page_height=page_height)
+    fb_res = assess_page_quality(fb_md, pdf_text, pdf_words=pdf_words,
+                                   page_width=page_width, page_height=page_height)
     selection = compare_quality(orig_res["metrics"], fb_res["metrics"])
 
     sig_info = ", ".join(page_data.get(page_num, {}).get("signals", []))

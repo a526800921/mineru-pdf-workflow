@@ -267,6 +267,59 @@ class TestCompareQuality(unittest.TestCase):
             "review",
         )
 
+    # ── native_table_missing 优先规则 ────────────────────────
+    def test_missing_resolved_text_ok(self):
+        """字段缺失被 fallback 恢复 → fallback"""
+        self._assert_cmp(
+            "missing resolved, text OK → fallback",
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 5000, "text_coverage": 0.9,
+             "native_table_missing": 2},
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 4800, "text_coverage": 0.9,
+             "native_table_missing": 0},
+            "fallback",
+        )
+
+    def test_missing_resolved_text_lost(self):
+        """字段缺失恢复了但文本丢失 → review"""
+        self._assert_cmp(
+            "missing resolved, text lost → review",
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 5000, "text_coverage": 0.9,
+             "native_table_missing": 2},
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 200, "text_coverage": 0.1,
+             "native_table_missing": 0},
+            "review",
+        )
+
+    def test_missing_not_resolved(self):
+        """字段缺失未改善 → review"""
+        self._assert_cmp(
+            "missing not resolved → review",
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 5000, "text_coverage": 0.9,
+             "native_table_missing": 2},
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 4800, "text_coverage": 0.9,
+             "native_table_missing": 2},
+            "review",
+        )
+
+    def test_missing_partially_resolved(self):
+        """字段缺失部分改善 → review"""
+        self._assert_cmp(
+            "missing partially resolved → review",
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 5000, "text_coverage": 0.9,
+             "native_table_missing": 5},
+            {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 4800, "text_coverage": 0.9,
+             "native_table_missing": 2},
+            "review",
+        )
+
+    def test_missing_not_present_fallthrough(self):
+        """没有 native_table_missing 时不影响既有逻辑"""
+        self._assert_cmp(
+            "no missing metrics → existing logic",
+            {"empty_td": 100, "max_td_per_row": 50, "md_bytes": 50000, "text_coverage": 0.9},
+            {"empty_td": 30, "max_td_per_row": 50, "md_bytes": 48000, "text_coverage": 0.9},
+            "fallback",
+        )
 
 
 class TestNativeTableTextOmission(unittest.TestCase):

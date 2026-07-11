@@ -143,7 +143,7 @@ EOF
 
 # mock page_quality（始终返回 quality_ok=True，阻止 fallback 触发）
 cat > "$MOCK_DIR/lib/page_quality.py" << 'EOF'
-def assess_page_quality(md_text, pdf_page_text):
+def assess_page_quality(md_text, pdf_page_text, **kwargs):
     return {"signals": [], "metrics": {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 0, "pdf_bytes": 0, "text_coverage": 1.0, "pdf_tokens": 0}, "quality_ok": True}
 def compare_quality(original_metrics, fallback_metrics):
     return "original"

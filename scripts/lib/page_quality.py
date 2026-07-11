@@ -450,13 +450,16 @@ def compare_quality(
     判定维度：
         1. 表格结构：空 <td> 数量、单行最大列数
         2. 文本完整性：文本覆盖率、Markdown 体积
+        3. 表格字段缺失（优先级最高）：PDF 原生表格文字 vs HTML 逻辑单元格
 
     返回值：
-        "fallback" — 表格结构明显改善且文本完整性未退化
+        "fallback" — 表格结构明显改善且文本完整性未退化，或表格字段缺失被恢复
         "original" — 表格结构无改善且文本完整性退化
         "review"   — 无法明确判断
 
     判定逻辑：
+        - 字段缺失检测优先：原始有 native_table_missing 时，
+          恢复 → fallback（文本 OK），未恢复 → review
         - 表格改善 = 空 <td> 减少至少一半 或 单行列数减少至少 20%
         - 文本 OK = 文本覆盖率保持原始 80% 以上（最小值 0.3）
                      且 MD 字节保持原始 80% 以上；如果覆盖率上升，允许
@@ -495,6 +498,18 @@ def compare_quality(
     # 降到正常正文大小，不能把体积下降本身当成文本丢失。覆盖率上升时，
     # 以覆盖率作为更可靠的文本完整性证据。
     text_ok = cov_ok and (vol_ok or fb_cov > orig_cov)
+
+    # 5 ── 表格字段缺失检测优先规则 ─────────────────────────
+    # native_table_missing 为 0 表示无缺失，>0 表示 PDF 原生文字存在于表格区域
+    # 但 HTML 单元格缺失。此规则优先于表格结构和文本完整性判定。
+    orig_missing = original_metrics.get("native_table_missing", 0)
+    fb_missing = fallback_metrics.get("native_table_missing", 0)
+    if orig_missing > 0:
+        if fb_missing == 0:
+            # fallback 恢复了缺失字段 → 采纳（文本完整性保留时）
+            return "fallback" if text_ok else "review"
+        # 部分改善或未改善 → review（已知有问题，不能选 original）
+        return "review"
 
     if structurally_better:
         # 表格改善 —— 文本完整性保留则采纳
