@@ -20,6 +20,8 @@ log() {
   fi
 }
 
+source "${_this_file%/*}/lib/segment-consistency"
+
 usage() {
   cat <<'EOF'
 用法:
@@ -307,7 +309,7 @@ root_output_dir="${MINERU_SEGMENT_DIR:-$pdf_dir/segments}"
 mkdir -p "$root_output_dir"
 
 # 输出目录一致性检查：若旧输出与当前配置不一致则清理重建
-_check_seg_consistency "$root_output_dir" "$pdf_path" "$pages" "$segment_size" "$backend" "$method" "$effort" "$lang" || true
+check_segment_consistency "$root_output_dir" "$pdf_path" "$pages" "$segment_size" "$backend" "$method" "$effort" "$lang" || true
 
 log "PDF: $pdf_path"
 log "总页数: $pages"

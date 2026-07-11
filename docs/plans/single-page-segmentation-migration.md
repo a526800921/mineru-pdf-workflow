@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 1 补充收尾：输出目录启动前一致性检查（待实施；完成后进入阶段 3）
+- 当前阶段：阶段 3：页级质量 fallback（待实施；阶段 1 补充收尾已通过）
 - 最后更新：2026-07-11
 
 ## 背景
@@ -117,26 +117,16 @@
 
 #### 阶段 1 补充收尾验收（2026-07-11）
 
-**结论：未通过。**
+**结论：通过。**
 
-当前实现虽已加入部分一致性检查代码，但尚未达到完成条件：
+- 新增共享 `scripts/lib/segment-consistency`，统一校验 PDF SHA-256、页数、单页分段布局、MinerU 关键参数、缺页/多余页和 `.backup`/`-rerun` 残留。
+- `pdf-seg` 不匹配时清理 `segments/` 后继续全量单页解析；`pdf-auto` 不匹配时清理后调用 `pdf-seg` 全量重建。
+- `manifest.json` 持久化 `segmentation` 运行指纹。
+- `scripts/test-phase1.sh`：10/10 通过，覆盖旧格式、多页目录、匹配保留、缺页清理、残留临时目录和 `pdf-auto` 接入。
+- `scripts/test-phase2.sh`：38/38 通过，新增场景验证 `pdf-auto` 清理旧多页目录后实际生成新的单页产物。
+- `bash -n`、`python3 scripts/check_plan_governance.py .` 和 `git diff --check` 均通过。
 
-- `scripts/pdf-seg` 的 `_check_seg_consistency` 在 Python 校验后使用 `|| true`，随后通过 `$?` 判断失败；失败状态已被吞掉，只能依赖标准输出内容，而校验原因写到了标准错误，导致不一致时不会进入清理分支。
-- `scripts/pdf-auto` 只有 `_check_seg_consistency` 函数定义，没有在 `segments_dir` 校验前调用；直接运行 `pdf-auto` 仍可能复用旧输出。
-- 一致性检查尚未完整验证单页目录是否连续、是否缺页或多余页目录。
-- `scripts/test-phase2.sh` 的 31 个断言通过，但没有覆盖阶段 1 启动前一致性检查。
-
-可复现实验（临时目录，未修改项目输出）：复制旧 `segments/` 和无 `segmentation` 指纹的旧 `manifest.json` 后调用 `pdf-seg` 检查函数，结果为：
-
-```text
-缺少 segmentation 指纹 (旧输出格式)
-旧多页段残留: p0001-0010
-✓ 输出目录一致性检查通过
-before_old_segment=1
-after_old_segment=1
-```
-
-阶段 1 补充收尾仍为 `待实施`，阶段 3 不进入代码实施；需要先修正检查状态传递、接入 `pdf-auto`，补齐目录连续性和清理回归测试。
+阶段 1 补充收尾已完成，阶段 3 进入 `待实施`。
 
 ## fallback 处理契约
 

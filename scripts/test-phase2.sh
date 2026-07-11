@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 阶段 2 回归测试：pdf-rerun 备份/恢复、产物同步、事务安全
-# 覆盖：成功/无 md/非零退出/残留 backup/原子覆盖/JSON 契约/单页+多页段
+# 覆盖：成功/无 md/非零退出/残留 backup/原子覆盖/JSON 契约/单页+多页段/启动一致性重建
 # 使用 mock mineru + mock modelpad 服务，不依赖真实 MinerU
 set -eo pipefail
 
@@ -19,6 +19,9 @@ trap cleanup_all EXIT
 
 # mock 依赖 (lib/modelpad-pdf-service + pdf-merge + mineru)
 mkdir -p "$MOCK_DIR/lib"
+
+# 共享输出目录一致性检查 helper
+cp "$SCRIPTS_DIR/lib/segment-consistency" "$MOCK_DIR/lib/segment-consistency"
 
 # mock modelpad-pdf-service（阻止 ensure_pdf_api 启动真实 ModelPad）
 cat > "$MOCK_DIR/lib/modelpad-pdf-service" << 'EOF'
@@ -140,6 +143,19 @@ chmod +x "$MOCK_DIR/pdf-seg"
 
 # ── 辅助函数：重置 pdf-validate 调用计数器 ────────────────
 reset_validate_stage() { echo 1 > "$MOCK_DIR/.validate_stage"; }
+
+create_dummy_pdf() {
+  local path="$1" pages="${2:-2}"
+  python3 - "$path" "$pages" <<'PY'
+import sys
+import fitz
+doc = fitz.open()
+for _ in range(int(sys.argv[2])):
+    doc.new_page()
+doc.save(sys.argv[1])
+doc.close()
+PY
+}
 
 # ── 辅助函数：为 mock pdf-auto 创建最小 manifest.json（通过一致性检查）─
 ok()   { echo "  PASS: $1"; PASS=$((PASS + 1)); }
@@ -481,7 +497,7 @@ mkdir -p "$T11/segments/p0001-0001"
 echo "original p1" > "$T11/segments/p0001-0001/page.md"
 echo '{"pages":[{"page_idx":0}]}' > "$T11/segments/p0001-0001/page_content_list.json"
 echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T11/segments/p0001-0001/page_content_list_v2.json"
-touch "$T11/dummy.pdf"
+create_dummy_pdf "$T11/dummy.pdf" 1
 create_mock_manifest "$T11" "$T11/dummy.pdf" 1
 
 reset_validate_stage
@@ -510,7 +526,7 @@ echo "original p1" > "$T12/segments/p0001-0001/page.md"
 echo '{"pages":[{"page_idx":0}]}' > "$T12/segments/p0001-0001/page_content_list.json"
 echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T12/segments/p0001-0001/page_content_list_v2.json"
 echo "original p2" > "$T12/segments/p0002-0002/page.md"
-touch "$T12/dummy.pdf"
+create_dummy_pdf "$T12/dummy.pdf" 2
 create_mock_manifest "$T12" "$T12/dummy.pdf" 2
 
 reset_validate_stage
@@ -544,7 +560,7 @@ echo "original p1" > "$T13/segments/p0001-0001/page.md"
 echo '{"pages":[{"page_idx":0}]}' > "$T13/segments/p0001-0001/page_content_list.json"
 echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T13/segments/p0001-0001/page_content_list_v2.json"
 echo "original p2" > "$T13/segments/p0002-0002/page.md"
-touch "$T13/dummy.pdf"
+create_dummy_pdf "$T13/dummy.pdf" 2
 create_mock_manifest "$T13" "$T13/dummy.pdf" 2
 
 reset_validate_stage
@@ -579,7 +595,7 @@ OUT15="$T15/out.json"
 mkdir -p "$T15/segments/p0001-0001" "$T15/segments/p0002-0002"
 echo "keep p1" > "$T15/segments/p0001-0001/page.md"
 echo "keep p2" > "$T15/segments/p0002-0002/page.md"
-touch "$T15/dummy.pdf"
+create_dummy_pdf "$T15/dummy.pdf" 2
 create_mock_manifest "$T15" "$T15/dummy.pdf" 2
 
 echo 1 > "$MOCK_DIR/.validate_stage"
@@ -595,7 +611,7 @@ OUT16="$T16/out.json"
 mkdir -p "$T16/segments/p0001-0001" "$T16/segments/p0002-0002"
 echo "will be cleaned" > "$T16/segments/p0001-0001/page.md"
 echo "will be cleaned" > "$T16/segments/p0002-0002/page.md"
-touch "$T16/dummy.pdf"
+create_dummy_pdf "$T16/dummy.pdf" 2
 
 # 创建一个 hash 不匹配的 manifest（写入错误 hash）
 python3 -c "
@@ -623,7 +639,7 @@ mkdir -p "$T17/segments/p0001-0001" "$T17/segments/p0011-0020" "$T17/segments/p0
 echo "clean me" > "$T17/segments/p0001-0001/page.md"
 echo "multi-page" > "$T17/segments/p0011-0020/page.md"
 echo "keep" > "$T17/segments/p0002-0002/page.md"
-touch "$T17/dummy.pdf"
+create_dummy_pdf "$T17/dummy.pdf" 2
 create_mock_manifest "$T17" "$T17/dummy.pdf" 2
 
 echo 1 > "$MOCK_DIR/.validate_stage"
@@ -633,6 +649,22 @@ HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=all_pass PATH="
 assert_file_missing "多页段残留触发清理" "$T17/segments/p0001-0001/page.md"
 assert_file_missing "多页段本身被删除" "$T17/segments/p0011-0020/page.md"
 assert_file_missing "正常单页段也被删除（因为清理是整体 rm -rf）" "$T17/segments/p0002-0002/page.md"
+
+# ── 场景 18：pdf-auto 不匹配 → 清理后调用 pdf-seg 全量重解析 ──
+echo ""
+echo "=== 场景 18：pdf-auto 不匹配 → 清理后全量重解析 ==="
+T18="$TEST_ROOT/t18"
+OUT18="$T18/out.json"
+mkdir -p "$T18/segments/p0001-0010"
+echo "legacy multi-page" > "$T18/segments/p0001-0010/page.md"
+create_dummy_pdf "$T18/dummy.pdf" 1
+create_mock_manifest "$T18" "$T18/dummy.pdf" 1
+
+echo 1 > "$MOCK_DIR/.validate_stage"
+HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=all_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T18/dummy.pdf" "$T18/segments" 2>/dev/null > "$OUT18" || true
+
+assert_file_missing "全量重解析前旧多页目录已删除" "$T18/segments/p0001-0010"
+assert_file_exists "全量重解析后新单页产物已生成" "$T18/segments/p0001-0001/content/page.md"
 
 echo ""
 echo "═══════════════════════════════════════════"

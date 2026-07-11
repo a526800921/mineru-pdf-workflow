@@ -34,6 +34,8 @@ log() {
   fi
 }
 
+source "$_scripts_dir/lib/segment-consistency"
+
 # --- 原子同步：用重跑结果替换原段内容（目录级原子交换） ---
 # 参数: <rerun_mineru_dir> <orig_mineru_dir> <rerun_md_path> <orig_md_name> <seg_name>
 # 失败时原目录完全不变；成功时过期文件自动清理
@@ -383,6 +385,28 @@ segments_dir="$(cd "$segments_dir" && pwd)"
 
 threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
 rerun_effort="${MINERU_RERUN_EFFORT:-high}"
+segment_size="${MINERU_SEGMENT_SIZE:-1}"
+segment_backend="${MINERU_BACKEND:-hybrid-engine}"
+segment_method="${MINERU_METHOD:-auto}"
+segment_effort="${MINERU_EFFORT:-medium}"
+segment_lang="${MINERU_LANG:-ch}"
+
+pages="$(python3 - "$pdf_path" <<'PY'
+import sys
+try:
+    import fitz
+except Exception as exc:
+    raise SystemExit(f"无法导入 PyMuPDF/fitz：{exc}")
+doc = fitz.open(sys.argv[1])
+print(doc.page_count)
+PY
+)" || {
+  if [[ "$json_mode" == "1" ]]; then
+    emit_json "error" 1 "" "" ""
+  fi
+  echo "错误：无法读取 PDF 页数：$pdf_path" >&2
+  exit 1
+}
 # 自动检测可用 API 端口
 ensure_pdf_api log
 
@@ -398,8 +422,24 @@ for _d in "$segments_dir"/*-rerun/; do
   rm -rf "$_d"
 done
 
-# Output directory consistency check: clean on mismatch
-_check_seg_consistency "$segments_dir" "$pdf_path" || true
+# Output directory consistency check: clean and fully reparse on mismatch
+if ! check_segment_consistency "$segments_dir" "$pdf_path" "$pages" "$segment_size" \
+    "$segment_backend" "$segment_method" "$segment_effort" "$segment_lang"; then
+  log "检测到旧或不匹配的分段，执行全量单页重解析"
+  if ! MINERU_SEGMENT_DIR="$segments_dir" \
+      MINERU_SEGMENT_SIZE="$segment_size" \
+      MINERU_BACKEND="$segment_backend" \
+      MINERU_METHOD="$segment_method" \
+      MINERU_EFFORT="$segment_effort" \
+      MINERU_LANG="$segment_lang" \
+      "$_scripts_dir/pdf-seg" "$pdf_path" >"$_subprocess_stdout"; then
+    if [[ "$json_mode" == "1" ]]; then
+      emit_json "error" 1 "" "" ""
+    fi
+    echo "错误：分段目录不匹配，重新解析失败：$pdf_path" >&2
+    exit 1
+  fi
+fi
 
 # 提取 PDF 文件名（无扩展名） 用于自动推导合并输出
 pdf_stem="$(basename "$pdf_path" .pdf)"
@@ -938,4 +978,3 @@ PY
   update_manifest "needs_review" "$(basename "$merge_output")" "review.md"
   exit 2
 fi
-
