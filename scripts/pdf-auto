@@ -442,11 +442,18 @@ with fitz.open(pdf_path) as doc:
             continue  # 已做过 fallback，跳过检测
         page_idx = start - 1
         pdf_text = doc[page_idx].get_text()
+        pdf_words = doc[page_idx].get_text("words")
+        page_rect = doc[page_idx].rect
         md_files = sorted(child.rglob("*.md"))
         if not md_files:
             continue
         md_text = md_files[0].read_text(encoding="utf-8", errors="replace")
-        result = assess_page_quality(md_text, pdf_text)
+        result = assess_page_quality(
+            md_text, pdf_text,
+            pdf_words=pdf_words,
+            page_width=page_rect.width,
+            page_height=page_rect.height,
+        )
         if not result["quality_ok"]:
             triggered.append({
                 "name": child.name, "page": start,

@@ -127,13 +127,20 @@ def check_text_coverage(md_text: str, pdf_text: str) -> tuple[bool, float]:
 def assess_page_quality(
     md_text: str,
     pdf_page_text: str,
+    pdf_words: list[tuple] | None = None,
+    page_width: float = 600.0,
+    page_height: float = 400.0,
 ) -> dict:
     """
-    对单页运行全部四个质量信号检测。
+    对单页运行全部质量信号检测（含可选的通用表格字段缺失检测）。
 
     参数：
-        md_text:      MinerU 输出的该页 Markdown 文本
+        md_text:       MinerU 输出的该页 Markdown 文本
         pdf_page_text: PyMuPDF 提取的该页原生文本
+        pdf_words:     PyMuPDF get_text("words") 含 bbox 的逐词数据（可选）
+                       传入后启用 native_table_text_missing 信号
+        page_width:    PDF 页面宽度（用于表格区域判定）
+        page_height:   PDF 页面高度（用于页脚排除）
 
     返回 dict：
         signals:   list[str]  触发的信号名称列表
@@ -172,10 +179,165 @@ def assess_page_quality(
     if low_cov:
         signals.append("text_coverage_low")
 
+    # 5 ── 通用表格字段缺失（可选，需 pdf_words）────────────
+    if pdf_words is not None:
+        fb_signals, fb_metrics = detect_native_table_text_omission(
+            md_text, pdf_words, page_width, page_height,
+        )
+        signals.extend(fb_signals)
+        metrics["native_table_candidates"] = fb_metrics.get("native_table_candidates", 0)
+        metrics["native_table_missing"] = fb_metrics.get("native_table_missing", 0)
+        if fb_metrics.get("missing_text"):
+            metrics["missing_text"] = fb_metrics["missing_text"]
+
     return {
         "signals": signals,
         "metrics": metrics,
         "quality_ok": len(signals) == 0,
+    }
+
+
+# ── 通用表格字段缺失检测（阶段 5 新增）───────────────────────
+
+def _normalize_table_text(text: str) -> str:
+    """
+    归一化表格文本用于比较：统一全角→半角、空白折叠、去两端。
+    """
+    text = text.strip()
+    # 全角字母数字 → 半角
+    text = text.translate(str.maketrans(
+        "０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
+        "ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ",
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz",
+    ))
+    # 全角标点 → 半角（保留冒号用于数值单位判断）
+    text = text.replace("：", ":").replace("（", "(").replace("）", ")")
+    text = text.replace("，", ",").replace("；", ";")
+    # 折叠空白
+    text = re.sub(r"\s+", "", text)
+    return text
+
+
+def _extract_html_cell_texts(md_text: str) -> set[str]:
+    """
+    从 MinerU Markdown 的 HTML <table> 中提取所有非空逻辑单元格文本。
+    考虑 colspan/rowspan 展开，返回归一化后的去重集合。
+    """
+    m = re.search(r"<table>(.*?)</table>", md_text, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return set()
+
+    table_html = m.group(1)
+    cells: set[str] = set()
+
+    # 提取所有 <td> 文本，忽略属性
+    for td in re.findall(r"<td[^>]*>(.*?)</td>", table_html, re.DOTALL):
+        text = td.strip()
+        if text and not re.match(r"^\s*$", text):
+            cells.add(_normalize_table_text(text))
+
+    return cells
+
+
+def _is_spec_table(md_text: str) -> bool:
+    """
+    判断 HTML 表格是否为真正的规格表（≥ 3 行）。
+    排除 2 行以内的警告框、装饰性框等。
+    """
+    m = re.search(r"<table>(.*?)</table>", md_text, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return False
+    rows = len(re.findall(r"<tr[^>]*>", m.group(1)))
+    return rows >= 3
+
+
+def _find_pdf_table_labels(
+    pdf_words: list[tuple],
+    page_width: float = 600.0,
+    page_height: float = 400.0,
+) -> set[str]:
+    """
+    从 PDF 原生 words 中提取表格区域内的左列候选标签。
+
+    pdf_words: PyMuPDF get_text("words") 输出，每项为
+               (x0, y0, x1, y1, word, block_no, line_no, word_no)
+
+    判定规则：
+    - 左列文字：x0 < page_width × 0.4（排除右列数值和页脚页码）
+    - 排除页脚区域：y > page_height × 0.85（页码、页脚）
+    - 排除页码样式的纯数字
+    - 标签长度 <= 30 字符（排除大段正文被误当表格标签）
+    """
+    labels: set[str] = set()
+    left_col_x = page_width * 0.4
+    footer_y = page_height * 0.85
+
+    for w in pdf_words:
+        x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
+        text = text.strip()
+        if not text:
+            continue
+        # 排除右列数值区域
+        if x0 >= left_col_x:
+            continue
+        # 排除页脚
+        if y0 > footer_y:
+            continue
+        # 排除纯数字页码
+        if re.match(r"^\d+$", text):
+            continue
+        # 表格标签通常是短字段名，排除长句正文
+        if len(text) > 30:
+            continue
+        labels.add(_normalize_table_text(text))
+
+    return labels
+
+
+def detect_native_table_text_omission(
+    md_text: str,
+    pdf_words: list[tuple],
+    page_width: float = 600.0,
+    page_height: float = 400.0,
+) -> tuple[list[str], dict]:
+    """
+    检测 MinerU HTML 表格中是否遗漏了 PDF 原生文本中的表格字段。
+
+    返回 (signals, metrics):
+        signals: ["native_table_text_missing"] 或 []
+        metrics: {
+            "native_table_candidates": int,      # PDF 表格区域候选标签数
+            "native_table_missing": int,          # 遗漏数
+            "missing_text": list[str],            # 遗漏的原文
+        }
+    """
+    # 1. 检查页面是否有合格的规格表（≥ 3 行）
+    if not _is_spec_table(md_text):
+        return [], {"native_table_candidates": 0, "native_table_missing": 0,
+                     "missing_text": []}
+    html_cells = _extract_html_cell_texts(md_text)
+    if not html_cells:
+        return [], {"native_table_candidates": 0, "native_table_missing": 0,
+                     "missing_text": []}
+
+    # 2. 从 PDF 提取左列候选标签
+    pdf_labels = _find_pdf_table_labels(pdf_words, page_width, page_height)
+    if not pdf_labels:
+        return [], {"native_table_candidates": 0, "native_table_missing": 0,
+                     "missing_text": []}
+
+    # 3. 比较：PDF 中存在但 HTML 中缺失的标签
+    missing = sorted(pdf_labels - html_cells)
+
+    signals = []
+    if missing:
+        signals.append("native_table_text_missing")
+
+    return signals, {
+        "native_table_candidates": len(pdf_labels),
+        "native_table_missing": len(missing),
+        "missing_text": missing,
     }
 
 

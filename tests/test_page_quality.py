@@ -4,6 +4,7 @@
 import os
 import sys
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from lib.page_quality import (  # noqa: E402
@@ -13,7 +14,14 @@ from lib.page_quality import (  # noqa: E402
     compare_quality,
     count_empty_td,
     max_td_per_row,
+    _extract_html_cell_texts,
+    _normalize_table_text,
+    detect_native_table_text_omission,
 )
+try:
+    import fitz
+except ImportError:
+    fitz = None
 
 
 class TestCountEmptyTd(unittest.TestCase):
@@ -258,6 +266,75 @@ class TestCompareQuality(unittest.TestCase):
             {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 85, "text_coverage": 1.0},
             "review",
         )
+
+
+
+class TestNativeTableTextOmission(unittest.TestCase):
+    """通用表格字段缺失检测。"""
+
+    def setUp(self):
+        # 需要真实 PDF 来提取 words，使用 demo20
+        self.pdf_path = os.path.join(
+            os.path.dirname(__file__), "..", "pdf", "demo20", "demo20.pdf"
+        )
+        if not os.path.exists(self.pdf_path):
+            self.skipTest("demo20.pdf not available")
+
+    def _get_page_md(self, page_1based: int) -> str:
+        """读取指定页的 MinerU Markdown（hybrid_auto 子目录）。"""
+        md_path = Path(self.pdf_path).parent / "segments" / \
+            f"p{page_1based:04d}-{page_1based:04d}" / "demo20" / "hybrid_auto" / "demo20.md"
+        if md_path.exists():
+            return md_path.read_text(encoding="utf-8", errors="replace")
+        return ""
+
+    def test_p16_missing_field_detected(self):
+        """p16 的"百公里综合油耗"能被通用规则发现。"""
+        doc = fitz.open(self.pdf_path)
+        words = doc[15].get_text("words")
+        md_text = self._get_page_md(16)
+        self.assertTrue(md_text, "p16 md should exist")
+
+        signals, metrics = detect_native_table_text_omission(
+            md_text, words, doc[15].rect.width, doc[15].rect.height,
+        )
+        doc.close()
+
+        self.assertIn("native_table_text_missing", signals)
+        self.assertGreater(metrics["native_table_missing"], 0)
+        # 具体字段不是白名单，但当前样本中应包含它
+        self.assertTrue(
+            any("百公里综合油耗" in t for t in metrics.get("missing_text", [])),
+            f"missing_text should contain '百公里综合油耗': {metrics.get('missing_text')}",
+        )
+
+    def test_p6_no_table_no_false_positive(self):
+        """无表格页不触发遗漏检测。"""
+        doc = fitz.open(self.pdf_path)
+        words = doc[9].get_text("words")  # p10 (no table)
+        md_text = self._get_page_md(10)
+        doc.close()
+        if not md_text:
+            self.skipTest("p10 md not available")
+
+        signals, metrics = detect_native_table_text_omission(
+            md_text, words, 556, 386,
+        )
+        # 无 HTML 表格时返回空 signals
+        self.assertNotIn("native_table_text_missing", signals)
+
+    def test_normalize_consistency(self):
+        """归一化对于已知表格内容的一致性。"""
+        md = self._get_page_md(16)
+        if not md:
+            self.skipTest("p16 md not available")
+        cells = _extract_html_cell_texts(md)
+        for known in ["电器装置", "蓄电池", "12V/7Ah", "前照灯", "不可调节"]:
+            self.assertIn(
+                _normalize_table_text(known),
+                cells,
+                f"'{known}' should be in HTML cells after normalization",
+            )
 
 
 if __name__ == "__main__":

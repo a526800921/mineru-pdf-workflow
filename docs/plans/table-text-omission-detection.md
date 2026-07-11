@@ -1,0 +1,156 @@
+# 计划：通用表格字段缺失检测与页级 fallback 触发
+
+## 计划状态
+
+- 状态：待实施
+- 当前阶段：阶段 1：通用原生表格检测器
+- 最后更新：2026-07-11
+- 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
+
+## 背景
+
+demo20 第 16 页的表格中，PDF 页面原生文本包含“百公里综合油耗”，但 MinerU 单页输出的 HTML 表格缺少该字段。现有四类页级质量信号均未命中：空 `<td>`、单行列数、体积膨胀和整页文本覆盖率都可能保持在正常范围内。
+
+这不是一个应为特定字段增加白名单的需求。“百公里综合油耗”只是当前样本中的缺失字段，检测器必须对未知字段同样有效。
+
+## 目标
+
+- 从 PDF 原生文本及其坐标中提取表格区域的候选文字。
+- 将 PDF 原生表格文字与 MinerU HTML 表格的逻辑单元格进行通用比对。
+- 发现“PDF 表格区域存在、HTML 表格缺失”的字段时，产生机器可读信号并触发既有页级 fallback。
+- fallback 后重新比对：恢复字段则允许选择 fallback；仍缺失或无法判断则保留原始结果并进入 `review`。
+- 将检测证据写入 `manifest.page_fallback`，支持后续追溯和人工复核。
+
+## 非目标
+
+- 不硬编码“百公里综合油耗”或其他业务字段白名单。
+- 不直接使用 VLM 输出覆盖 MinerU HTML；VLM 只作为无文本层或原生检测不确定时的补充证据。
+- 不改变已完成阶段 3 的单页 fallback 参数和双版本目录契约。
+- 不把所有 PDF 原生文字都要求出现在 HTML；页眉、页脚、图片说明和表格外文字必须排除。
+
+## Step 0 证据
+
+### 已确认的真实样本基线
+
+- PDF 原生第 16 页包含字段“百公里综合油耗”，其坐标约为 `[44.3, 44.3, 114.3, 54.3]`；同一视觉行的值“≤2.7L”坐标约为 `[360.5, 43.8, 387.9, 55.0]`。
+- 单页 MinerU 原始段输出和最终合并 Markdown 均缺少该字段，`content_list.json`、`content_list_v2.json`、`middle.json`、`model.json` 也未包含该字段，因此不是 merge 阶段丢失。
+- 当前 `assess_page_quality` 对该页返回 `quality_ok=true`，文本覆盖率约 `0.9162`，说明整页覆盖率不能发现这种局部表格字段遗漏。
+- 现有 fallback 对该页已执行过，但 fallback 结果仍未恢复该字段；因此需要先记录“检测到但修复未成功”的结果，而不是静默认为质量正常。
+- VLM 视觉评测报告 `pdf/demo20/data/vlm_comparison_p16.md` 能识别完整行“百公里综合油耗 ≤2.7L”，可作为补充检测证据，但不能作为主输出覆盖源。
+
+### 可复现基线
+
+在仓库根目录执行以下检查，应确认 PDF 原生文本有该字段而当前单页 Markdown 没有：
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import fitz
+
+pdf = Path("pdf/demo20/demo20.pdf")
+md = Path("pdf/demo20/segments/p0016-0016/demo20/hybrid_auto/demo20.md")
+with fitz.open(pdf) as doc:
+    native = doc[15].get_text()
+assert "百公里综合油耗" in native
+assert "百公里综合油耗" not in md.read_text(encoding="utf-8")
+print("red baseline: native-only table field omission reproduced")
+PY
+```
+
+## 待实施门禁复核（2026-07-11）
+
+结论：**已达到待实施标准。**
+
+- Step 0 真实失败基线已固定：PDF 原生文本包含字段，单页 MinerU 输出及中间结构缺失字段。
+- 影响范围已限定为页级质量检测、`pdf-auto` fallback 触发和 `manifest.page_fallback` 证据，不改变主解析参数和既有双版本目录契约。
+- 通用检测契约已明确：使用原生文字 bbox、视觉行聚类、表格区域和 HTML 逻辑单元格比对，不维护业务字段白名单。
+- 失败策略已明确：坐标无法对齐、无文本层、fallback 未恢复或结果无法判断时进入 `review`，不自动覆盖原始结果。
+- 验证方式、边界 fixture、完成条件和回滚方式已具备；当前没有未解决的实施前置阻塞项。
+
+进入阶段 1 后，修改共享质量检测符号前必须先执行 GitNexus upstream impact；完成实现后执行 `detect_changes()`、测试和治理检查。
+
+## 检测契约
+
+### 检测顺序
+
+1. 先根据 `content_list.json` 的 `type=table` 或 Markdown `<table>` 判断页面是否存在表格候选。
+2. 从 PDF 原生 `words` 提取文字和 bbox，按视觉 y 坐标聚类；不能依赖 PyMuPDF 的逻辑行号。
+3. 结合 MinerU 表格 bbox 做坐标归一化，过滤表格区域外的页眉、页脚和正文。
+4. 将 HTML 表格解析为考虑 `rowspan`、`colspan` 的逻辑单元格，而不是按原始 `<td>` 数量比较。
+5. 对两侧文本执行统一规范化；当候选字段在 PDF 表格区域存在、邻近值或单位存在、但 HTML 逻辑单元格缺失时，产生遗漏信号。
+
+### 机器字段
+
+检测阶段返回：
+
+```json
+{
+  "page": 16,
+  "quality_ok": false,
+  "signals": ["native_table_text_missing"],
+  "missing_text": ["百公里综合油耗"],
+  "detector": "pdf_native",
+  "metrics": {
+    "native_table_candidates": 1,
+    "native_table_missing": 1
+  }
+}
+```
+
+`missing_text` 只是运行时从 PDF 提取出的证据，不是字段配置或白名单。
+
+最终写入 `manifest.page_fallback` 时至少保留 `selected`、`reason`、`quality_signals`、`missing_text`、`detector`、`fb_status` 以及原始/fallback 指标。VLM 参与时追加 `vlm_table_text_missing` 或 `detectors: ["pdf_native", "vlm"]`，不得替代原生检测结果。
+
+## 实施阶段
+
+### 阶段 1：通用原生表格检测器
+
+- 在 `scripts/lib/page_quality.py` 或独立共享模块中实现 bbox/y 聚类、表格区域筛选、逻辑单元格解析和文本比对。
+- 先写 p16 缺失字段回归测试，再扩展未知字段、跨行、合并单元格、页眉干扰和无文本层页面 fixture。
+- 通过 GitNexus upstream impact 后再修改被调用函数。
+
+### 阶段 2：接入既有 fallback 闭环
+
+- 在 `pdf-auto` 的 consistency check 之后、`pdf-validate` 之前执行该检测。
+- 复用阶段 3 的单页 `effort=high + image_analysis=false` fallback、双目录保存、manifest 选择和 `review` 兜底。
+- 确保 fallback 恢复字段时选择 `fallback`，未恢复时选择 `review`，不能因为整页覆盖率正常而返回 `all_passed`。
+
+### 阶段 3：真实样本与边界验收
+
+- 用 demo20 p16 验证从发现、fallback、比较、合并到 review 的完整链路。
+- 增加没有 PDF 文本层、表格外同名文本、跨页表格和多个表格同页样本。
+- 验证不硬编码字段、不误报页眉页脚，并保持既有 JSON/manifest 兼容契约。
+
+## 验证方式
+
+```bash
+python3 -m pytest tests/test_page_quality.py -q
+bash scripts/test-phase3.sh
+python3 scripts/check_plan_governance.py .
+git diff --check
+```
+
+新增验收至少包括：
+
+- p16 的“百公里综合油耗”能被通用规则发现；
+- 换用未出现在代码中的其他字段，仍能被发现；
+- 字段恢复后选择 fallback；字段未恢复或检测不确定时选择 review；
+- 表格外同名文字、页眉页脚和无文本层页面不误触发；
+- `manifest.page_fallback` 证据完整，Markdown、content list、middle/model JSON 和图片保持同源。
+
+## 风险与回滚
+
+- PDF bbox 坐标系与 MinerU content bbox 可能不同，必须显式归一化；坐标未对齐时回退为 `review`，不能自动覆盖。
+- PDF 原生文本可能包含表格外重复文字，需用表格区域和邻近值约束降低误报。
+- 扫描件没有原生文本层时跳过原生检测，保留既有质量检测，并按需使用 VLM/OCR 补充证据。
+- 检测器误报时可关闭新 signal，保留阶段 3 的四类旧信号和 fallback 主流程；原始目录始终保留，可重新合并。
+
+## 完成条件
+
+- [ ] 无字段白名单的原生表格遗漏检测器实现并通过单元测试。
+- [ ] p16 red baseline 转为 green，且至少一个未知字段 fixture 通过。
+- [ ] 检测结果接入页级 fallback，成功修复、未修复、失败和不确定四条路径均有回归。
+- [ ] `manifest.page_fallback` 记录检测器、缺失文本、选择结果和执行状态。
+- [ ] demo20 p16 真实验收通过，或明确进入 `review` 且报告包含缺失字段证据。
+- [ ] 项目级 `skills/pdf2md/SKILL.md` 与用户级 skill 同步说明该检测边界。
+- [ ] 治理检查、全量测试、`git diff --check` 和 GitNexus `detect_changes()` 通过。
