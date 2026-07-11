@@ -1,10 +1,13 @@
 # 缺陷单：原生表格检测器漏报——整表头行丢失 / 顶部列头缺失
 
-- 状态：待处理（仅记录，未修复）
+- 状态：已修复（`table-text-omission-detection` 阶段 4，提交 `0416643` + `d4265dc`）
 - 发现日期：2026-07-11
+- 修复日期：2026-07-11
 - 样本：demo20.pdf 第 14 页（参数规格表，顶部为车型列头）
 - 归属范围：`table-text-omission-detection` 检测器**覆盖缺口**（`native_table_text_missing` 假阴性）
-- 相关：[table-text-omission-detection 计划](../plans/table-text-omission-detection.md)、[toc-page-full-duplication](toc-page-full-duplication.md)
+- 相关：[table-text-omission-detection 计划 阶段 4](../plans/table-text-omission-detection.md#阶段-4整表头顶部列头漏报补强)、[toc-page-full-duplication](toc-page-full-duplication.md)
+
+> 修复：`detect_native_table_text_omission` 增加空表头行检测——HTML 首行全空、且首个数据行上方"表头带"内有原生文字且不在整份 md 时，产生 `native_table_text_missing`（`missing_scope=header_row`）。p14 红基线转 green，demo20 端到端 p14 进入 `review` 并在 manifest/review.md 记录车型列头缺失。详见阶段 4 实施记录。
 
 ## 现象
 

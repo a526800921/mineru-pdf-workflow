@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：待实施
-- 当前阶段：阶段 4：整表头/顶部列头漏报补强
+- 状态：实施中
+- 当前阶段：阶段 4：整表头/顶部列头漏报补强（实施完成，待用户验收）
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -433,12 +433,43 @@ PY
 
 ### 验收条件
 
-- [ ] p14 红基线从静默 pass 变为 `native_table_text_missing`，并记录至少一个缺失车型列头。
-- [ ] p14 fallback 恢复时选择 `fallback`；未恢复/失败/不确定时选择 `review`。
-- [ ] `manifest.page_fallback["14"]` 含 `quality_signals`、`missing_text`、`detector`、选择结果和双版本指标。
-- [ ] `review.md` 在 p14 进入 review 时显示缺失车型列头证据。
-- [ ] p16、现有多词字段、多表格、页脚和无文本层测试不回归。
-- [ ] 全量测试、治理检查、`git diff --check` 和 GitNexus `detect_changes()` 通过。
+- [x] p14 红基线从静默 pass 变为 `native_table_text_missing`，并记录至少一个缺失车型列头。
+- [x] p14 fallback 恢复时选择 `fallback`；未恢复/失败/不确定时选择 `review`。
+- [x] `manifest.page_fallback["14"]` 含 `quality_signals`、`missing_text`、`detector`、选择结果和双版本指标。
+- [x] `review.md` 在 p14 进入 review 时显示缺失车型列头证据。
+- [x] p16、现有多词字段、多表格、页脚和无文本层测试不回归。
+- [x] 全量测试、治理检查、`git diff --check` 和 GitNexus `detect_changes()` 通过。
+
+### 阶段 4 实施记录（2026-07-11）
+
+结论：**整表头/顶部列头漏报补强实施完成，待用户最终验收。**
+
+提交 `0416643`（检测器补强 + fixture）+ `d4265dc`（`missing_scope` 透传）。
+
+**检测器补强**（`detect_native_table_text_omission`）
+
+- 触发条件：某 HTML 表格首行全为空单元格，且首个数据行上方"表头带"内存在原生文字、该文字未出现在整份 Markdown 中。
+- 几何护栏：表头带 = 页高 × `HEADER_BAND_RATIO`(0.08)，排除页标题/页眉；表格 x 范围排除页边文字；"不在整份 md"排除 MinerU 已输出文字；首行非空不触发。
+- `metrics` 增加 `missing_scope=header_row`，并由 `assess_page_quality` 透传。
+
+**p14 红基线转 green**
+
+- p14 检测：`signals=['native_table_text_missing']`，`missing_text=['AURA','CF150T-32','CF150T-32A']`，`missing_scope=header_row`。
+- 反例护栏 fixture：合法空表头、表头文字已在 md、表格 x 范围外、首行非空——均不误报。
+
+**demo20 p14 端到端**（重置 manifest 后全量重跑，exit 2）
+
+- `manifest.page_fallback["14"]`：`selected=review`、`detector=pdf_native`、`quality_signals=['native_table_text_missing']`、`missing_text=['AURA','CF150T-32','CF150T-32A']`、`fb_status=completed`、原始/fallback 双版本指标齐全、`fallback_path=p0014-0014-fallback/`。
+- `review.md` 页级质量复核段同时列出 p14（车型列头）和 p16（百公里综合油耗）。
+- fallback 高精度重跑未恢复车型行 → 按契约进入 `review`，不返回 `all_passed`。
+- 注：该 manifest 为 `missing_scope` 透传前所跑，`original_metrics.missing_scope` 为空；`missing_scope` 属可选字段，已由单测验证透传，后续 run 的 manifest 会带上。
+
+**回归**
+
+- `tests/test_page_quality.py` 56/56，全量 Python 测试 120/120。
+- `scripts/test-native-fallback.sh` 4/4，`scripts/test-phase2.sh` 37/37。
+- 治理检查、`git diff --check`、GitNexus `detect-changes`（风险 low）通过。
+- 红基线缺陷单：[native-detector-header-row-false-negative.md](../issues/native-detector-header-row-false-negative.md)（已修复）。
 
 ## 验证方式
 
@@ -474,4 +505,4 @@ git diff --check
 - [x] 项目级 `skills/pdf2md/SKILL.md` 与用户级 skill 同步说明该检测边界。
 - [x] 治理检查、全量测试、`git diff --check` 和 GitNexus `detect_changes()` 通过。
 
-> 阶段 4（整表头/顶部列头漏报补强）的完成定义见上文 [阶段 4 验收条件](#验收条件)；阶段 4 未通过前，本专项计划整体状态为"待实施"。
+> 阶段 4（整表头/顶部列头漏报补强）的完成定义见上文 [阶段 4 验收条件](#验收条件)；阶段 4 实施完成、验收条件全部通过，待用户最终验收后本专项计划整体标记为"已完成"。
