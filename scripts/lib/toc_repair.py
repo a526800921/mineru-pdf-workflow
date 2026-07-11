@@ -173,10 +173,10 @@ def _assign_to_toc_pages(
 def _build_merged_toc_block(
     first_page: int, last_page: int, by_page: dict[int, list]
 ) -> str:
-    """生成合并 md 中替换 TOC 页的文本块，保留逐页锚点。"""
+    """生成合并 md 中替换 TOC 页的文本块，使用段级锚点替代旧的逐页锚点。"""
     lines = []
     for page in range(first_page, last_page + 1):
-        lines.append(f"<!-- page {page} -->")
+        lines.append(f"<!-- pages {page}-{page} -->")
         if page == first_page:
             lines.append("## 目录\n")
         for e in by_page.get(page, []):
@@ -187,8 +187,9 @@ def _build_merged_toc_block(
 
 
 def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> int:
-    """在合并 Markdown 上用 <!-- page N --> 锚点精确替换目录页内容。
+    """在合并 Markdown 上用段级锚点精确替换目录页内容。
     只替换 TOC 页范围的文本，非目录页完全保留。
+    使用 `<!-- pages N-M -->` 段级锚点替代旧的 `<!-- page N -->` 逐页锚点。
     """
     with open(validate_tmp) as f:
         report = json.load(f)
@@ -220,10 +221,9 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
         doc.close()
         return 0
 
-    # 收集所有 TOC 页号（转成全局 1-based，对齐合并 md 的 <!-- page N --> 锚点）
+    # 收集所有 TOC 页号（转成全局 1-based，对齐合并 md 的段级锚点页码）
     all_toc_pages = set()
     for seg in toc_segs:
-        start = seg["start_page"]
         for p in seg.get("pages", []):
             if p.get("page_type") == "toc":
                 # pages[].page 是文档级 0-based 页索引（pdf-validate 产出）
@@ -243,17 +243,30 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     # 构造替换用 TOC 块
     toc_block = _build_merged_toc_block(first_toc, last_toc, by_page)
 
-    # 定位替换范围：从 <!-- page {first_toc} --> 到 <!-- page {last_toc + 1} -->（或文件尾）
-    anchor_first = f"<!-- page {first_toc} -->"
-    idx_start = md_text.find(anchor_first)
-    if idx_start == -1:
-        print(f"  ! 合并 md 中未找到 {anchor_first} 锚点，跳过", file=sys.stderr)
-        doc.close()
-        return 0
+    # 定位替换范围：用 `<!-- pages {N}-... -->` 段级锚点替代旧的逐页锚点
+    seg_anchor_re = re.compile(r"^<!-- pages (\d+)-(\d+) -->\s*$", re.MULTILINE)
+    all_seg_anchors = [(int(a), int(b), m.start(), m.end())
+                       for m in seg_anchor_re.finditer(md_text)
+                       for a, b in [(int(m.group(1)), int(m.group(2)))]]
 
+    # 找到页 first_toc 所在的段级锚点位置（锚点页号 ≤ first_toc ≤ 锚点末页）
+    start_anchor = next(
+        (s, e, pos, end) for s, e, pos, end in all_seg_anchors
+        if s <= first_toc <= e
+    )
+    idx_start = start_anchor[2]  # pos
+    start_anchor_end = start_anchor[3]  # end
+
+    # 找到页 last_toc + 1 所在的段级锚点（锚点范围外则为文件尾）
     next_page = last_toc + 1
-    anchor_next = f"<!-- page {next_page} -->"
-    idx_end = md_text.find(anchor_next, idx_start + len(anchor_first))
+    try:
+        end_anchor = next(
+            (s, e, pos, end) for s, e, pos, end in all_seg_anchors
+            if s <= next_page <= e
+        )
+        idx_end = end_anchor[2]  # pos
+    except StopIteration:
+        idx_end = -1
 
     if idx_end != -1:
         new_text = md_text[:idx_start] + toc_block + md_text[idx_end:]

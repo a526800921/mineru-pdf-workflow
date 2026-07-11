@@ -33,7 +33,8 @@ DIGIT_RE = re.compile(r"\d+\.?\d*")
 
 # 阶段 1：页段注释和 key_role 分类
 PAGE_COMMENT_RE = re.compile(r"<!--\s*pages?\s*(\d+)\s*[-–—]\s*(\d+)\s*-->")
-PAGE_ANCHOR_RE = re.compile(r"<!--\s*page\s+(\d+)\s*-->")
+# PAGE_ANCHOR_RE 已移除：逐页锚点 <!-- page N --> 已在阶段 4 收敛
+# 段级锚点 `<!-- pages N-M -->` 足以为每条数据行精确定位页码
 MARKER_KEY_RE = re.compile(r"^[\s■▲●○◆◇★☆※\-—/\\|·]+$")
 SPEC_KEY_RE = re.compile(r"^M\d+")
 DIGIT_ONLY_RE = re.compile(r"^\d+$")
@@ -46,56 +47,25 @@ STATE_LABELS = {
 }
 
 
-def parse_page_comments(md_text: str) -> tuple[dict, dict]:
-    """返回 (page_map, per_page_map)。
-    page_map: {line_no: (page_start, page_end)} — 段级锚点
-    per_page_map: {line_no: page_num} — 逐页锚点 <!-- page N -->
+def parse_page_comments(md_text: str) -> dict:
+    """返回 {line_no: (page_start, page_end)} — 段级锚点 `<!-- pages N-M -->`。
+    逐页锚点 <!-- page N --> 已在阶段 4 收敛，不再解析。
     """
-    page_map = {}
-    per_page_map = {}
+    page_map: dict = {}
     for i, line in enumerate(md_text.split("\n"), 1):
         m = PAGE_COMMENT_RE.search(line)
         if m:
             page_map[i] = (int(m.group(1)), int(m.group(2)))
-        m2 = PAGE_ANCHOR_RE.search(line)
-        if m2:
-            per_page_map[i] = int(m2.group(1))
-    return page_map, per_page_map
+    return page_map
 
 
-def get_page_range(line_no: int, page_map: dict,
-                   per_page_map: dict | None = None) -> tuple:
-    """返回 (page_start_str, page_end_str, is_per_page_anchor)。
+def get_page_range(line_no: int, page_map: dict) -> tuple:
+    """返回 (page_start_str, page_end_str)。
 
-    优先逐页锚点 <!-- page N -->（精确到单页），但逐页锚点仅在
-    当前段内有效——段级锚点 <!-- pages N-M --> 是作用域边界，
-    前一段的逐页锚点不可用于后段。
-    无逐页锚点时回退到段级 <!-- pages N-M -->。
+    从段级锚点 `<!-- pages N-M -->` 解析页码范围。
+    逐页锚点 <!-- page N --> 已在阶段 4 收敛，不再使用。
     """
     page_map_sorted = sorted(page_map.keys())
-    per_page_map_sorted = sorted(per_page_map.keys()) if per_page_map else []
-
-    # 优先逐页锚点，但必须与 line_no 在同一段内
-    if per_page_map_sorted:
-        best_pp_line = 0
-        best_page = 0
-        for pp_line in per_page_map_sorted:
-            if pp_line <= line_no:
-                best_pp_line = pp_line
-                best_page = per_page_map[pp_line]
-            else:
-                break
-        if best_page > 0:
-            # 检查最佳逐页锚点与 line_no 之间是否存在段级锚点
-            # 若存在，则该逐页锚点属上一段，对 line_no 无效
-            boundary_found = False
-            for seg_line in page_map_sorted:
-                if best_pp_line < seg_line <= line_no:
-                    boundary_found = True
-                    break
-            if not boundary_found:
-                return (str(best_page), str(best_page), True)
-    # 回退段级锚点
     best = (0, 0)
     for seg_line in page_map_sorted:
         if seg_line <= line_no:
@@ -103,8 +73,8 @@ def get_page_range(line_no: int, page_map: dict,
         else:
             break
     if best == (0, 0):
-        return ("", "", False)
-    return (str(best[0]), str(best[1]), False)
+        return ("", "")
+    return (str(best[0]), str(best[1]))
 
 
 def classify_key_role(key: str) -> str:
@@ -320,8 +290,7 @@ def is_valid_colon_line(key: str, value: str) -> bool:
 
 def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str,
                        page_map: dict, counters: dict,
-                       page_section_map: dict | None = None,
-                       per_page_map: dict | None = None) -> list:
+                       page_section_map: dict | None = None) -> list:
     rows = []
     for line_idx, line in enumerate(md_text.split("\n")):
         line_orig = line.strip()
@@ -338,13 +307,12 @@ def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str
         has_digit = bool(DIGIT_RE.search(clean_val))
         line_no = line_idx + 1
         sec_path = build_section_path(line_no, sections)
-        pg_start, pg_end, has_per_page = get_page_range(line_no, page_map, per_page_map)
+        pg_start, pg_end = get_page_range(line_no, page_map)
         counters["paragraph"] += 1
         rows.append({
             "source_pdf": source_pdf, "model": model, "section_path": sec_path,
             "key": key, "value": clean_val, "unit": unit,
             "page_start": pg_start, "page_end": pg_end,
-            "_has_per_page_anchor": has_per_page,
             "evidence_text": line_orig[:200],
             "confidence": "medium" if (has_digit and unit) else "low",
             "status": "needs_review",
@@ -504,8 +472,7 @@ def guess_value_col_idx(headers: list, rows: list) -> int:
 
 def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
                            page_map: dict, counters: dict,
-                           page_section_map: dict | None = None,
-                           per_page_map: dict | None = None) -> list:
+                           page_section_map: dict | None = None) -> list:
     rows = []
     tables = parse_html_tables(md_text)
     parent_maps = build_html_parent_maps(md_text)
@@ -543,7 +510,7 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
             else:
                 line_no = 0
 
-            pg_start, pg_end, has_per_page = get_page_range(line_no, page_map, per_page_map)
+            pg_start, pg_end = get_page_range(line_no, page_map)
             sec_path = get_section_path(line_no, sections, pg_start, page_section_map)
 
             # parent_key：优先 rowspan 父级，其次旧的首列重复检测
@@ -565,7 +532,6 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                 "source_pdf": source_pdf, "model": model, "section_path": sec_path,
                 "key": key, "value": clean_val, "unit": unit,
                 "page_start": pg_start, "page_end": pg_end,
-                "_has_per_page_anchor": has_per_page,
                 "evidence_text": f"{key}: {value_str}"[:200],
                 "confidence": confidence, "status": status,
                 "notes": "html_table",
@@ -581,8 +547,7 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
 
 def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
                          page_map: dict, counters: dict,
-                         page_section_map: dict | None = None,
-                         per_page_map: dict | None = None) -> list:
+                         page_section_map: dict | None = None) -> list:
     rows = []
     lines = md_text.split("\n")
     MD_TABLE_SEP = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
@@ -606,7 +571,7 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
                         value = " / ".join(cells[1:])
                         clean_val, unit = extract_unit(value)
                         line_no = i + 1
-                        pg_start, pg_end, has_per_page = get_page_range(line_no, page_map, per_page_map)
+                        pg_start, pg_end = get_page_range(line_no, page_map)
                         sec_path = get_section_path(line_no, sections, pg_start, page_section_map)
                         row_idx += 1
                         # 保守 parent_key：首列与其他行首列不同且非数字时可能为父级
@@ -618,7 +583,6 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
                             "section_path": sec_path,
                             "key": key, "value": clean_val, "unit": unit,
                             "page_start": pg_start, "page_end": pg_end,
-                            "_has_per_page_anchor": has_per_page,
                             "evidence_text": lines[i].strip()[:200],
                             "confidence": "medium", "status": "draft",
                             "notes": "md_table",
@@ -843,29 +807,19 @@ def main():
         return
 
     sections = parse_sections(md_text)
-    page_map, per_page_map = parse_page_comments(md_text)
+    page_map = parse_page_comments(md_text)
     counters = new_block_counters()
 
-    md_table_rows = extract_md_table_rows(md_text, sections, source_pdf, model, page_map, counters, per_page_map=per_page_map)
-    html_table_rows = extract_html_table_rows(md_text, sections, source_pdf, model, page_map, counters, per_page_map=per_page_map)
-    colon_rows = extract_colon_rows(md_text, sections, source_pdf, model, page_map, counters, per_page_map=per_page_map)
+    md_table_rows = extract_md_table_rows(md_text, sections, source_pdf, model, page_map, counters)
+    html_table_rows = extract_html_table_rows(md_text, sections, source_pdf, model, page_map, counters)
+    colon_rows = extract_colon_rows(md_text, sections, source_pdf, model, page_map, counters)
     draft_rows = md_table_rows + html_table_rows + colon_rows
 
-    # 逐页锚点优先：已命中 per-page anchor 的行跳过 refine_page_numbers 兜底
-    # 不得让 PDF 文本搜索覆盖已命中的逐页锚点（阶段 4 实施决策 1）
+    # refine_page_numbers：用 PyMuPDF 逐页搜索，将段级定位精确定位到单页
     pdf_path = pkg / manifest.get("files", {}).get("pdf", f"{model}.pdf")
-    rows_needing_fallback = [r for r in draft_rows if not r.get("_has_per_page_anchor")]
-    if rows_needing_fallback:
-        refine_page_numbers(rows_needing_fallback, pdf_path)
-        # 将兜底结果写回 draft_rows
-        fallback_idx = 0
-        for r in draft_rows:
-            if not r.get("_has_per_page_anchor"):
-                r["page_start"] = rows_needing_fallback[fallback_idx]["page_start"]
-                r["page_end"] = rows_needing_fallback[fallback_idx]["page_end"]
-                fallback_idx += 1
-        if rows_needing_fallback:
-            print(f"  refine_page_numbers 兜底: {len(rows_needing_fallback)}/{len(draft_rows)} 行", file=sys.stderr)
+    if draft_rows:
+        refine_page_numbers(draft_rows, pdf_path)
+        print(f"  refine_page_numbers 定位: {len(draft_rows)} 行", file=sys.stderr)
 
     # TOC 树 section_path 二次修正（依赖精确定位后的 page_start）
     toc_tree = load_toc_tree(pkg)
