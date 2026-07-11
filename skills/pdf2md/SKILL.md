@@ -90,8 +90,8 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
 - `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
-- `scripts/pdf-eval-vlm /path/to` 写入 `<pdf_dir>/data/vlm_eval.jsonl`（VLM 图表理解描述，10 页抽样验证；渲染 DPI / API 端点通过环境变量配置）。
-- `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 和**逐页锚点** `<!-- page N -->` 的合并 md。回填旧包时直接重跑此命令。
+- `scripts/pdf-eval-vlm /path/to` **可选**写入 `<pdf_dir>/data/vlm_eval.jsonl`（对 `image_or_sparse` 页做本地 VLM 视觉补充；默认自动启停 `qwen3-vl-8b`，设 `VLM_API_BASE` 可直连远程端口）。
+- `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 的合并 md。回填旧包时直接重跑此命令。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 
 ## 核心流程
@@ -309,6 +309,16 @@ data/ingest_manifest.json
 | `image_or_sparse` | review_only | 图片或稀疏文本页不适合文字覆盖率重跑 |
 | `table` | review_only | 表格结构差异不应触发文字 high 重跑 |
 | `no_text_layer` | skip | PDF 无文本层，无法覆盖率验证 |
+
+### 本地 VLM（可选）
+
+主解析、质量 fallback 和合并默认不会调用本地 VLM。完成 `pdf-auto` 后，如果页面主要是图片、扫描内容、图表或稀疏文本，且需要补充视觉摘要、图中关键文字或视觉元素描述，再手动执行：
+
+```bash
+scripts/pdf-eval-vlm /path/to/package
+```
+
+该命令通过 ModelPad API 自动管理 `qwen3-vl-8b` 生命周期。VLM 已运行时复用不停止；已停止时自动启动，执行完成后自动停止。也支持 `VLM_API_BASE=http://127.0.0.1:9005` 直连远端 VLM 端点（跳过 ModelPad 启停）。它只读取输出包并将每页结构化结果写入 `data/vlm_eval.jsonl`，不参与表格 `td` 异常修复，也不替代 MinerU 主解析。
 
 ## 排障
 

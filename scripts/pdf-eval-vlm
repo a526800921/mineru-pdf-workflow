@@ -3,6 +3,7 @@ set -euo pipefail
 
 _this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 _scripts_dir="${_this_file%/*}"
+source "$_scripts_dir/lib/modelpad-vlm-service"
 
 json_mode="${PDF_EVAL_VLM_JSON:-0}"
 
@@ -28,7 +29,9 @@ usage() {
 
 可选环境变量:
   PDF_EVAL_VLM_JSON=1        输出 JSON（stdout），人类可读信息改到 stderr
-  VLM_API_BASE=http://...    默认 http://127.0.0.1:9005
+  VLM_API_BASE=http://...    显式直连地址；设置后跳过 ModelPad 自动启停
+  MODELPAD_VLM_MODEL_ID=...  ModelPad VLM 模型 ID（默认 qwen3-vl-8b）
+  MODELPAD_VLM_START_TIMEOUT=120  自动启动等待时限（秒）
   VLM_MODEL=qwen3-vl-8b     默认 qwen3-vl-8b
   VLM_DPI=200                渲染 DPI，默认 200
   VLM_KEEP_IMAGES=0          是否保留渲染图片到 data/page_images/
@@ -62,7 +65,20 @@ fi
 
 package_dir="$(cd "$package_dir" && pwd)"
 
-VLM_API_BASE="${VLM_API_BASE:-http://127.0.0.1:9005}"
+_vlm_direct_api="${VLM_API_BASE:-}"
+if [[ -n "$_vlm_direct_api" ]]; then
+  VLM_API_BASE="$_vlm_direct_api"
+  log "使用显式 VLM API: ${_vlm_direct_api}（跳过 ModelPad 自动启停）"
+else
+  trap 'modelpad_stop_vlm_if_started log' EXIT
+  if ! ensure_vlm_api log; then
+    if [[ "$json_mode" == "1" ]]; then
+      python3 -c 'import json,sys; json.dump({"status":"error","exit_code":1,"error":"VLM service unavailable"},sys.stdout); sys.stdout.write("\n")'
+    fi
+    exit 1
+  fi
+  VLM_API_BASE="$api_url"
+fi
 VLM_MODEL="${VLM_MODEL:-qwen3-vl-8b}"
 VLM_DPI="${VLM_DPI:-200}"
 VLM_KEEP_IMAGES="${VLM_KEEP_IMAGES:-0}"

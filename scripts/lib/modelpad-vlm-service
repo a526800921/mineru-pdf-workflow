@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# ModelPad 本地 VLM 服务按需编排 helper。
+# 默认管理 qwen3-vl-8b；调用方应在 EXIT trap 中调用
+# modelpad_stop_vlm_if_started，已运行的服务只复用、不停止。
+
+set -euo pipefail
+
+MODELPAD_API_BASE="${MODELPAD_API_BASE:-http://127.0.0.1:9999}"
+MODELPAD_VLM_MODEL_ID="${MODELPAD_VLM_MODEL_ID:-8C95D8D9-768C-48D2-A5D5-C533B9ED3754}"
+MODELPAD_VLM_START_TIMEOUT="${MODELPAD_VLM_START_TIMEOUT:-120}"
+
+_MODELPAD_VLM_STARTED_BY_SCRIPT=0
+
+detect_vlm_api() {
+  api_url=""
+  local models_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_VLM_MODEL_ID}"
+  local resp
+  resp="$(curl -s "$models_url" 2>&1)" || true
+  [[ -n "$resp" ]] || return 1
+
+  local model_status port
+  model_status="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("model",{}).get("status",""))' 2>/dev/null)" || true
+  port="$(echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("model",{}).get("port",""))' 2>/dev/null)" || true
+  if [[ "$model_status" == "running" ]] && [[ "$port" =~ ^[0-9]+$ ]]; then
+    api_url="http://127.0.0.1:$port"
+    return 0
+  fi
+  return 1
+}
+
+wait_vlm_api() {
+  local log_fn="${1:-echo}"
+  local deadline=$(($(date +%s) + MODELPAD_VLM_START_TIMEOUT))
+  while [[ $(date +%s) -lt "$deadline" ]]; do
+    if detect_vlm_api; then
+      return 0
+    fi
+    sleep 1
+  done
+  "$log_fn" "错误：等待本地 VLM 服务就绪超时（${MODELPAD_VLM_START_TIMEOUT}s）" >&2
+  return 1
+}
+
+modelpad_start_vlm() {
+  local log_fn="${1:-echo}"
+  api_url="${api_url:-}"
+
+  if detect_vlm_api; then
+    "$log_fn" "本地 VLM 服务已在运行: ${api_url}（复用，不启动）"
+    return 0
+  fi
+
+  "$log_fn" "正在通过 ModelPad 启动本地 VLM 服务..."
+  local start_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_VLM_MODEL_ID}/start"
+  local resp
+  resp="$(curl -s -X POST "$start_url" \
+    -H "Content-Type: application/json" \
+    -d '{"env":{}}' 2>&1)" || true
+
+  if [[ -z "$resp" ]]; then
+    "$log_fn" "错误：ModelPad VLM 启动接口无响应 ($start_url)" >&2
+    return 1
+  fi
+  if ! echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ok") else 1)' 2>/dev/null; then
+    "$log_fn" "错误：ModelPad VLM 启动失败: $resp" >&2
+    return 1
+  fi
+
+  # 已接受启动请求；后续失败也由 EXIT trap 负责停止，避免孤儿服务。
+  _MODELPAD_VLM_STARTED_BY_SCRIPT=1
+  "$log_fn" "ModelPad 已接受 VLM 启动请求，等待服务就绪..."
+  if ! wait_vlm_api "$log_fn"; then
+    return 1
+  fi
+  "$log_fn" "本地 VLM 服务已就绪: $api_url"
+  return 0
+}
+
+modelpad_stop_vlm_if_started() {
+  local log_fn="${1:-echo}"
+  if [[ "$_MODELPAD_VLM_STARTED_BY_SCRIPT" != "1" ]]; then
+    return 0
+  fi
+
+  local stop_url="${MODELPAD_API_BASE}/api/models/${MODELPAD_VLM_MODEL_ID}/stop"
+  local resp
+  "$log_fn" "正在通过 ModelPad 停止本次启动的本地 VLM 服务..."
+  resp="$(curl -s -X POST "$stop_url" 2>&1)" || true
+  if [[ -n "$resp" ]] && echo "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ok") else 1)' 2>/dev/null; then
+    "$log_fn" "本地 VLM 服务已停止"
+  else
+    "$log_fn" "警告：停止本地 VLM 服务可能失败: ${resp:-无响应}" >&2
+  fi
+  _MODELPAD_VLM_STARTED_BY_SCRIPT=0
+}
+
+ensure_vlm_api() {
+  local log_fn="${1:-echo}"
+  if ! modelpad_start_vlm "$log_fn"; then
+    "$log_fn" "错误：无法确保本地 VLM 服务可用。请检查 ModelPad app 和 qwen3-vl-8b 配置。" >&2
+    return 1
+  fi
+}
