@@ -204,7 +204,8 @@ def compare_quality(
     fb_bytes = fallback_metrics.get("md_bytes", 0)
 
     # fallback 空单元格减少至少一半
-    td_improved = fb_empty < orig_empty * 0.5 if orig_empty > 0 else (fb_empty == 0)
+    # orig_empty=0 说明本页没有表格异常，不应认为"改善"
+    td_improved = fb_empty < orig_empty * 0.5 if orig_empty > 0 else False
 
     # fallback 文本保留至少 80%
     text_ok = fb_bytes >= orig_bytes * 0.8 if orig_bytes > 0 else True
