@@ -589,9 +589,15 @@ for page_num in sorted(succeeded_pages.keys()):
     selection = compare_quality(orig_res["metrics"], fb_res["metrics"])
 
     sig_info = ", ".join(page_data.get(page_num, {}).get("signals", []))
+    signals_list = page_data.get(page_num, {}).get("signals", [])
+    missing_text = orig_res["metrics"].get("missing_text", [])
+    detector = "pdf_native" if "native_table_text_missing" in signals_list else "page_quality"
     page_fallback[str(page_num)] = {
         "selected": selection,
         "reason": sig_info,
+        "quality_signals": signals_list,
+        "missing_text": missing_text,
+        "detector": detector,
         "fb_status": "completed",
         "attempt_count": 1,
         "original_path": f"{name}/",
@@ -614,9 +620,15 @@ for page_num in sorted(succeeded_pages.keys()):
 failed_pages = all_triggered_pages - set(succeeded_pages.keys())
 for page_num in sorted(failed_pages):
     entry = page_data[page_num]
+    signals_list = entry.get("signals", [])
+    missing_text = entry.get("metrics", {}).get("missing_text", [])
+    detector = "pdf_native" if "native_table_text_missing" in signals_list else "page_quality"
     page_fallback[str(page_num)] = {
         "selected": "review",
-        "reason": ", ".join(entry.get("signals", [])),
+        "reason": ", ".join(signals_list),
+        "quality_signals": signals_list,
+        "missing_text": missing_text,
+        "detector": detector,
         "fb_status": "failed",
         "fb_failure_reason": "mineru fallback 重跑退出非零或超时",
         "attempt_count": 1,
@@ -667,9 +679,15 @@ for t in triggered:
     p = str(t["page"])
     if p in pf:
         continue
+    signals_list = t.get("signals", [])
+    missing_text = t.get("metrics", {}).get("missing_text", [])
+    detector = "pdf_native" if "native_table_text_missing" in signals_list else "page_quality"
     pf[p] = {
         "selected": "review",
-        "reason": ", ".join(t.get("signals", [])),
+        "reason": ", ".join(signals_list),
+        "quality_signals": signals_list,
+        "missing_text": missing_text,
+        "detector": detector,
         "fb_status": "failed",
         "fb_failure_reason": "mineru fallback 重跑退出非零或超时",
         "attempt_count": 1,
