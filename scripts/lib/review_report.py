@@ -374,10 +374,13 @@ def _append_toc_unassigned(lines: list[str], report: dict) -> None:
         "已从 toc.md / toc_tree.json / 合并目录块排除，需人工确认物理目录页："
     )
     lines.append("")
-    lines.append("| 标题 | 指向页 |")
-    lines.append("|------|--------|")
+    lines.append("| 标题 | 指向页 | 来源 |")
+    lines.append("|------|--------|------|")
     for e in unassigned:
-        lines.append(f"| {e.get('title', '')} | {e.get('target_page', '')} |")
+        source_note = "大纲（页码可能不准）" if e.get("source") == "outline" else "原生文本"
+        lines.append(
+            f"| {e.get('title', '')} | {e.get('target_page', '')} | {source_note} |"
+        )
     lines.append("")
 
 

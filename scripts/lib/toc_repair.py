@@ -45,6 +45,7 @@ def _build_from_outline(doc) -> list[dict] | None:
             "title": title,
             "page": page,
             "depth": level - 1,  # get_toc level 是 1-based
+            "source": "outline",
         })
     return entries if entries else None
 
@@ -92,6 +93,7 @@ def _extract_entries_from_page(doc, page_index: int) -> list[dict]:
                     "page": int(page_ref),
                     "x0": x0s[i],
                     "toc_page": page_index + 1,  # 物理目录页(1-based)，提取即归属
+                    "source": "native_text",
                 })
                 prev_key = key
 
@@ -314,7 +316,12 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     review_entries = [e for e in entries if id(e) not in assigned_ids]
     if review_entries:
         report["toc_unassigned"] = [
-            {"title": e["title"], "target_page": e["page"], "depth": e.get("depth", 0)}
+            {
+                "title": e["title"],
+                "target_page": e["page"],
+                "depth": e.get("depth", 0),
+                "source": e.get("source", "native_text"),
+            }
             for e in review_entries
         ]
         with open(validate_tmp, "w") as f:
