@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+
+# 单页 MinerU 执行 + 产物归一化共享函数。
+#
+# 调用方必须先定义 log()，参数（均为必需）：
+#   pdf output_dir start_0b end_0b backend method effort lang api_url [--extra-flag ...]
+#
+# 标准输出：一行 JSON
+#   {"status":"done","exit_code":0,"markdown":"...","output_dir":"..."}
+#   {"status":"failed","exit_code":N,"reason":"..."}
+# stderr：MinerU 原生日志（不受 JSON 模式影响）
+#
+# 归一化动作（stderr 可见）：
+#   产物目录 + find *.md + content_list* + middle.json + model.json + images/
+#   全部复制到 output_dir 根目录。
+
+_run_mineru_page() {
+  local pdf="$1" output_dir="$2" start_0b="$3" end_0b="$4"
+  local backend="$5" method="$6" effort="$7" lang="$8" api_url="$9"
+  shift 9
+  local extra_args=("$@")
+
+  local pdf_stem
+  pdf_stem="$(basename "$pdf" .pdf)"
+
+  mkdir -p "$output_dir"
+
+  # ---- 调用 MinerU（stdout/stderr → stderr，用户可见） ----
+  local _mineru_rc=0
+  mineru \
+    -p "$pdf" \
+    -o "$output_dir" \
+    -b "$backend" \
+    -m "$method" \
+    --effort "$effort" \
+    -l "$lang" \
+    -s "$start_0b" \
+    -e "$end_0b" \
+    --api-url "$api_url" \
+    "${extra_args[@]}" >&2 || _mineru_rc=$?
+
+  # ---- 查找产物 ----
+  local md_file
+  md_file="$(find "$output_dir" -name "*.md" -type f 2>/dev/null | head -1)"
+
+  # ---- 错误路径 ----
+  if [[ "$_mineru_rc" -ne 0 ]]; then
+    echo "{\"status\":\"failed\",\"exit_code\":$_mineru_rc,\"reason\":\"mineru_exit_nonzero\"}"
+    return 1
+  fi
+
+  if [[ -z "$md_file" || ! -f "$md_file" ]]; then
+    echo "{\"status\":\"failed\",\"exit_code\":0,\"reason\":\"no_markdown_output\"}"
+    return 1
+  fi
+
+  # ---- 归一化：产物摊平到 output_dir 根目录 ----
+  local md_parent
+  md_parent="$(dirname "$md_file")"
+
+  # 标记日志前缀（供调用方识别）
+  log "  run_mineru_page: normalizing ${pdf_stem} (${start_0b}-${end_0b})"
+
+  cp "$md_file" "$output_dir/$pdf_stem.md"
+
+  for _f in "$md_parent"/*_content_list.json; do
+    [[ -f "$_f" ]] && cp "$_f" "$output_dir/"
+  done
+  [[ -f "$md_parent/middle.json" ]] && cp "$md_parent/middle.json" "$output_dir/"
+  [[ -f "$md_parent/model.json" ]] && cp "$md_parent/model.json" "$output_dir/"
+
+  if [[ -d "$md_parent/images" ]]; then
+    mkdir -p "$output_dir/images"
+    for _img in "$md_parent/images"/*; do
+      [[ -f "$_img" ]] && cp "$_img" "$output_dir/images/"
+    done
+  fi
+
+  log "  run_mineru_page: done → $output_dir/$pdf_stem.md"
+
+  # ---- 成功路径：只输出一行 JSON 到 stdout ----
+  echo "{\"status\":\"done\",\"exit_code\":0,\"markdown\":\"$output_dir/$pdf_stem.md\",\"output_dir\":\"$output_dir\"}"
+  return 0
+}

@@ -441,6 +441,211 @@ if ! check_segment_consistency "$segments_dir" "$pdf_path" "$pages" "$segment_si
   fi
 fi
 
+# ── 页级质量检测与 fallback ──────────────────────────
+# 单页模式下，对每页运行 4 个信号检测；命中后以 image_analysis=false 重跑该页，
+# 比较质量后选择保留原始或采用 fallback 结果。
+source "$_scripts_dir/lib/mineru-runner"
+
+if [[ "$segment_size" -eq 1 ]]; then
+  _quality_tmp="$(mktemp)"
+  trap 'rm -f "$_quality_tmp" "$validate_tmp" "$_rerun_names_file" "$_rerun_detail_file"; modelpad_stop_pdf_if_started log' EXIT
+
+  # ── 检测阶段：逐页运行质量信号检测 ──
+  _quality_detect="$(
+    python3 - "$segments_dir" "$pdf_path" "$_quality_tmp" "$_scripts_dir" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[4])
+from lib.page_quality import assess_page_quality
+import fitz
+
+segments_dir = Path(sys.argv[1])
+pdf_path = sys.argv[2]
+quality_tmp = sys.argv[3]
+
+segment_re = __import__('re').compile(r"^p(\d{4,})-(\d{4,})$")
+triggered = []
+
+with fitz.open(pdf_path) as doc:
+    for child in sorted(segments_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        m = segment_re.match(child.name)
+        if not m:
+            continue
+        start, end = int(m.group(1)), int(m.group(2))
+        if start != end:
+            continue  # skip multi-page segments
+        page_idx = start - 1
+        pdf_text = doc[page_idx].get_text()
+        md_files = sorted(child.rglob("*.md"))
+        if not md_files:
+            continue
+        md_text = md_files[0].read_text(encoding="utf-8", errors="replace")
+        result = assess_page_quality(md_text, pdf_text)
+        if not result["quality_ok"]:
+            triggered.append({
+                "name": child.name, "page": start,
+                "signals": result["signals"],
+                "metrics": result["metrics"],
+            })
+            print(f"{child.name}:{start}")
+
+with open(quality_tmp, "w") as f:
+    json.dump(triggered, f, ensure_ascii=False)
+PY
+  )"
+
+  _quality_count=0
+  if [[ -n "$_quality_detect" ]]; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      _quality_count=$((_quality_count + 1))
+    done <<< "$_quality_detect"
+  fi
+
+  if [[ "$_quality_count" -gt 0 ]]; then
+    log "发现 ${_quality_count} 页存在质量异常，执行 fallback 重跑"
+
+    # ── fallback 重跑阶段：逐页 mineru --image-analysis false ──
+    _quality_succeeded=""
+
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      name="${line%%:*}"
+      page="${line##*:}"
+      page_0b=$((page - 1))
+
+      fb_dir="$segments_dir/${name}-fallback"
+      rm -rf "$fb_dir" 2>/dev/null || true
+      mkdir -p "$fb_dir"
+
+      log "  fallback: ${name} (page ${page}, image_analysis=false)"
+      if result="$(_run_mineru_page "$pdf_path" "$fb_dir" "$page_0b" "$page_0b" \
+          "$segment_backend" "$segment_method" "$segment_effort" "$segment_lang" "$api_url" \
+          "--image-analysis" "false")"; then
+        _quality_succeeded="${_quality_succeeded}${name}:${page}"$'\n'
+        log "  ✓ ${name} fallback 完成"
+      else
+        log "  ⚠ ${name} fallback 重跑失败（保留原始结果）"
+        rm -rf "$fb_dir" 2>/dev/null || true
+      fi
+      unset result fb_dir page_0b
+    done <<< "$_quality_detect"
+
+    # ── 比较选择阶段 ──
+    if [[ -n "$_quality_succeeded" ]]; then
+      while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+
+        action="${line%%:*}"
+        rest="${line#*:}"
+        name="${rest%%:*}"
+        page="${rest##*:}"
+
+        if [[ "$action" == "SWAP" ]]; then
+          orig_dir="$segments_dir/$name"
+          fb_dir="${orig_dir}-fallback"
+          if [[ -d "$orig_dir" && -d "$fb_dir" ]]; then
+            mv "$orig_dir" "${orig_dir}-original"
+            mv "$fb_dir" "$orig_dir"
+            log "  ✓ ${name}: fallback 质量更好，已替换（原始备份到 -original/）"
+          fi
+        elif [[ "$action" == "REVIEW" ]]; then
+          log "  ? ${name}: 无法判断，保留原始 + fallback 候选（进入 review）"
+        else
+          log "  - ${name}: fallback 无改善，保留原始结果"
+          rm -rf "$segments_dir/${name}-fallback" 2>/dev/null || true
+        fi
+      done <<< "$(
+        python3 - "$segments_dir" "$_quality_tmp" "$pdf_path" "$_scripts_dir" "$_quality_succeeded" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[4])
+from lib.page_quality import assess_page_quality, compare_quality
+import fitz
+
+segments_dir = Path(sys.argv[1])
+quality_tmp = sys.argv[2]
+pdf_path = sys.argv[3]
+
+with open(quality_tmp) as f:
+    triggered = json.load(f)
+page_data = {t["page"]: t for t in triggered}
+
+succeeded_pages = {}
+for ln in sys.argv[5].strip().split("\n"):
+    ln = ln.strip()
+    if not ln or ":" not in ln:
+        continue
+    sn, sp = ln.split(":", 1)
+    succeeded_pages[int(sp)] = sn
+
+doc = fitz.open(pdf_path)
+manifest_path = segments_dir.parent / "manifest.json"
+manifest = {}
+if manifest_path.exists():
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+page_fallback = manifest.get("page_fallback", {})
+
+for page_num in sorted(succeeded_pages.keys()):
+    name = succeeded_pages[page_num]
+    page_idx = page_num - 1
+    pdf_text = doc[page_idx].get_text()
+
+    orig_dir = segments_dir / name
+    fb_dir = segments_dir / f"{name}-fallback"
+    if not fb_dir.exists():
+        continue
+
+    omd = sorted(orig_dir.rglob("*.md"))
+    fmd = sorted(fb_dir.rglob("*.md"))
+    if not omd or not fmd:
+        continue
+
+    orig_md = omd[0].read_text(encoding="utf-8", errors="replace")
+    fb_md = fmd[0].read_text(encoding="utf-8", errors="replace")
+
+    orig_res = assess_page_quality(orig_md, pdf_text)
+    fb_res = assess_page_quality(fb_md, pdf_text)
+    selection = compare_quality(orig_res["metrics"], fb_res["metrics"])
+
+    sig_info = ", ".join(page_data.get(page_num, {}).get("signals", []))
+    page_fallback[str(page_num)] = {
+        "selected": selection,
+        "reason": sig_info,
+        "original_metrics": orig_res["metrics"],
+        "fallback_metrics": fb_res["metrics"],
+    }
+
+    if selection == "fallback":
+        print(f"SWAP:{name}:{page_num}")
+    elif selection == "review":
+        print(f"REVIEW:{name}:{page_num}")
+    else:
+        print(f"KEEP:{name}:{page_num}")
+
+manifest["page_fallback"] = page_fallback
+manifest_path.write_text(
+    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+doc.close()
+PY
+      )"
+
+      log "页级质量检测完成（${_quality_count} 页处理）"
+    else
+      log "所有 fallback 重跑均失败，保留原始结果"
+    fi
+  else
+    log "页级质量检测通过，无异常页面"
+  fi
+
+  rm -f "$_quality_tmp" 2>/dev/null || true
+  unset _quality_tmp _quality_detect _quality_count _quality_succeeded
+fi
+
 # 提取 PDF 文件名（无扩展名） 用于自动推导合并输出
 pdf_stem="$(basename "$pdf_path" .pdf)"
 

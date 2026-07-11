@@ -133,6 +133,22 @@ def insert_page_anchors(text, items, start, end):
     return text, []
 EOF
 
+# mock mineru-runner（阻止质量检测 fallback，始终报告无异常）
+cat > "$MOCK_DIR/lib/mineru-runner" << 'EOF'
+_run_mineru_page() {
+  echo '{"status":"done","exit_code":0,"markdown":"","output_dir":""}'
+  return 0
+}
+EOF
+
+# mock page_quality（始终返回 quality_ok=True，阻止 fallback 触发）
+cat > "$MOCK_DIR/lib/page_quality.py" << 'EOF'
+def assess_page_quality(md_text, pdf_page_text):
+    return {"signals": [], "metrics": {"empty_td": 0, "max_td_per_row": 0, "md_bytes": 0, "pdf_bytes": 0, "text_coverage": 1.0, "pdf_tokens": 0}, "quality_ok": True}
+def compare_quality(original_metrics, fallback_metrics):
+    return "original"
+EOF
+
 # 复制 pdf-auto 和 pdf-rerun 到 mock 目录
 cp "$SCRIPTS_DIR/pdf-auto" "$MOCK_DIR/pdf-auto"
 chmod +x "$MOCK_DIR/pdf-auto"
