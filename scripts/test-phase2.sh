@@ -532,9 +532,9 @@ else
     fail "pdf-auto 全部通过路径校验失败"
 fi
 
-# ── 场景 12：pdf-auto 重跑成功 → 全部通过 ──────────────────
+# ── 场景 12：pdf-auto 遇到 rerunnable 段 → needs_review ──
 echo ""
-echo "=== 场景 12：pdf-auto 重跑成功 → 全部通过 ==="
+echo "=== 场景 12：pdf-auto 遇到 rerunnable 段 → needs_review ==="
 T12="$TEST_ROOT/t12"
 OUT12="$T12/out.json"
 mkdir -p "$T12/segments/p0001-0001" "$T12/segments/p0002-0002"
@@ -545,63 +545,29 @@ echo "original p2" > "$T12/segments/p0002-0002/page.md"
 create_dummy_pdf "$T12/dummy.pdf" 2
 create_mock_manifest "$T12" "$T12/dummy.pdf" 2
 
+# 重置 validate 计数器（stage 1 → 有 rerunnable 段）
 reset_validate_stage
 HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=rerun_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T12/dummy.pdf" "$T12/segments" 2>/dev/null > "$OUT12" || true
+
+assert_str_eq "原段 MD 未被覆盖" "original p1" "$(cat "$T12/segments/p0001-0001/page.md")"
 
 python3 << PYEOF12
 import json
 with open("$OUT12") as f: data = json.load(f)
-assert data.get('status') == 'all_passed', f'expected all_passed, got {data.get("status")}'
-assert data.get('exit_code') == 0, f'expected exit 0, got {data.get("exit_code")}'
-rd = data.get('rerun_detail')
-assert rd is not None and len(rd) == 1, f'expected 1 rerun_detail, got {rd}'
-d = rd[0]
-assert d['name'] == 'p0001-0001', f'expected p0001-0001, got {d["name"]}'
-assert d['status'] == 'done', f'expected done, got {d["status"]}'
-assert d['restored'] == False, f'expected false, got {d["restored"]}'
-PYEOF12
-if [[ $? -eq 0 ]]; then
-    ok "pdf-auto 重跑成功路径正确 (rerun_detail 含 1 条 done 记录)"
-else
-    fail "pdf-auto 重跑成功路径校验失败"
-fi
-
-# ── 场景 13：pdf-auto 重跑失败 → 保留原结果 ────────────────
-echo ""
-echo "=== 场景 13：pdf-auto 重跑失败 → 保留原结果 ==="
-T13="$TEST_ROOT/t13"
-OUT13="$T13/out.json"
-mkdir -p "$T13/segments/p0001-0001" "$T13/segments/p0002-0002"
-echo "original p1" > "$T13/segments/p0001-0001/page.md"
-echo '{"pages":[{"page_idx":0}]}' > "$T13/segments/p0001-0001/page_content_list.json"
-echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T13/segments/p0001-0001/page_content_list_v2.json"
-echo "original p2" > "$T13/segments/p0002-0002/page.md"
-create_dummy_pdf "$T13/dummy.pdf" 2
-create_mock_manifest "$T13" "$T13/dummy.pdf" 2
-
-reset_validate_stage
-HOME="$MOCK_HOME" MINERU_MOCK_MODE=failed PDF_VALIDATE_BEHAVIOR=rerun_fail PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T13/dummy.pdf" "$T13/segments" 2>/dev/null > "$OUT13" || true
-
-assert_str_eq "重跑失败后原 MD 保留" "original p1" "$(cat "$T13/segments/p0001-0001/page.md")"
-
-python3 << PYEOF13
-import json
-with open("$OUT13") as f: data = json.load(f)
 assert data.get('status') == 'needs_review', f'expected needs_review, got {data.get("status")}'
 assert data.get('exit_code') == 2, f'expected exit 2, got {data.get("exit_code")}'
-rd = data.get('rerun_detail')
-assert rd is not None and len(rd) == 1, f'expected 1 rerun_detail, got {rd}'
-d = rd[0]
-assert d['name'] == 'p0001-0001', f'expected p0001-0001, got {d["name"]}'
-assert d['status'] == 'failed', f'expected failed, got {d["status"]}'
-assert d['restored'] == False, f'expected false, got {d["restored"]}'
-assert d['final_source'] == 'original', f'expected original, got {d["final_source"]}'
-PYEOF13
+assert data.get('merged_markdown'), 'merged_markdown missing'
+assert data.get('review_markdown'), 'review_markdown missing'
+# 无段级重跑执行，rerun_detail 应为 null
+assert data.get('rerun_detail') is None, f'expected null rerun_detail, got {data.get("rerun_detail")}'
+PYEOF12
 if [[ $? -eq 0 ]]; then
-    ok "pdf-auto 重跑失败路径正确 (rerun_detail 含 1 条 failed 记录)"
+    ok "pdf-auto 遇到 rerunnable 段时正确进入 needs_review 路径"
 else
-    fail "pdf-auto 重跑失败路径校验失败"
+    fail "pdf-auto needs_review 路径校验失败"
 fi
+
+# ── 场景 13：（已合并到场景 12）────────────────
 
 # ── 场景 15：pdf-auto 一致性检查通过 → 保留旧输出 ──
 echo ""

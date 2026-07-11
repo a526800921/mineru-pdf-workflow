@@ -171,6 +171,12 @@ for target in "$@"; do
     start_page=$((10#${start_page}))
     end_page="${seg_name##*-}"
     end_page=$((10#${end_page}))
+    # 单页模式下拒绝多页段名
+    if [[ $start_page -ne $end_page ]]; then
+      log "  ✗ 多页段名 ${seg_name} 不再支持。请使用单页段名（如 p0001-0001）或页码。"
+      _rerun_results+=("${seg_name}:${start_page}:${end_page}:skipped:false:none")
+      continue
+    fi
     # 安全处理残留 backup（在 seg_dir 检查之前，确保 backup 可还原）
     _backup_dir="${seg_dir}.backup"
     if [[ -d "$_backup_dir" ]]; then
@@ -222,12 +228,9 @@ for target in "$@"; do
 
     if [[ -z "$seg_dir" ]]; then
       if [[ -n "$multi_seg_dir" ]]; then
-        # 多页段：创建新单页段，只重跑该页
-        log "  ℹ 页码 ${target} 位于多页段 ${multi_seg_name} (${multi_start}-${multi_end})，创建单页重跑段"
-        seg_name="$(printf 'p%04d-%04d' "$target" "$target")"
-        seg_dir="$segments_dir/$seg_name"
-        start_page=$target
-        end_page=$target
+        log "  ✗ 页码 ${target} 落在多页段 ${multi_seg_name} (${multi_start}-${multi_end}) 中。输出目录含多页段残留，请先清空 segments/ 后重新运行 pdf-seg。"
+        _rerun_results+=("page_${target}:0:0:skipped:false:none")
+        continue
       else
         log "  ✗ 页码 ${target} 无对应分段，跳过"
         _rerun_results+=("page_${target}:0:0:skipped")
