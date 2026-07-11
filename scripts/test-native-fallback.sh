@@ -72,7 +72,8 @@ _run_mineru_page() {
   case "${NATIVE_FB_MODE:-recover}" in
     recover)
       mkdir -p "$out_dir/content"
-      printf '# recovered table\n' > "$out_dir/content/page.md"
+      # 真实的字段恢复补回内容，md 体积增大（不含 [[MISSING]] 标记）
+      printf '# spec table\n| 测试缺失字段 | 2.7L |\n恢复了缺失字段的完整表格内容行\n' > "$out_dir/content/page.md"
       echo '{"status":"done","exit_code":0}'; return 0 ;;
     stay)
       mkdir -p "$out_dir/content"
@@ -84,8 +85,17 @@ _run_mineru_page() {
 }
 EOF
 
-# mock page_quality（内容驱动：md 含 [[MISSING]] 标记时发出原生缺失信号）
-cat > "$MOCK_DIR/lib/page_quality.py" << 'EOF'
+# mock page_quality：assess 内容驱动（[[MISSING]] 标记发原生信号），
+# compare_quality 直接加载真实实现，避免手抄规则与真实逻辑漂移
+cat > "$MOCK_DIR/lib/page_quality.py" << EOF
+import importlib.util as _u
+_spec = _u.spec_from_file_location("_real_pq", "$SCRIPTS_DIR/lib/page_quality.py")
+_real = _u.module_from_spec(_spec)
+_spec.loader.exec_module(_real)
+compare_quality = _real.compare_quality  # 真实决策逻辑
+EOF
+cat >> "$MOCK_DIR/lib/page_quality.py" << 'EOF'
+
 def assess_page_quality(md_text, pdf_page_text, **kwargs):
     signals = []
     metrics = {"empty_td": 0, "max_td_per_row": 0, "md_bytes": len(md_text.encode("utf-8")),
@@ -97,12 +107,6 @@ def assess_page_quality(md_text, pdf_page_text, **kwargs):
         metrics["native_table_missing"] = 1
         metrics["missing_text"] = ["测试缺失字段"]
     return {"signals": signals, "metrics": metrics, "quality_ok": len(signals) == 0}
-
-def compare_quality(original_metrics, fallback_metrics):
-    # 镜像真实 compare_quality 的 native_table_missing 优先规则（真实逻辑见 lib/page_quality.py）
-    if original_metrics.get("native_table_missing", 0) > 0:
-        return "fallback" if fallback_metrics.get("native_table_missing", 0) == 0 else "review"
-    return "original"
 EOF
 
 cp "$SCRIPTS_DIR/pdf-auto" "$MOCK_DIR/pdf-auto"
