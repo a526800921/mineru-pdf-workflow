@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 3：真实样本与边界验收
+- 当前阶段：阶段 2：接入既有 fallback 闭环（缺口已修复，待复验）
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -212,9 +212,9 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
 - 复用阶段 3 的单页 `effort=high + image_analysis=false` fallback、双目录保存、manifest 选择和 `review` 兜底。
 - 确保 fallback 恢复字段时选择 `fallback`，未恢复时选择 `review`，不能因为整页覆盖率正常而返回 `all_passed`。
 
-#### 阶段 2 完成证据（2026-07-11）
+#### 阶段 2 实施记录（552319b，2026-07-11）
 
-提交 `552319b`：
+提交 `552319b`（此提交仅完成比较逻辑，完成声明由下方独立验收推翻）：
 
 1. **`compare_quality` 新增 `native_table_missing` 优先判定规则**
    - 原始页有表格字段缺失（`native_table_missing > 0`）：
@@ -237,6 +237,55 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
    - 治理检查通过
 
 4. **mock 修复**：`test-phase2.sh` 的 mock `page_quality.py` 签名补上 `**kwargs`
+
+#### 阶段 2 独立验收（2026-07-11）
+
+结论：**不通过，阶段 2 暂不能标记为已完成。**
+
+虽然提交 `552319b` 已补齐原生字段检测参与比较的逻辑，但独立验收发现以下闭环缺口：
+
+1. **manifest 证据字段不完整**：`page_fallback` 当前写入了 `reason`、`original_metrics`、`fallback_metrics`，但没有显式写入契约要求的 `quality_signals`、`missing_text`、`detector`（或 `detectors`）。下游只能从指标内部推断，机器契约不完整。
+2. **缺少原生遗漏信号的 `pdf-auto` 级闭环回归**：现有测试覆盖了通用 `fallback/original/review/failed` 和 `compare_quality`，但没有覆盖“原生字段检测触发 → fallback 恢复并选择 fallback”“仍缺失并选择 review”“fallback 失败并进入 review”“跨执行跳过并保留证据”四条路径。
+
+独立复核证据：
+
+- `pdf-auto` 检测阶段已传入 `pdf_words` 和页面 bbox。
+- 比较阶段已传入 `pdf_words`，仅改变 `native_table_missing: 1 → 0` 时 `compare_quality` 返回 `fallback`。
+- 全量 Python 测试 105/105、`test-phase3.sh` 11/11、治理检查和 `git diff --check` 通过；但这些测试未覆盖上述 manifest 和原生信号端到端缺口。
+
+阶段2通过前需补齐 manifest 字段和四条原生遗漏信号闭环 fixture，再重新验收。
+
+#### 阶段 2 修复记录（2026-07-11）
+
+结论：**两处验收缺口已修复，待用户复验。**
+
+提交 `c8668bd`：
+
+**Fix 1 — manifest 契约字段补齐**
+
+在 `pdf-auto` 的三处 `page_fallback` 写入点（成功比较、fallback 失败页、全失败写入器）显式写入契约要求字段：
+
+- `quality_signals`：触发信号列表（例如 `["native_table_text_missing"]`）
+- `missing_text`：PDF 原生表格缺失字段证据（例如 `["百公里综合油耗"]`）
+- `detector`：`pdf_native`（原生信号触发）或 `page_quality`（四类旧信号触发）
+
+下游不再需要从 `original_metrics` 内部推断，机器契约完整。
+
+**Fix 2 — 四条原生信号 `pdf-auto` 级闭环回归**
+
+新增 `scripts/test-native-fallback.sh`，内容驱动 mock（`[[MISSING]]` 标记 + `NATIVE_FB_MODE`），覆盖：
+
+1. 检测触发 → fallback 恢复字段 → `selected=fallback`，exit 0，契约字段完整。
+2. 检测触发 → 字段仍缺失 → `selected=review` → `needs_review`，exit 2。
+3. 检测触发 → fallback 重跑失败 → `fb_status=failed`、`fallback_path=None` → `needs_review`，exit 2。
+4. 跨执行跳过 → 第二次运行不重复检测，`missing_text`/`quality_signals`/`detector` 证据保留，`attempt_count` 未递增。
+
+**验证**
+
+- `scripts/test-native-fallback.sh`：4/4 通过。
+- `scripts/test-phase2.sh`：37/37 通过。
+- 全量 Python 测试：105/105 通过。
+- `python3 scripts/check_plan_governance.py .` 与 `git diff --check`：通过。
 
 ### 阶段 3：真实样本与边界验收
 
