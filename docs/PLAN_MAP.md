@@ -32,7 +32,7 @@
 | [pdf-evaluation-suite](plans/pdf-evaluation-suite.md) | 已完成 | P4a/P4b/P4c 全部已完成 | 2026-07-10 | pdf-workflow-enhancement-roadmap、coverage-validation-optimization、春风 150AURA 输出包 | [P4a 验收](plans/pdf-evaluation-suite.md#验收记录2026-07-08)、[P4b 验收](plans/pdf-evaluation-suite.md#验收记录p4b2026-07-08)、[P4c 验收](plans/pdf-evaluation-suite.md#验收记录p4c2026-07-10) |
 | [per-page-anchors](plans/per-page-anchors.md) | 已完成 | 全阶段（0-4） | 2026-07-10 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、structured-data-extraction、春风 150AURA 输出包 | [阶段 4 验收](plans/per-page-anchors.md#阶段-4-验收记录2026-07-10) |
 | [pdf-auto-repair-before-merge](plans/pdf-auto-repair-before-merge.md) | 已完成 | 全阶段（0-3）：修复—合并顺序、manifest 泄漏修复、真实样本验收 | 2026-07-11 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、per-page-anchors、demo5 真实样本 | [阶段 3 验收](plans/pdf-auto-repair-before-merge.md#阶段-3-验收记录2026-07-11) |
-| [single-page-segmentation-migration](plans/single-page-segmentation-migration.md) | 实施中 | 阶段 1：单页默认与旧段级输入兼容 | 2026-07-11 | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors、demo20 第 12 页 fallback 证据 | [Step 0 证据](plans/single-page-segmentation-migration.md#step-0-证据) |
+| [single-page-segmentation-migration](plans/single-page-segmentation-migration.md) | 实施中 | 阶段 2：页级重跑与失败回退 | 2026-07-11 | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors、demo20 第 12 页 fallback 证据 | [阶段 1 验收](plans/single-page-segmentation-migration.md#阶段-1-验收记录2026-07-11) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
