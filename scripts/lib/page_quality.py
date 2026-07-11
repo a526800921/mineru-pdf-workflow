@@ -216,23 +216,80 @@ def _normalize_table_text(text: str) -> str:
 
 def _expand_html_table_grid(table_html: str) -> list[list[str]]:
     """
-    展开单个 HTML <table>，考虑 colspan，返回逻辑网格（行 × 列）。
-    同一单元格因 colspan 展开多次时各副本保留相同文本。
+    展开单个 HTML <table>，考虑 colspan 和 rowspan，返回逻辑网格。
+
+    colspan：同一单元格展开为 cs 个副本（各副本保留相同文本）。
+    rowspan：单元格占据后续 rs-1 行的该列位置；后续行对应列填空字符串
+            且该行的剩余 td 右移跳过已占列。
     """
-    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE)
+    rows_raw = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE)
     grid: list[list[str]] = []
-    for row_html in rows:
-        tds = re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.DOTALL | re.IGNORECASE)
-        expanded: list[str] = []
-        for td in tds:
-            text_raw = re.sub(r"<[^>]+>", "", td).strip()
-            cs_match = re.search(
-                r'colspan\s*=\s*["\'"]?(\\d+)["\'"]?', td, re.IGNORECASE,
+
+    # 记录当前由上方 rowspan 延伸而占用的列
+    # 每个元素 (col_idx, remaining_rows, text)
+    pending_rowspan: list[tuple[int, int, str]] = []
+
+    for row_html in rows_raw:
+        tds = re.findall(r"(<td[^>]*>.*?</td>)", row_html, re.DOTALL | re.IGNORECASE)
+        parsed: list[dict] = []
+        for td_tag in tds:
+            # td_tag is the full <td ...>content</td>, extract attributes from tag part
+            tag_match = re.match(r"<td([^>]*)>", td_tag, re.DOTALL | re.IGNORECASE)
+            attrs_str = tag_match.group(1) if tag_match else ""
+            # inner content
+            content_match = re.match(r"<td[^>]*>(.*)</td>", td_tag, re.DOTALL | re.IGNORECASE)
+            text_raw = re.sub(r"<[^>]+>", "", content_match.group(1)).strip() if content_match else td_tag.strip()
+            cs = 1
+            rs = 1
+            # extract colspan from attributes
+            csm = re.search(
+                r'colspan\s*=\s*["\'"]?(\d+)["\'"]?', attrs_str, re.IGNORECASE,
             )
-            cs = int(cs_match.group(1)) if cs_match else 1
+            if csm:
+                cs = int(csm.group(1))
+            # extract rowspan from attributes
+            rsm = re.search(
+                r'rowspan\s*=\s*["\'"]?(\d+)["\'"]?', attrs_str, re.IGNORECASE,
+            )
+            if rsm:
+                rs = int(rsm.group(1))
+            parsed.append({"text": text_raw, "cs": cs, "rs": rs})
+
+        # 构建该行展开，考虑从上方延入的 rowspan
+        expanded: list[str] = []
+        # 被上方 rowspan 占用的列
+        skip_cols: dict[int, str] = {}
+        new_pending: list[tuple[int, int, str]] = []
+        for col, remain, text in pending_rowspan:
+            skip_cols[col] = text
+            if remain > 1:
+                new_pending.append((col, remain - 1, text))
+
+        col = 0
+        for cell in parsed:
+            text, cs, rs = cell["text"], cell["cs"], cell["rs"]
+            # 跳过已被上方 rowspan 占用的列
+            while col in skip_cols:
+                expanded.append(skip_cols[col])  # 填 rowspan 的文本
+                col += 1
+            # 展开 colspan
             for _ in range(cs):
-                expanded.append(text_raw)
+                expanded.append(text)
+                col += 1
+            # 记录 rowspan
+            if rs > 1:
+                # 记录从 col-cs 到 col-1 列各占 rs-1 行
+                for c in range(col - cs, col):
+                    new_pending.append((c, rs - 1, text))
+
+        # 该行剩余列由 rowspan 延伸填充（如果表格不对称，补到一致）
+        while col in skip_cols:
+            expanded.append(skip_cols[col])
+            col += 1
+
         grid.append(expanded)
+        pending_rowspan = new_pending
+
     return grid
 
 
@@ -335,14 +392,43 @@ def detect_native_table_text_omission(
         has_html_match = any(_normalize_table_text(t) in html_all for _, _, _, t in line)
         if not has_html_match:
             continue
-        for x0, _, _, text in line:
-            norm = _normalize_table_text(text)
-            if norm in html_all:
-                continue  # 已在表格中
-            if x0 >= split_x:
-                continue  # 右列正文
-            if norm not in html_first_col:
-                missing_raw.add(text)
+
+        # 收集该行的左列候选标签（含 x0 用于间距判断）
+        left_items: list[tuple[float, float, str]] = [
+            (x0, x1, text) for x0, x1, _, text in line
+            if _normalize_table_text(text) not in html_all and x0 < split_x
+        ]
+        if not left_items:
+            continue
+
+        # 多词字段重组：从左到右累积合并相邻词
+        matched_indices: set[int] = set()
+        for i in range(len(left_items)):
+            if i in matched_indices:
+                continue
+            # 从 i 开始，尝试逐步向右合并
+            combined = left_items[i][2]
+            if _normalize_table_text(combined) in html_first_col:
+                matched_indices.add(i)
+                continue
+            # 向后尝试合并相邻词
+            for j in range(i + 1, len(left_items)):
+                # 水平间距 > 2 × 前一词宽度 → 不属同一字段
+                prev_w = left_items[j-1][1] - left_items[j-1][0]
+                gap = left_items[j][0] - left_items[j-1][1]
+                if gap > prev_w * 2:
+                    break
+                combined += " " + left_items[j][2]
+                if _normalize_table_text(combined) in html_first_col:
+                    for k in range(i, j + 1):
+                        matched_indices.add(k)
+                    break
+
+        # 未匹配到任何 n-gram 的孤立词 → 可能误报
+        for i in range(len(left_items)):
+            if i not in matched_indices:
+                missing_raw.add(left_items[i][2])
+
 
     missing_texts = sorted(missing_raw)
     signals = ["native_table_text_missing"] if missing_texts else []

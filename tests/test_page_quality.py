@@ -337,6 +337,57 @@ class TestNativeTableTextOmission(unittest.TestCase):
         self.assertNotIn("native_table_text_missing", signals,
                          f"p4 should not trigger: {metrics.get('missing_text')}")
 
+    def test_multi_word_field_no_false_positive(self):
+        """多词字段（如 "Max power"）不因拆分误报。"""
+        # 构造 mock：PDF words 有 "Max" 和 "power" 在同一行，HTML 单元格为 "Max power"
+        mock_html = (
+            "<table><tr><td>Max power</td><td>100W</td></tr>"
+            "<tr><td>Weight</td><td>50kg</td></tr>"
+            "<tr><td>Size</td><td>10cm</td></tr></table>"
+        )
+        mock_words = [
+            (50, 100, 120, 130, "Max", 0, 0, 0),
+            (125, 100, 190, 130, "power", 0, 0, 0),
+            (300, 100, 350, 130, "100W", 0, 0, 0),
+            (50, 140, 120, 170, "Weight", 0, 0, 0),
+            (300, 140, 350, 170, "50kg", 0, 0, 0),
+            (50, 180, 120, 210, "Size", 0, 0, 0),
+            (300, 180, 350, 210, "10cm", 0, 0, 0),
+        ]
+        signals, metrics = detect_native_table_text_omission(
+            mock_html, mock_words, 500, 400,
+        )
+        self.assertNotIn(
+            "native_table_text_missing", signals,
+            f"multi-word should not trigger: {metrics.get('missing_text')}",
+        )
+
+    def test_rowspan_carried_in_grid(self):
+        """rowspan 展开后，后续行对应列继承单元格文本。"""
+        html = (
+            "<table><tr><td rowspan='2'>A</td><td>B</td></tr>"
+            "<tr><td>C</td></tr><tr><td>D</td><td>E</td></tr></table>"
+        )
+        grid = _parse_all_tables(html)
+        self.assertEqual(len(grid), 1, "should be 1 spec table")
+        rows = grid[0]
+        self.assertEqual(rows[0][0], "A")
+        self.assertEqual(rows[1][0], "A", "rowspan should carry A to row 1")
+        self.assertEqual(rows[1][1], "C")
+        self.assertEqual(rows[2][0], "D", "row 2 no longer affected")
+
+    def test_colspan_expanded_in_grid(self):
+        """colspan 展开后单元格出现多次。"""
+        html = ("<table><tr><td colspan='3'>X</td></tr>"
+                "<tr><td>A</td><td>B</td><td>C</td></tr>"
+                "<tr><td>D</td><td>E</td><td>F</td></tr></table>")
+        grid = _parse_all_tables(html)
+        rows = grid[0]
+        self.assertEqual(len(rows), 3, "should be 3 rows")
+        self.assertEqual(len(rows[0]), 3, "colspan=3 should expand to 3 cells")
+        for cell in rows[0]:
+            self.assertEqual(cell, "X")
+
     def test_normalize_consistency(self):
         """归一化对于已知表格内容的一致性。"""
         md = self._get_page_md(16)
