@@ -70,6 +70,9 @@ def generate_review_report(
     # --- 需复核分段 ---
     _append_issue_segments(lines, issues, threshold, rerun_failures_set)
 
+    # --- 页级质量复核（manifest.page_fallback） ---
+    _append_page_fallback_review(lines, segments_dir)
+
     # --- 逐页详情 ---
     _append_page_details(lines, issues, threshold, include_page_type)
 
@@ -195,6 +198,55 @@ def _append_issue_segments(
 
         lines.append(f"| {seg['name']} | {pages} | {cov} | {action} | {note} |")
 
+    lines.append("")
+
+
+def _append_page_fallback_review(
+    lines: list[str],
+    segments_dir: str,
+) -> None:
+    """列出 manifest.page_fallback 中进入 review 或 fallback 失败的页级质量复核页。
+
+    页级质量/原生表格字段检测触发的复核页不经过 pdf-validate 覆盖率报告，
+    证据只在 manifest.page_fallback。此段把它们提到人工报告，避免链路在
+    人工可见层断裂。
+    """
+    manifest_path = Path(segments_dir).parent / "manifest.json"
+    if not manifest_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return
+    page_fallback = manifest.get("page_fallback", {})
+    if not page_fallback:
+        return
+
+    rows = []
+    for page_str, entry in page_fallback.items():
+        selected = entry.get("selected")
+        fb_status = entry.get("fb_status")
+        if selected != "review" and fb_status != "failed":
+            continue
+        rows.append((int(page_str), entry))
+    if not rows:
+        return
+
+    rows.sort(key=lambda r: r[0])
+
+    lines.append("## 页级质量复核（表格字段/质量信号）")
+    lines.append("")
+    lines.append("| 页码 | 检测器 | 触发信号 | 缺失字段 | 选择 | 执行状态 |")
+    lines.append("|------|--------|----------|----------|------|----------|")
+    for page_num, entry in rows:
+        detector = entry.get("detector", "-")
+        signals = ", ".join(entry.get("quality_signals", [])) or "-"
+        missing = ", ".join(entry.get("missing_text", [])) or "-"
+        selected = entry.get("selected", "-")
+        fb_status = entry.get("fb_status", "-")
+        lines.append(
+            f"| {page_num} | {detector} | {signals} | {missing} | {selected} | {fb_status} |"
+        )
     lines.append("")
 
 
