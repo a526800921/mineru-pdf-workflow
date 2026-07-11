@@ -190,6 +190,8 @@ def assess_page_quality(
         metrics["native_table_missing"] = fb_metrics.get("native_table_missing", 0)
         if fb_metrics.get("missing_text"):
             metrics["missing_text"] = fb_metrics["missing_text"]
+        if fb_metrics.get("missing_scope"):
+            metrics["missing_scope"] = fb_metrics["missing_scope"]
 
     return {
         "signals": signals,
