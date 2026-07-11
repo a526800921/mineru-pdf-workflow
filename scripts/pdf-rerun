@@ -190,25 +190,49 @@ for target in "$@"; do
       mkdir -p "$seg_dir"
     fi
   elif [[ "$target" =~ ^[0-9]+$ ]]; then
-    # 页码（1-based）→ 找到对应分段（分段名已 1-based）
+    # 页码（1-based）→ 找到对应分段，优先精确匹配单页段
     seg_dir=""
+    multi_seg_dir=""
+    multi_seg_name=""
+    multi_start=0
+    multi_end=0
     for d in "$segments_dir"/p*-*; do
       [[ -d "$d" ]] || continue
       name="$(basename "$d")"
       s="${name#p}"; s="${s%-*}"; s=$((10#${s}))
       e="${name##*-}"; e=$((10#${e}))
       if [[ $target -ge $s && $target -le $e ]]; then
-        seg_dir="$d"
-        seg_name="$name"
-        start_page=$s
-        end_page=$e
-        break
+        if [[ $s -eq $e ]]; then
+          # 精确匹配单页段 → 立即使用
+          seg_dir="$d"
+          seg_name="$name"
+          start_page=$s
+          end_page=$e
+          multi_seg_dir=""
+          break
+        elif [[ -z "$multi_seg_dir" ]]; then
+          # 记录第一个匹配的多页段作为 fallback
+          multi_seg_dir="$d"
+          multi_seg_name="$name"
+          multi_start=$s
+          multi_end=$e
+        fi
       fi
     done
+
     if [[ -z "$seg_dir" ]]; then
-      log "  ✗ 页码 ${target} 无对应分段，跳过"
-      _rerun_results+=("page_${target}:0:0:skipped")
-      continue
+      if [[ -n "$multi_seg_dir" ]]; then
+        # 多页段：创建新单页段，只重跑该页
+        log "  ℹ 页码 ${target} 位于多页段 ${multi_seg_name} (${multi_start}-${multi_end})，创建单页重跑段"
+        seg_name="$(printf 'p%04d-%04d' "$target" "$target")"
+        seg_dir="$segments_dir/$seg_name"
+        start_page=$target
+        end_page=$target
+      else
+        log "  ✗ 页码 ${target} 无对应分段，跳过"
+        _rerun_results+=("page_${target}:0:0:skipped")
+        continue
+      fi
     fi
   else
     log "  ✗ 无法识别：${target}（需要页码或 p0000-0000 分段名），跳过"

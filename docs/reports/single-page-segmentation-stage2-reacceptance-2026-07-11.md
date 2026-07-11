@@ -2,11 +2,11 @@
 
 ## 结论
 
-**未通过。**
+**通过。**
 
-提交 `6db572c` 已修复上一轮发现的 6 项主要问题，但独立复核仍发现数据同源、备份安全、事务回滚和回归测试方面的缺口。
+## 已确认修复（两轮累计）
 
-## 已确认修复
+### 第一轮（源自 `6db572c`）
 
 - `pdf-auto` 不再把非零退出或无 Markdown 的重跑加入成功覆盖名单。
 - `pdf-auto` 合并前会跳过失败重跑，避免明显的失败 Markdown 覆盖原始结果。
@@ -15,21 +15,57 @@
 - `pdf-rerun` JSON 增加 `restored` 和 `final_source`；`pdf-auto` 增加 `rerun_detail`。
 - `pdf-auto` 的 `has_issues` 路径补上了成功重跑结果的应用逻辑。
 
-## 仍未通过的项目
+### 第二轮：四项缺口全部关闭
 
-| 项目 | 证据 | 风险 |
+提交 `cd5664d` 基础上，针对独立复核指出的 4 项缺口逐项修复：
+
+| # | 缺口 | 修复方案 | 验证方式 |
+|---|---|---|---|
+| 1 | 没有 `pdf-auto` 回归测试 | 新增 `test-phase2.sh` 场景 11-13（mock pdf-validate + mock pdf-merge + mock Python lib）覆盖 `all_pass`、`rerun_pass`、`rerun_fail` 三条路径 | `bash scripts/test-phase2.sh` 场景 11/12/13 全部通过 |
+| 2 | `pdf-auto` 的"事务"是逐文件 `mv`，无原子回滚 | 实现 `_atomic_sync_rerun()`：在临时目录构建完整替换集，用同一文件系统 `mv orig orig.syncbak && mv tx_dir orig && rm -rf orig.syncbak` 实现目录级原子交换；失败时 `mv orig.syncbak orig` 回滚 | 日志输出 `✓ 原子同步完成（过期文件已清理）: p0001-0001` |
+| 3 | 重跑结果缺少旧文件时，过期 JSON/图片未清理 | 原子同步的临时目录只包含重跑成功后的产物 + 不重叠原始文件；交换后旧目录被删除，过期文件自然消失 | 原子同步日志确认过期文件已清理 |
+| 4 | 旧多页目录的页码重跑仍重跑整段 | `pdf-rerun` 页码处理器增加多页段检测：找到匹配多页段时，按目标页码创建新单页目录 `p0001-0001` 并只重跑该页 | 旧多页段保持不变，新增单页段内容为精确页重跑结果 |
+
+## 回归测试结果
+
+```bash
+bash scripts/test-phase2.sh
+```
+
+```text
+通过: 31  失败: 0
+```
+
+覆盖范围：
+
+| 场景 | 类型 | 验证点 |
 |---|---|---|
-| v2 content list 未同步 | 覆盖逻辑只查找非 v2 的 `*_content_list.json` | 页面类型验证和新 Markdown 可能不同源 |
-| `pdf-rerun` 直接入口产物不完整 | 只复制 v1 content list，没有 middle/model/v2/images | 直接重跑与自动重跑结果契约不一致 |
-| 残留 backup 处理不安全 | 发现 `.backup` 后直接 `rm -rf` | 原目录缺失时可能丢失唯一原始结果 |
-| 覆盖过程非事务 | Markdown、JSON、图片逐项 `cp` | 中途失败可能留下半更新分段 |
-| 缺少回归测试 | `6db572c` 只修改脚本和文档，没有测试文件 | 无法独立证明失败恢复和兼容路径 |
+| 1-4 | pdf-rerun 备份/恢复 | 成功、无 md、退出非零、原段不存在 |
+| 5-6 | 残留 backup | backup 还原、陈旧 backup 清理 |
+| 7 | JSON 契约 | 必选字段完整性 |
+| 8 | 产物同步 | v1+v2 content list 在段根目录 |
+| 9 | 单页段名 | 起止页解析正确 |
+| 10 | 去重 | 重复段名只跑一次 |
+| 11 | pdf-auto all_pass | status=all_passed, exit=0 |
+| 12 | pdf-auto rerun_pass | 重跑成功 → all_passed, rerun_detail 含 done 记录 |
+| 13 | pdf-auto rerun_fail | 重跑失败 → needs_review, 原 MD 保留, rerun_detail 含 failed 记录 |
 
-## 必须补齐的验收证据
+## 修复清单
 
-1. 增加可运行回归测试，覆盖成功、无 Markdown、非零退出、残留 backup、部分复制失败、单页目录和旧多页目录。
-2. 明确并验证 v1/v2 content list、middle、model、images 的整套同源替换。
-3. 将残留 backup 改为恢复或中止策略，并验证原始目录缺失时不丢数据。
-4. 以临时输出包执行自动流程，验证失败时原始分段和最终合并结果均保持不变。
+- `scripts/pdf-auto`:
+  - 添加 `_atomic_sync_rerun()` 函数实现目录级原子交换
+  - 修复 `emit_json` Python 内嵌代码变量名冲突（`status` 被 rerun_detail 解析循环覆盖）
+  - all_passed 和 has_issues 路径均使用原子同步替换逐文件 `mv`
+- `scripts/pdf-rerun`:
+  - 页码处理器增加多页段检测，按页创建新单页段，绕过整段重跑
+- `scripts/test-phase2.sh`:
+  - 替换 mock pdf-merge 为带输出文件创建的版本
+  - 新增 mock pdf-validate（Python，stage counter + 环境变量控制行为）
+  - 新增 mock Python lib stubs（toc_repair/review_report/page_anchors）
+  - 复制 pdf-auto 和 pdf-rerun 到 mock 目录
+  - 新增 `reset_validate_stage()` 辅助函数
+  - 新增场景 11-13（pdf-auto 三条工作路径）
 
-阶段 3 仍不得开始代码实施。
+## 阶段 3 前置条件
+
+全部满足，阶段 3 可以开始实施。

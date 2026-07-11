@@ -67,14 +67,77 @@ esac
 MOCK
 chmod +x "$MOCK_DIR/mineru"
 
-# mock pdf-merge（只输出基本信息，不做真实合并）
+# mock pdf-merge（生成最小输出文件）
 cat > "$MOCK_DIR/pdf-merge" << 'EOF'
 #!/usr/bin/env bash
+output="${PDF_MERGE_OUTPUT:-$(dirname "$1")/../test.md}"
+mkdir -p "$(dirname "$output")"
+echo "# mock merge output" > "$output"
 echo "mock pdf-merge: $*"
 EOF
 chmod +x "$MOCK_DIR/pdf-merge"
 
-# 复制 pdf-rerun 到 mock 目录（dirname $0 → MOCK_DIR → 自动找到 mock lib/pdf-merge）
+# mock pdf-validate（通过计数器和环境变量控制返回的验证结果）
+cat > "$MOCK_DIR/pdf-validate" << 'MOCKVAL'
+#!/usr/bin/env python3
+import json, os, sys
+stage_file = os.path.join(os.path.dirname(__file__), '.validate_stage')
+try:
+    with open(stage_file) as f:
+        stage = int(f.read().strip())
+except (FileNotFoundError, ValueError):
+    stage = 1
+with open(stage_file, 'w') as f:
+    f.write(str(stage + 1))
+behavior = os.environ.get('PDF_VALIDATE_BEHAVIOR', 'rerun_pass')
+
+if behavior == 'all_pass':
+    report = {"status":"completed","segments":[
+        {"name":"p0001-0001","start_page":1,"end_page":1,"status":"passed","coverage":0.95,"rerunnable":False,"decision":"pass"}]}
+elif behavior == 'rerun_pass' or behavior == 'rerun_fail':
+    if stage == 1:
+        report = {"status":"completed","segments":[
+            {"name":"p0001-0001","start_page":1,"end_page":1,"status":"suspicious","coverage":0.50,"rerunnable":True,"decision":"rerun","reason":"low coverage"},
+            {"name":"p0002-0002","start_page":2,"end_page":2,"status":"passed","coverage":0.95,"rerunnable":False,"decision":"pass"}]}
+    else:
+        if behavior == 'rerun_pass':
+            report = {"status":"completed","segments":[
+                {"name":"p0001-0001","start_page":1,"end_page":1,"status":"passed","coverage":0.95,"rerunnable":False,"decision":"pass"},
+                {"name":"p0002-0002","start_page":2,"end_page":2,"status":"passed","coverage":0.95,"rerunnable":False,"decision":"pass"}]}
+        else:
+            report = {"status":"completed","segments":[
+                {"name":"p0001-0001","start_page":1,"end_page":1,"status":"suspicious","coverage":0.50,"rerunnable":True,"decision":"rerun","reason":"low coverage"},
+                {"name":"p0002-0002","start_page":2,"end_page":2,"status":"passed","coverage":0.95,"rerunnable":False,"decision":"pass"}]}
+json.dump(report, sys.stdout, ensure_ascii=False)
+print()
+MOCKVAL
+chmod +x "$MOCK_DIR/pdf-validate"
+
+# mock Python lib stubs（供 pdf-auto 内嵌 Python 导入）
+mkdir -p "$MOCK_DIR/lib"
+cat > "$MOCK_DIR/lib/toc_repair.py" << 'EOF'
+def repair(pdf_path, segments_dir, validate_tmp): pass
+def repair_merged(pdf_path, merged_md, validate_tmp): pass
+def verify_entry_recall(pdf_path, segments_dir, validate_tmp): pass
+EOF
+cat > "$MOCK_DIR/lib/review_report.py" << 'EOF'
+def generate_review_report(validate_json_path, review_output_path, threshold, pdf_path, segments_dir, rerun_failures=None, include_page_type=False):
+    with open(review_output_path, 'w') as f:
+        f.write("# review report\n")
+EOF
+cat > "$MOCK_DIR/lib/page_anchors.py" << 'EOF'
+def insert_page_anchors(text, items, start, end):
+    return text, []
+EOF
+
+# 复制 pdf-auto 和 pdf-rerun 到 mock 目录
+cp "$SCRIPTS_DIR/pdf-auto" "$MOCK_DIR/pdf-auto"
+chmod +x "$MOCK_DIR/pdf-auto"
+cp "$SCRIPTS_DIR/pdf-rerun" "$MOCK_DIR/pdf-rerun"
+chmod +x "$MOCK_DIR/pdf-rerun"
+
+# ── 辅助函数：重置 pdf-validate 调用计数器 ────────────────
+reset_validate_stage() { echo 1 > "$MOCK_DIR/.validate_stage"; }
 cp "$SCRIPTS_DIR/pdf-rerun" "$MOCK_DIR/pdf-rerun"
 chmod +x "$MOCK_DIR/pdf-rerun"
 
@@ -356,6 +419,102 @@ if [[ $? -eq 0 ]]; then
     ok "重复段名去重正确 (rerun_count=1)"
 else
     fail "重复段名未正确去重"
+fi
+
+# ── 场景 11：pdf-auto 全部通过（无重跑）─────────────────────
+echo ""
+echo "=== 场景 11：pdf-auto 全部通过（无重跑）==="
+T11="$TEST_ROOT/t11"
+OUT11="$T11/out.json"
+mkdir -p "$T11/segments/p0001-0001"
+echo "original p1" > "$T11/segments/p0001-0001/page.md"
+echo '{"pages":[{"page_idx":0}]}' > "$T11/segments/p0001-0001/page_content_list.json"
+echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T11/segments/p0001-0001/page_content_list_v2.json"
+touch "$T11/dummy.pdf"
+
+reset_validate_stage
+HOME="$MOCK_HOME" PDF_VALIDATE_BEHAVIOR=all_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T11/dummy.pdf" "$T11/segments" 2>/dev/null > "$OUT11" || true
+
+python3 << PYEOF11
+import json
+with open("$OUT11") as f: data = json.load(f)
+assert data.get('status') == 'all_passed', f'expected all_passed, got {data.get("status")}'
+assert data.get('exit_code') == 0, f'expected exit 0, got {data.get("exit_code")}'
+assert data.get('merged_markdown'), 'merged_markdown missing'
+PYEOF11
+if [[ $? -eq 0 ]]; then
+    ok "pdf-auto 全部通过路径正确 (status=all_passed, exit=0)"
+else
+    fail "pdf-auto 全部通过路径校验失败"
+fi
+
+# ── 场景 12：pdf-auto 重跑成功 → 全部通过 ──────────────────
+echo ""
+echo "=== 场景 12：pdf-auto 重跑成功 → 全部通过 ==="
+T12="$TEST_ROOT/t12"
+OUT12="$T12/out.json"
+mkdir -p "$T12/segments/p0001-0001" "$T12/segments/p0002-0002"
+echo "original p1" > "$T12/segments/p0001-0001/page.md"
+echo '{"pages":[{"page_idx":0}]}' > "$T12/segments/p0001-0001/page_content_list.json"
+echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T12/segments/p0001-0001/page_content_list_v2.json"
+echo "original p2" > "$T12/segments/p0002-0002/page.md"
+touch "$T12/dummy.pdf"
+
+reset_validate_stage
+HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=rerun_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T12/dummy.pdf" "$T12/segments" 2>/dev/null > "$OUT12" || true
+
+python3 << PYEOF12
+import json
+with open("$OUT12") as f: data = json.load(f)
+assert data.get('status') == 'all_passed', f'expected all_passed, got {data.get("status")}'
+assert data.get('exit_code') == 0, f'expected exit 0, got {data.get("exit_code")}'
+rd = data.get('rerun_detail')
+assert rd is not None and len(rd) == 1, f'expected 1 rerun_detail, got {rd}'
+d = rd[0]
+assert d['name'] == 'p0001-0001', f'expected p0001-0001, got {d["name"]}'
+assert d['status'] == 'done', f'expected done, got {d["status"]}'
+assert d['restored'] == False, f'expected false, got {d["restored"]}'
+PYEOF12
+if [[ $? -eq 0 ]]; then
+    ok "pdf-auto 重跑成功路径正确 (rerun_detail 含 1 条 done 记录)"
+else
+    fail "pdf-auto 重跑成功路径校验失败"
+fi
+
+# ── 场景 13：pdf-auto 重跑失败 → 保留原结果 ────────────────
+echo ""
+echo "=== 场景 13：pdf-auto 重跑失败 → 保留原结果 ==="
+T13="$TEST_ROOT/t13"
+OUT13="$T13/out.json"
+mkdir -p "$T13/segments/p0001-0001" "$T13/segments/p0002-0002"
+echo "original p1" > "$T13/segments/p0001-0001/page.md"
+echo '{"pages":[{"page_idx":0}]}' > "$T13/segments/p0001-0001/page_content_list.json"
+echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T13/segments/p0001-0001/page_content_list_v2.json"
+echo "original p2" > "$T13/segments/p0002-0002/page.md"
+touch "$T13/dummy.pdf"
+
+reset_validate_stage
+HOME="$MOCK_HOME" MINERU_MOCK_MODE=failed PDF_VALIDATE_BEHAVIOR=rerun_fail PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T13/dummy.pdf" "$T13/segments" 2>/dev/null > "$OUT13" || true
+
+assert_str_eq "重跑失败后原 MD 保留" "original p1" "$(cat "$T13/segments/p0001-0001/page.md")"
+
+python3 << PYEOF13
+import json
+with open("$OUT13") as f: data = json.load(f)
+assert data.get('status') == 'needs_review', f'expected needs_review, got {data.get("status")}'
+assert data.get('exit_code') == 2, f'expected exit 2, got {data.get("exit_code")}'
+rd = data.get('rerun_detail')
+assert rd is not None and len(rd) == 1, f'expected 1 rerun_detail, got {rd}'
+d = rd[0]
+assert d['name'] == 'p0001-0001', f'expected p0001-0001, got {d["name"]}'
+assert d['status'] == 'failed', f'expected failed, got {d["status"]}'
+assert d['restored'] == False, f'expected false, got {d["restored"]}'
+assert d['final_source'] == 'original', f'expected original, got {d["final_source"]}'
+PYEOF13
+if [[ $? -eq 0 ]]; then
+    ok "pdf-auto 重跑失败路径正确 (rerun_detail 含 1 条 failed 记录)"
+else
+    fail "pdf-auto 重跑失败路径校验失败"
 fi
 
 # ── 汇总 ──────────────────────────────────────────────────────────

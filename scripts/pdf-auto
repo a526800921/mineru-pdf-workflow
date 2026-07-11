@@ -34,6 +34,71 @@ log() {
   fi
 }
 
+# --- 原子同步：用重跑结果替换原段内容（目录级原子交换） ---
+# 参数: <rerun_mineru_dir> <orig_mineru_dir> <rerun_md_path> <orig_md_name> <seg_name>
+# 失败时原目录完全不变；成功时过期文件自动清理
+_atomic_sync_rerun() {
+  local rr_dir="$1" orig_dir="$2" rerun_md="$3" orig_md_name="$4" seg_name="$5"
+  local tx_dir existing base
+
+  tx_dir="$(mktemp -d "$(dirname "$orig_dir")/.tx_XXXXXX" 2>/dev/null)" || {
+    log "⚠ 无法创建临时目录（保留原结果）: ${seg_name}"
+    return 1
+  }
+
+  # 在临时目录中构建完整替换内容
+  if ! (
+    set -e
+    # 重跑 Markdown
+    cp "$rerun_md" "$tx_dir/$orig_md_name"
+    # content_list v1 + v2
+    for cl in "$rr_dir"/*_content_list.json; do
+      [[ -f "$cl" ]] && cp "$cl" "$tx_dir/"
+    done
+    # middle.json / model.json
+    [[ -f "$rr_dir/middle.json" ]] && cp "$rr_dir/middle.json" "$tx_dir/"
+    [[ -f "$rr_dir/model.json" ]] && cp "$rr_dir/model.json" "$tx_dir/"
+    # images
+    if [[ -d "$rr_dir/images" ]]; then
+      mkdir -p "$tx_dir/images"
+      for img in "$rr_dir/images"/*; do
+        [[ -f "$img" ]] && cp "$img" "$tx_dir/images/"
+      done
+    fi
+    # 复制原目录中未被替换的其他文件（保持段完整性）
+    for existing in "$orig_dir"/*; do
+      [[ -e "$existing" ]] || continue
+      base="$(basename "$existing")"
+      [[ "$base" == ".tx_"* || "$base" == ".syncbak" ]] && continue
+      [[ -e "$tx_dir/$base" ]] && continue
+      cp -a "$existing" "$tx_dir/" 2>/dev/null || true
+    done
+  ) 2>/dev/null; then
+    rm -rf "$tx_dir"
+    log "⚠ 临时目录构建失败（保留原结果）: ${seg_name}"
+    return 1
+  fi
+
+  # 原子交换：同文件系统 rename 是原子操作
+  if mv "$orig_dir" "$orig_dir.syncbak" 2>/dev/null; then
+    if mv "$tx_dir" "$orig_dir" 2>/dev/null; then
+      rm -rf "$orig_dir.syncbak"
+      log "  ✓ 原子同步完成（过期文件已清理）: ${seg_name}"
+      return 0
+    else
+      # 恢复：新目录 mv 失败，回滚原目录
+      mv "$orig_dir.syncbak" "$orig_dir" 2>/dev/null || true
+      rm -rf "$tx_dir"
+      log "⚠ 原子交换失败，已回滚（保留原结果）: ${seg_name}"
+      return 1
+    fi
+  else
+    rm -rf "$tx_dir"
+    log "⚠ 原目录无法移动，已回滚（保留原结果）: ${seg_name}"
+    return 1
+  fi
+}
+
 # --- step progress helpers (stage 3) ---
 now_ms() {
   python3 -c 'import time; print(int(time.time() * 1000))'
@@ -119,14 +184,14 @@ if rerun_detail_file:
                     continue
                 parts = line.split(":")
                 if len(parts) >= 4:
-                    name, status, restored_str, final_source = parts[0], parts[1], parts[2], parts[3]
+                    name, seg_status, restored_str, final_source = parts[0], parts[1], parts[2], parts[3]
                 elif len(parts) == 1:
-                    name, status, restored_str, final_source = parts[0], "unknown", "false", "rerun"
+                    name, seg_status, restored_str, final_source = parts[0], "unknown", "false", "rerun"
                 else:
                     continue
                 rerun_detail.append({
                     "name": name,
-                    "status": status,
+                    "status": seg_status,
                     "restored": restored_str.lower() == "true",
                     "final_source": final_source,
                 })
@@ -630,45 +695,16 @@ if echo "$decision" | grep -q "^all_passed$"; then
       continue
     fi
 
-    # 事务同步：先复制到临时目录，全部成功后 mv 覆盖
+    # 原子同步：目录级交换（自动清理过期文件，失败时原目录不变）
     _rerun_mineru_dir="$(dirname "$rerun_md")"
     _orig_mineru_dir="$(dirname "$original_md")"
-    _tx_dir="$(mktemp -d "$_orig_mineru_dir/.tx_XXXXXX" 2>/dev/null)" || {
-      log "⚠ 无法创建临时目录（保留原结果）: ${name}"
-      continue
-    }
 
     log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+    _atomic_sync_rerun \
+      "$_rerun_mineru_dir" "$_orig_mineru_dir" \
+      "$rerun_md" "$(basename "$original_md")" "$name"
 
-    if ! (
-      set -e
-      cp "$rerun_md" "$_tx_dir/$(basename "$original_md")"
-      # content_list v1 + v2
-      for _cl in "$_rerun_mineru_dir"/*_content_list.json; do
-        [[ -f "$_cl" ]] && cp "$_cl" "$_tx_dir/"
-      done
-      # middle.json / model.json
-      [[ -f "$_rerun_mineru_dir/middle.json" ]] && cp "$_rerun_mineru_dir/middle.json" "$_tx_dir/"
-      [[ -f "$_rerun_mineru_dir/model.json" ]] && cp "$_rerun_mineru_dir/model.json" "$_tx_dir/"
-      # images
-      if [[ -d "$_rerun_mineru_dir/images" ]]; then
-        mkdir -p "$_tx_dir/images"
-        for _img in "$_rerun_mineru_dir/images"/*; do
-          [[ -f "$_img" ]] || continue
-          cp "$_img" "$_tx_dir/images/"
-        done
-      fi
-      # 全部成功 → mv 覆盖目标目录（同文件系统，原子操作）
-      for _f in "$_tx_dir"/* "$_tx_dir"/.*; do
-        [[ -e "$_f" ]] || continue
-        mv "$_f" "$_orig_mineru_dir/"
-      done
-      rmdir "$_tx_dir"
-    ); then
-      log "⚠ 同步失败，已回滚（保留原结果）: ${name}"
-      rm -rf "$_tx_dir"
-    fi
-    unset _rerun_mineru_dir _orig_mineru_dir _tx_dir
+    unset _rerun_mineru_dir _orig_mineru_dir
   done
 
   log
@@ -737,41 +773,16 @@ if echo "$decision" | grep -q "^has_issues$"; then
       continue
     fi
 
-    # 事务同步：先复制到临时目录，全部成功后 mv 覆盖
+    # 原子同步：目录级交换（自动清理过期文件，失败时原目录不变）
     _rerun_mineru_dir="$(dirname "$rerun_md")"
     _orig_mineru_dir="$(dirname "$original_md")"
-    _tx_dir="$(mktemp -d "$_orig_mineru_dir/.tx_XXXXXX" 2>/dev/null)" || {
-      log "⚠ 无法创建临时目录（保留原结果）: ${name}"
-      continue
-    }
 
     log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+    _atomic_sync_rerun \
+      "$_rerun_mineru_dir" "$_orig_mineru_dir" \
+      "$rerun_md" "$(basename "$original_md")" "$name"
 
-    if ! (
-      set -e
-      cp "$rerun_md" "$_tx_dir/$(basename "$original_md")"
-      for _cl in "$_rerun_mineru_dir"/*_content_list.json; do
-        [[ -f "$_cl" ]] && cp "$_cl" "$_tx_dir/"
-      done
-      [[ -f "$_rerun_mineru_dir/middle.json" ]] && cp "$_rerun_mineru_dir/middle.json" "$_tx_dir/"
-      [[ -f "$_rerun_mineru_dir/model.json" ]] && cp "$_rerun_mineru_dir/model.json" "$_tx_dir/"
-      if [[ -d "$_rerun_mineru_dir/images" ]]; then
-        mkdir -p "$_tx_dir/images"
-        for _img in "$_rerun_mineru_dir/images"/*; do
-          [[ -f "$_img" ]] || continue
-          cp "$_img" "$_tx_dir/images/"
-        done
-      fi
-      for _f in "$_tx_dir"/* "$_tx_dir"/.*; do
-        [[ -e "$_f" ]] || continue
-        mv "$_f" "$_orig_mineru_dir/"
-      done
-      rmdir "$_tx_dir"
-    ); then
-      log "⚠ 同步失败，已回滚（保留原结果）: ${name}"
-      rm -rf "$_tx_dir"
-    fi
-    unset _rerun_mineru_dir _orig_mineru_dir _tx_dir
+    unset _rerun_mineru_dir _orig_mineru_dir
   done
 
   #--- TOC 段级修复 ---
