@@ -208,11 +208,16 @@ for target in "$@"; do
 
   log
   log "重跑: $seg_name (PDF 第 ${start_page} 页)"
-  rm -rf "$seg_dir"
+  # 备份原段，重跑成功则删除备份，失败则恢复
+  _backup_dir="${seg_dir}.backup"
+  if [[ -d "$seg_dir" ]]; then
+    mv "$seg_dir" "$_backup_dir"
+  fi
   mkdir -p "$seg_dir"
 
   _api_arg=(--api-url "$api_url")
 
+  _rerun_ok=false
   # mineru uses 0-based page indices
   if mineru \
     -p "$pdf_path" \
@@ -231,6 +236,7 @@ for target in "$@"; do
       log "  ✓ 完成"
       rerun_count=$((rerun_count + 1))
       _rerun_results+=("${seg_name}:${start_page}:${end_page}:done")
+      _rerun_ok=true
     else
       log "  ✗ 完成但无 Markdown 输出"
       _rerun_results+=("${seg_name}:${start_page}:${end_page}:no_markdown")
@@ -239,6 +245,18 @@ for target in "$@"; do
     log "  ✗ 失败"
     _rerun_results+=("${seg_name}:${start_page}:${end_page}:failed")
   fi
+
+  # 重跑成功则清理备份，否则恢复原始
+  if $_rerun_ok; then
+    rm -rf "$_backup_dir"
+  else
+    rm -rf "$seg_dir"
+    if [[ -d "$_backup_dir" ]]; then
+      mv "$_backup_dir" "$seg_dir"
+      log "  ℹ 已恢复原始段: $seg_name"
+    fi
+  fi
+  unset _rerun_ok _backup_dir
 done
 
 log
