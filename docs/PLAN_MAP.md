@@ -32,6 +32,7 @@
 | [pdf-evaluation-suite](plans/pdf-evaluation-suite.md) | 已完成 | P4a/P4b/P4c 全部已完成 | 2026-07-10 | pdf-workflow-enhancement-roadmap、coverage-validation-optimization、春风 150AURA 输出包 | [P4a 验收](plans/pdf-evaluation-suite.md#验收记录2026-07-08)、[P4b 验收](plans/pdf-evaluation-suite.md#验收记录p4b2026-07-08)、[P4c 验收](plans/pdf-evaluation-suite.md#验收记录p4c2026-07-10) |
 | [per-page-anchors](plans/per-page-anchors.md) | 已完成 | 全阶段（0-4） | 2026-07-10 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、structured-data-extraction、春风 150AURA 输出包 | [阶段 4 验收](plans/per-page-anchors.md#阶段-4-验收记录2026-07-10) |
 | [pdf-auto-repair-before-merge](plans/pdf-auto-repair-before-merge.md) | 已完成 | 全阶段（0-3）：修复—合并顺序、manifest 泄漏修复、真实样本验收 | 2026-07-11 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、per-page-anchors、demo5 真实样本 | [阶段 3 验收](plans/pdf-auto-repair-before-merge.md#阶段-3-验收记录2026-07-11) |
+| [single-page-segmentation-migration](plans/single-page-segmentation-migration.md) | 实施中 | 阶段 1：单页默认与旧段级输入兼容 | 2026-07-11 | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors、demo20 第 12 页 fallback 证据 | [Step 0 证据](plans/single-page-segmentation-migration.md#step-0-证据) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -52,6 +53,7 @@
 13. `pdf-evaluation-suite`（P4；P4a/P4b/P4c 全部已完成）
 14. `per-page-anchors`（合并 md 逐页锚点；已完成）
 15. `pdf-auto-repair-before-merge`（TOC 修复前置、`needs_review` 合并产物、manifest 泄漏修复；已完成）
+16. `single-page-segmentation-migration`（单页默认、页级重跑与 fallback；实施中）
 
 ## 依赖关系
 
@@ -93,6 +95,7 @@
 | per-page-anchors | pdf-output-package-layout | 扩展合并 md 锚点格式（段级锚点保留，新增逐页锚点） |
 | per-page-anchors | coverage-validation-optimization | TOC 段由 `toc_repair` 后处理，逐页锚点需识别并回退段级 |
 | pdf-auto-repair-before-merge | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、per-page-anchors | 调整 `pdf-auto` 的 TOC 修复时序、`needs_review` 合并产物和逐页锚点兼容边界 |
+| single-page-segmentation-migration | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors | 将解析、重跑、fallback 和合并的主操作单位从 10 页段收敛到单页，同时保留旧段级输入兼容 |
 | per-page-anchors | structured-data-extraction | 阶段 4 复用逐页锚点收窄 `page_start/page_end` |
 | per-page-anchors | 春风 150AURA 输出包 | Step 0 保真度实测与 `content_list.json` `page_idx` 基线 |
 

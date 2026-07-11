@@ -57,9 +57,9 @@ MODELPAD_PDF_START_TIMEOUT=120
   doc.md                   ← 合并后的 Markdown
   review.md                ← 人工复核清单
   manifest.json            ← 解析状态元数据
-  segments/                ← 分段解析产物
-    p0001-0010/
-    p0011-0020/
+  segments/                ← 分段解析产物（默认每页一段，可设 MINERU_SEGMENT_SIZE 覆盖）
+    p0001-0001/
+    p0002-0002/
     ...
   images/                  ← 提取的图片（预留）
   data/                    ← 结构化数据
