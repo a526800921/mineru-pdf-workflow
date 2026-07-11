@@ -20,6 +20,7 @@ VOLUME_INFLATION_MULTIPLIER = 4   # Markdown 字节 ≥ PDF 原生字节 × 4
 VOLUME_INFLATION_MIN_BYTES = 20480  # 且 ≥ 20 KiB
 TEXT_COVERAGE_MIN_PDF_TOKENS = 50   # PDF 原生 token ≥ 50
 TEXT_COVERAGE_THRESHOLD = 0.5       # 且覆盖率 < 50%
+HEADER_BAND_RATIO = 0.08            # 表头带高度 = 页高 × 0.08（首个数据行上方，排除页标题）
 
 
 # ── 内部工具 ─────────────────────────────────────────────
@@ -429,14 +430,49 @@ def detect_native_table_text_omission(
             if i not in matched_indices:
                 missing_raw.add(left_items[i][2])
 
+    # ── 顶部表头行丢失检测（阶段 4）────────────────────────
+    # 触发条件：某个 HTML 表格首行全为空单元格（MinerU 生成了表头行但内容丢失），
+    # 且首个数据行上方的表格区域内存在原生文字、该文字未出现在整份 Markdown 中。
+    # 用「不在整份 md」排除页标题/页眉；用表头带和表格 x 范围排除正文和页边文字。
+    header_missing: set[str] = set()
+    has_empty_header = any(
+        grid and grid[0] and all(not c.strip() for c in grid[0])
+        for grid in tables
+    )
+    if has_empty_header:
+        anchored = [
+            line for line in visual_lines
+            if any(_normalize_table_text(t) in html_all for _, _, _, t in line)
+        ]
+        if anchored:
+            first_data_y = min(min(y for _, _, y, _ in line) for line in anchored)
+            tbl_x0 = min(x0 for line in anchored for x0, _, _, _ in line)
+            tbl_x1 = max(x1 for line in anchored for _, x1, _, _ in line)
+            md_norm = _normalize_table_text(md_text)
+            header_band = page_height * HEADER_BAND_RATIO
+            for line in visual_lines:
+                ly = min(y for _, _, y, _ in line)
+                if ly >= first_data_y or ly < first_data_y - header_band:
+                    continue  # 不在首个数据行上方的表头带内
+                for x0, x1, _, t in line:
+                    nt = _normalize_table_text(t)
+                    if not nt or nt in html_all or nt in md_norm:
+                        continue  # 空、已在表格、或 MinerU 已在别处输出（页标题等）
+                    if x1 < tbl_x0 or x0 > tbl_x1:
+                        continue  # 落在表格水平范围外（页眉页边）
+                    header_missing.add(t)
 
+    missing_raw |= header_missing
     missing_texts = sorted(missing_raw)
     signals = ["native_table_text_missing"] if missing_texts else []
-    return signals, {
+    metrics = {
         "native_table_candidates": len(html_first_col),
         "native_table_missing": len(missing_texts),
         "missing_text": missing_texts,
     }
+    if header_missing:
+        metrics["missing_scope"] = "header_row"
+    return signals, metrics
 
 
 

@@ -474,6 +474,74 @@ class TestNativeTableTextOmission(unittest.TestCase):
             f"footer text should not trigger: {metrics.get('missing_text')}",
         )
 
+    # ── 阶段 4：整表头/顶部列头丢失检测 ──────────────────────
+    _EMPTY_HDR = (
+        "参数\n\n<table><tr><td></td><td></td></tr>"
+        "<tr><td>性能</td><td>值1</td></tr>"
+        "<tr><td>尺寸</td><td>值2</td></tr>"
+        "<tr><td>重量</td><td>值3</td></tr></table>"
+    )
+    # 三个数据行的视觉行：性能 y=90、尺寸 y=110、重量 y=130
+    _DATA_WORDS = [
+        (44, 90, 64, 100, "性能", 0, 0, 0), (260, 90, 300, 100, "值1", 0, 0, 0),
+        (44, 110, 64, 120, "尺寸", 0, 0, 0), (260, 110, 300, 120, "值2", 0, 0, 0),
+        (44, 130, 64, 140, "重量", 0, 0, 0), (260, 130, 300, 140, "值3", 0, 0, 0),
+    ]
+
+    def test_p14_header_row_missing_detected(self):
+        """p14 车型列头（150 AURA/CF150T-32/CF150T-32A）整行丢失被发现。"""
+        doc = fitz.open(self.pdf_path)
+        words = doc[13].get_text("words")
+        w, h = doc[13].rect.width, doc[13].rect.height
+        md = self._get_page_md(14)
+        doc.close()
+        self.assertTrue(md, "p14 md should exist")
+        signals, metrics = detect_native_table_text_omission(md, words, w, h)
+        self.assertIn("native_table_text_missing", signals)
+        self.assertEqual(metrics.get("missing_scope"), "header_row")
+        self.assertTrue(
+            any("CF150T" in t or "AURA" in t for t in metrics.get("missing_text", [])),
+            f"missing_text 应含车型标识: {metrics.get('missing_text')}",
+        )
+
+    def test_header_missing_in_table_region_detected(self):
+        """空表头行上方、表格区域内的丢失文字被发现。"""
+        words = [(260, 70, 320, 84, "车型X", 0, 0, 0)] + self._DATA_WORDS
+        signals, metrics = detect_native_table_text_omission(self._EMPTY_HDR, words, 556, 386)
+        self.assertIn("native_table_text_missing", signals)
+        self.assertIn("车型X", metrics["missing_text"])
+        self.assertEqual(metrics.get("missing_scope"), "header_row")
+
+    def test_empty_header_no_text_above_no_false_positive(self):
+        """合法空表头（表头带内无原生文字）不误报。"""
+        signals, metrics = detect_native_table_text_omission(
+            self._EMPTY_HDR, self._DATA_WORDS, 556, 386)
+        self.assertNotIn("native_table_text_missing", signals,
+                         f"legit empty header should not trigger: {metrics.get('missing_text')}")
+
+    def test_header_text_already_in_md_no_false_positive(self):
+        """表头带内文字已出现在 md（如页标题）不误报。"""
+        words = [(260, 70, 300, 84, "参数", 0, 0, 0)] + self._DATA_WORDS
+        signals, metrics = detect_native_table_text_omission(self._EMPTY_HDR, words, 556, 386)
+        self.assertNotIn("native_table_text_missing", signals,
+                         f"md-present title should not trigger: {metrics.get('missing_text')}")
+
+    def test_header_text_outside_table_xspan_no_false_positive(self):
+        """表头带内但落在表格水平范围外的文字（页眉页边）不误报。"""
+        words = [(520, 70, 556, 84, "页眉右", 0, 0, 0)] + self._DATA_WORDS
+        signals, metrics = detect_native_table_text_omission(self._EMPTY_HDR, words, 556, 386)
+        self.assertNotIn("native_table_text_missing", signals,
+                         f"out-of-table text should not trigger: {metrics.get('missing_text')}")
+
+    def test_nonempty_first_row_no_header_check(self):
+        """首行非空时不走表头丢失逻辑。"""
+        html = ("<table><tr><td>标题</td><td>H</td></tr>"
+                "<tr><td>性能</td><td>值1</td></tr><tr><td>尺寸</td><td>值2</td></tr></table>")
+        words = [(260, 70, 320, 84, "车型X", 0, 0, 0)] + self._DATA_WORDS
+        signals, metrics = detect_native_table_text_omission(html, words, 556, 386)
+        self.assertNotIn("native_table_text_missing", signals,
+                         f"non-empty first row should not trigger header logic: {metrics.get('missing_text')}")
+
     def test_rowspan_carried_in_grid(self):
         """rowspan 展开后，后续行对应列继承单元格文本。"""
         html = (
