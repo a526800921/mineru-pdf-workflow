@@ -28,6 +28,7 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 - 脚本位于 `<project>/scripts/`，可通过绝对路径调用，也可将 `scripts/` 加入 `PATH`。
 - 自动化 PDF 流程使用 `scripts/pdf-auto <pdf> <segments_dir>`；需要机器可读结果时设置 `PDF_AUTO_JSON=1`。
 - ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9999`。
+- 项目脚本使用的 MinerU CLI 与 ModelPad PDF 服务保持同版本；当前统一为 MinerU `3.4.4`。
 
 ## ModelPad PDF 服务
 
@@ -60,6 +61,7 @@ MODELPAD_PDF_START_TIMEOUT=120
     p0001-0001/
     p0002-0002/
     ...
+    pXXXX-XXXX-fallback/  ← 页级质量 fallback 候选，与原始页并存
   images/                  ← 提取的图片（预留）
   data/                    ← 结构化数据
     quick_lookup_draft.csv
@@ -80,6 +82,8 @@ MODELPAD_PDF_START_TIMEOUT=120
 
 - `scripts/pdf-seg /path/to/doc.pdf` 输出到 `/path/to/segments/`。
 - `scripts/pdf-auto /path/to/doc.pdf /path/to/segments` 默认合并到 `/path/to/doc.md`，人工复核清单为 `/path/to/review.md`。
+- 单页质量异常先在 consistency check 后、`pdf-validate` 前检测；fallback 只重跑异常页，使用 `effort=high` 与 `--image-analysis false`，并保留原始页与 `-fallback` 候选。
+- `manifest.json.page_fallback` 记录每页触发信号、原始/fallback 参数、质量指标、执行状态和 `selected`；合并按 selected 选择同源候选，不只替换 Markdown。
 - `pdf-seg` 和 `pdf-auto` 启动时会校验 `manifest.json` 中的 PDF hash、页数、单页分段配置和 MinerU 关键参数；发现旧格式、旧多页目录、缺页或配置不匹配时，会清理 `segments/` 并从头按当前配置重建。
 - 启动清理只作用于 `segments/` 下的解析生成物；`pdf-rerun` 是定点修复入口，发现目录不匹配时应先重新执行全量 `pdf-seg`，不会静默删除整包。
 - `scripts/pdf-extract-data /path/to` 写入 `<pdf_dir>/data/`。

@@ -143,7 +143,7 @@ emit_json() {
   local review_path="${4:-}"
   local validate_tmp="${5:-}"
 
-  python3 - "$status" "$exit_code" "$merged_path" "$review_path" "$validate_tmp" "$_rerun_names_file" "$_rerun_detail_file" <<'PY'
+  python3 - "$status" "$exit_code" "$merged_path" "$review_path" "$validate_tmp" "$_rerun_names_file" "$_rerun_detail_file" "${segments_dir:-}" <<'PY'
 import json, sys
 
 status = sys.argv[1]
@@ -200,6 +200,16 @@ if rerun_detail_file:
     except Exception:
         pass
 
+page_fallback = None
+segments_path = sys.argv[8] if len(sys.argv) > 8 else ""
+if segments_path:
+    try:
+        manifest_path = __import__("pathlib").Path(segments_path).parent / "manifest.json"
+        with manifest_path.open(encoding="utf-8") as f:
+            page_fallback = json.load(f).get("page_fallback")
+    except Exception:
+        pass
+
 output = {
     "status": status,
     "exit_code": exit_code,
@@ -207,6 +217,7 @@ output = {
     "review_markdown": review,
     "rerun_segments": rerun_segments,
     "rerun_detail": rerun_detail if rerun_detail else None,
+    "page_fallback": page_fallback,
 }
 json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
 sys.stdout.write("\n")
@@ -337,6 +348,7 @@ usage() {
 可选环境变量:
   PDF_VALIDATE_THRESHOLD=0.82    覆盖率阈值
   MINERU_RERUN_EFFORT=high       重跑精度
+  MINERU_FALLBACK_EFFORT=high    页级质量 fallback 精度（配合 image_analysis=false）
   PDF_AUTO_MERGE_OUTPUT           合并输出路径（覆盖默认路径）
   PDF_AUTO_JSON=1                输出机器可读 JSON（stdout），人类可读信息改到 stderr
 EOF
@@ -389,6 +401,7 @@ segment_size="${MINERU_SEGMENT_SIZE:-1}"
 segment_backend="${MINERU_BACKEND:-hybrid-engine}"
 segment_method="${MINERU_METHOD:-auto}"
 segment_effort="${MINERU_EFFORT:-medium}"
+fallback_effort="${MINERU_FALLBACK_EFFORT:-high}"
 segment_lang="${MINERU_LANG:-ch}"
 
 pages="$(python3 - "$pdf_path" <<'PY'
@@ -442,7 +455,7 @@ if ! check_segment_consistency "$segments_dir" "$pdf_path" "$pages" "$segment_si
 fi
 
 # ── 页级质量检测与 fallback ──────────────────────────
-# 单页模式下，对每页运行 4 个信号检测；命中后以 image_analysis=false 重跑该页，
+# 单页模式下，对每页运行 4 个信号检测；命中后以 effort=high + image_analysis=false 重跑该页，
 # 比较质量后选择保留原始或采用 fallback 结果。
 source "$_scripts_dir/lib/mineru-runner"
 
@@ -463,6 +476,17 @@ segments_dir = Path(sys.argv[1])
 pdf_path = sys.argv[2]
 quality_tmp = sys.argv[3]
 
+# 跨执行跳过：manifest 标记了 fallback_attempted 的页不再重复检测
+manifest_path = segments_dir.parent / "manifest.json"
+skip_pages: set[int] = set()
+if manifest_path.exists():
+    try:
+        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if m.get("fallback_attempted") and m.get("page_fallback"):
+            skip_pages = {int(k) for k in m["page_fallback"]}
+    except (ValueError, OSError):
+        pass
+
 segment_re = __import__('re').compile(r"^p(\d{4,})-(\d{4,})$")
 triggered = []
 
@@ -476,6 +500,8 @@ with fitz.open(pdf_path) as doc:
         start, end = int(m.group(1)), int(m.group(2))
         if start != end:
             continue  # skip multi-page segments
+        if start in skip_pages:
+            continue  # 已做过 fallback，跳过检测
         page_idx = start - 1
         pdf_text = doc[page_idx].get_text()
         md_files = sorted(child.rglob("*.md"))
@@ -507,7 +533,7 @@ PY
   if [[ "$_quality_count" -gt 0 ]]; then
     log "发现 ${_quality_count} 页存在质量异常，执行 fallback 重跑"
 
-    # ── fallback 重跑阶段：逐页 mineru --image-analysis false ──
+    # ── fallback 重跑阶段：逐页 mineru --effort high --image-analysis false ──
     _quality_succeeded=""
 
     while IFS= read -r line; do
@@ -520,9 +546,9 @@ PY
       rm -rf "$fb_dir" 2>/dev/null || true
       mkdir -p "$fb_dir"
 
-      log "  fallback: ${name} (page ${page}, image_analysis=false)"
+      log "  fallback: ${name} (page ${page}, effort=${fallback_effort}, image_analysis=false)"
       if result="$(_run_mineru_page "$pdf_path" "$fb_dir" "$page_0b" "$page_0b" \
-          "$segment_backend" "$segment_method" "$segment_effort" "$segment_lang" "$api_url" \
+          "$segment_backend" "$segment_method" "$fallback_effort" "$segment_lang" "$api_url" \
           "--image-analysis" "false")"; then
         _quality_succeeded="${_quality_succeeded}${name}:${page}"$'\n'
         log "  ✓ ${name} fallback 完成"
@@ -534,31 +560,11 @@ PY
     done <<< "$_quality_detect"
 
     # ── 比较选择阶段 ──
+    # 不再目录替换：原始保留在 pXXXX-XXXX/，fallback 保留在 pXXXX-XXXX-fallback/
+    # pdf-merge 通过 manifest.page_fallback.selected 决定合并输入
     if [[ -n "$_quality_succeeded" ]]; then
-      while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-
-        action="${line%%:*}"
-        rest="${line#*:}"
-        name="${rest%%:*}"
-        page="${rest##*:}"
-
-        if [[ "$action" == "SWAP" ]]; then
-          orig_dir="$segments_dir/$name"
-          fb_dir="${orig_dir}-fallback"
-          if [[ -d "$orig_dir" && -d "$fb_dir" ]]; then
-            mv "$orig_dir" "${orig_dir}-original"
-            mv "$fb_dir" "$orig_dir"
-            log "  ✓ ${name}: fallback 质量更好，已替换（原始备份到 -original/）"
-          fi
-        elif [[ "$action" == "REVIEW" ]]; then
-          log "  ? ${name}: 无法判断，保留原始 + fallback 候选（进入 review）"
-        else
-          log "  - ${name}: fallback 无改善，保留原始结果"
-          rm -rf "$segments_dir/${name}-fallback" 2>/dev/null || true
-        fi
-      done <<< "$(
-        python3 - "$segments_dir" "$_quality_tmp" "$pdf_path" "$_scripts_dir" "$_quality_succeeded" <<'PY'
+      python3 - "$segments_dir" "$_quality_tmp" "$pdf_path" "$_scripts_dir" "$_quality_succeeded" \
+          "$segment_backend" "$segment_method" "$segment_effort" "$segment_lang" "$fallback_effort" <<'PY' | while IFS= read -r line; do log "$line"; done
 import json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[4])
@@ -568,6 +574,26 @@ import fitz
 segments_dir = Path(sys.argv[1])
 quality_tmp = sys.argv[2]
 pdf_path = sys.argv[3]
+
+# 原始解析参数（由 shell 传入）
+orig_backend = sys.argv[6]
+orig_method = sys.argv[7]
+orig_effort = sys.argv[8]
+orig_lang = sys.argv[9]
+fallback_effort = sys.argv[10]
+original_params = {
+    "backend": orig_backend,
+    "method": orig_method,
+    "effort": orig_effort,
+    "lang": orig_lang,
+}
+fallback_params = {
+    "backend": orig_backend,
+    "method": orig_method,
+    "effort": fallback_effort,
+    "lang": orig_lang,
+    "image_analysis": False,
+}
 
 with open(quality_tmp) as f:
     triggered = json.load(f)
@@ -580,6 +606,8 @@ for ln in sys.argv[5].strip().split("\n"):
         continue
     sn, sp = ln.split(":", 1)
     succeeded_pages[int(sp)] = sn
+
+all_triggered_pages = set(page_data.keys())
 
 doc = fitz.open(pdf_path)
 manifest_path = segments_dir.parent / "manifest.json"
@@ -614,17 +642,44 @@ for page_num in sorted(succeeded_pages.keys()):
     page_fallback[str(page_num)] = {
         "selected": selection,
         "reason": sig_info,
+        "fb_status": "completed",
+        "attempt_count": 1,
+        "original_path": f"{name}/",
+        "fallback_path": f"{name}-fallback/",
+        "original_params": original_params,
+        "fallback_params": fallback_params,
         "original_metrics": orig_res["metrics"],
         "fallback_metrics": fb_res["metrics"],
     }
 
     if selection == "fallback":
-        print(f"SWAP:{name}:{page_num}")
+        print(f"  [fallback] {name}: selected=fallback（原始保留，pdf-merge 将使用 -fallback/ 目录）")
     elif selection == "review":
-        print(f"REVIEW:{name}:{page_num}")
+        print(f"  [review] {name}: 无法判断，保留原始 + fallback 候选（进入 review）")
     else:
-        print(f"KEEP:{name}:{page_num}")
+        print(f"  [original] {name}: fallback 无改善，保留原始结果")
+        # fallback 候选保留，供 manifest 追溯、人工比较和后续复验使用。
 
+# 标记触发了检测但 fallback 重跑失败的页
+failed_pages = all_triggered_pages - set(succeeded_pages.keys())
+for page_num in sorted(failed_pages):
+    entry = page_data[page_num]
+    page_fallback[str(page_num)] = {
+        "selected": "review",
+        "reason": ", ".join(entry.get("signals", [])),
+        "fb_status": "failed",
+        "fb_failure_reason": "mineru fallback 重跑退出非零或超时",
+        "attempt_count": 1,
+        "original_path": f"{entry['name']}/",
+        "fallback_path": None,
+        "original_params": original_params,
+        "fallback_params": fallback_params,
+        "original_metrics": entry.get("metrics", {}),
+        "fallback_metrics": None,
+    }
+    print(f"  [review] {entry['name']}: fallback 重跑失败，进入 review")
+
+manifest["fallback_attempted"] = True
 manifest["page_fallback"] = page_fallback
 manifest_path.write_text(
     json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -632,11 +687,53 @@ manifest_path.write_text(
 )
 doc.close()
 PY
-      )"
 
       log "页级质量检测完成（${_quality_count} 页处理）"
     else
       log "所有 fallback 重跑均失败，保留原始结果"
+      # 写入 manifest 记录所有失败页
+      python3 - "$segments_dir" "$_quality_tmp" "$_scripts_dir" \
+          "$segment_backend" "$segment_method" "$segment_effort" "$segment_lang" "$fallback_effort" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+segments_dir = Path(sys.argv[1])
+quality_tmp = sys.argv[2]
+with open(quality_tmp) as f:
+    triggered = json.load(f)
+manifest_path = segments_dir.parent / "manifest.json"
+manifest = {}
+if manifest_path.exists():
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+pf = manifest.get("page_fallback", {})
+params = {"backend": sys.argv[4], "method": sys.argv[5], "effort": sys.argv[6], "lang": sys.argv[7]}
+fb_params = {
+    "backend": sys.argv[4],
+    "method": sys.argv[5],
+    "effort": sys.argv[8],
+    "lang": sys.argv[7],
+    "image_analysis": False,
+}
+for t in triggered:
+    p = str(t["page"])
+    if p in pf:
+        continue
+    pf[p] = {
+        "selected": "review",
+        "reason": ", ".join(t.get("signals", [])),
+        "fb_status": "failed",
+        "fb_failure_reason": "mineru fallback 重跑退出非零或超时",
+        "attempt_count": 1,
+        "original_path": f"{t['name']}/",
+        "fallback_path": None,
+        "original_params": params,
+        "fallback_params": fb_params,
+        "original_metrics": t.get("metrics", {}),
+        "fallback_metrics": None,
+    }
+manifest["fallback_attempted"] = True
+manifest["page_fallback"] = pf
+manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
     fi
   else
     log "页级质量检测通过，无异常页面"
@@ -644,6 +741,35 @@ PY
 
   rm -f "$_quality_tmp" 2>/dev/null || true
   unset _quality_tmp _quality_detect _quality_count _quality_succeeded
+fi
+
+# 质量 fallback 检测：是否有页进入 review 或 fallback 失败
+_quality_needs_review=false
+if [[ "$segment_size" -eq 1 ]]; then
+  _quality_needs_review="$(
+    python3 - "$segments_dir" <<'PY'
+import json, sys
+from pathlib import Path
+manifest_path = Path(sys.argv[1]).parent / "manifest.json"
+if not manifest_path.exists():
+    print("false")
+    sys.exit(0)
+try:
+    m = json.loads(manifest_path.read_text(encoding="utf-8"))
+except (ValueError, OSError):
+    print("false")
+    sys.exit(0)
+pf = m.get("page_fallback", {})
+for entry in pf.values():
+    if entry.get("selected") in ("review",):
+        print("true")
+        sys.exit(0)
+    if entry.get("fb_status") == "failed":
+        print("true")
+        sys.exit(0)
+print("false")
+PY
+  )"
 fi
 
 # 提取 PDF 文件名（无扩展名） 用于自动推导合并输出
@@ -708,6 +834,12 @@ PY
 }
 
 step_done
+
+# 质量 fallback 有 review/failed 页 → 强制进入 needs_review 路径
+if [[ "$_quality_needs_review" == "true" && "$action" == "merge" ]]; then
+  action="needs_review"
+fi
+
 if [[ "$action" == "rerun" ]]; then
   _step_total=4
 fi
@@ -985,6 +1117,11 @@ PY
 }
 
 step_done
+
+# 二次覆盖度验证可能全部通过，但页级 fallback 的 review/failed 仍必须保留人工复核状态。
+if [[ "$_quality_needs_review" == "true" && "$decision" == "all_passed" ]]; then
+  decision="has_issues"
+fi
 
 merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
 

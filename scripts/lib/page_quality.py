@@ -186,33 +186,58 @@ def compare_quality(
     """
     比较 original 和 fallback 的质量指标，返回选择建议。
 
+    判定维度：
+        1. 表格结构：空 <td> 数量、单行最大列数
+        2. 文本完整性：文本覆盖率、Markdown 体积
+
     返回值：
-        "original" — fallback 无改善或更差
-        "fallback" — 空单元格明显减少，文本没有明显减少
-        "review"   — 无法明确判断（一个改善、一个恶化）
+        "fallback" — 表格结构明显改善且文本完整性未退化
+        "original" — 表格结构无改善且文本完整性退化
+        "review"   — 无法明确判断
 
     判定逻辑：
-        - fallback 空 <td> 减少至少一半 → 改善
-        - fallback 文本量保持原始 80% 以上 → 文本 OK
+        - 表格改善 = 空 <td> 减少至少一半 或 单行列数减少至少 20%
+        - 文本 OK = 文本覆盖率保持原始 80% 以上（最小值 0.3）
+                     且 MD 字节保持原始 80% 以上；如果覆盖率上升，允许
+                     Markdown 因删除重复空单元格而显著变小
         - 改善且文本 OK → fallback
         - 未改善且文本丢失 → original
         - 其它组合 → review
     """
     orig_empty = original_metrics.get("empty_td", 0)
     fb_empty = fallback_metrics.get("empty_td", 0)
+    orig_cols = original_metrics.get("max_td_per_row", 0)
+    fb_cols = fallback_metrics.get("max_td_per_row", 0)
     orig_bytes = original_metrics.get("md_bytes", 0)
     fb_bytes = fallback_metrics.get("md_bytes", 0)
+    orig_cov = original_metrics.get("text_coverage", 1.0)
+    fb_cov = fallback_metrics.get("text_coverage", 1.0)
 
-    # fallback 空单元格减少至少一半
-    # orig_empty=0 说明本页没有表格异常，不应认为"改善"
+    # 表格结构改善
     td_improved = fb_empty < orig_empty * 0.5 if orig_empty > 0 else False
+    col_improved = fb_cols < orig_cols * 0.8 if orig_cols > 0 else False
+    structurally_better = td_improved or col_improved
 
-    # fallback 文本保留至少 80%
-    text_ok = fb_bytes >= orig_bytes * 0.8 if orig_bytes > 0 else True
-
-    if td_improved and text_ok:
-        return "fallback"
-    elif not td_improved and not text_ok:
-        return "original"
+    # 文本完整性（覆盖率为主信号，体积为辅助）
+    # 相等时直接判 OK（避免极低覆盖率被 0.3 下限误判）
+    cov_ok: bool
+    if fb_cov == orig_cov:
+        cov_ok = True
+    elif orig_cov < 1.0:
+        cov_ok = fb_cov >= max(orig_cov * 0.8, 0.3)
     else:
-        return "review"
+        cov_ok = True
+
+    vol_ok = fb_bytes >= orig_bytes * 0.8 if orig_bytes > 0 else True
+
+    # 表格异常常由重复空单元格造成；此时总 Markdown 体积可能从数百 KB
+    # 降到正常正文大小，不能把体积下降本身当成文本丢失。覆盖率上升时，
+    # 以覆盖率作为更可靠的文本完整性证据。
+    text_ok = cov_ok and (vol_ok or fb_cov > orig_cov)
+
+    if structurally_better:
+        # 表格改善 —— 文本完整性保留则采纳
+        return "fallback" if text_ok else "review"
+    else:
+        # 表格无改善 —— 文本覆盖保留则待审，丢失则保留原文
+        return "original" if not cov_ok else "review"

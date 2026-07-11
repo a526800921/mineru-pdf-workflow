@@ -73,6 +73,16 @@ segments_dir = Path(sys.argv[2])
 output = Path(sys.argv[3])
 pkg_images = Path(sys.argv[4])
 
+# 读取 manifest.page_fallback，用于页级质量 fallback 的选择合并
+manifest_path = segments_dir.parent / "manifest.json"
+page_fallback: dict = {}
+if manifest_path.exists():
+    try:
+        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+        page_fallback = m.get("page_fallback", {})
+    except (ValueError, OSError):
+        pass
+
 segment_re = re.compile(r"^p(\d{4,})-(\d{4,})$")
 
 segments = []
@@ -88,7 +98,25 @@ for child in segments_dir.iterdir():
     if not md_files:
         segments.append((start, end, child.name, None))
         continue
-    segments.append((start, end, child.name, md_files[0]))
+
+    # 单页段且 manifest 标记了 selected=fallback → 从 -fallback/ 读 MD
+    md_path = md_files[0]
+    if start == end and page_fallback:
+        fb_entry = page_fallback.get(str(start), {})
+        if fb_entry.get("selected") == "fallback":
+            fb_dir = segments_dir / f"{child.name}-fallback"
+            if not fb_dir.exists():
+                raise SystemExit(
+                    f"manifest 选择 fallback 但候选目录不存在：{fb_dir}"
+                )
+            fb_mds = sorted(fb_dir.rglob("*.md"))
+            if not fb_mds:
+                raise SystemExit(
+                    f"manifest 选择 fallback 但候选目录缺少 Markdown：{fb_dir}"
+                )
+            md_path = fb_mds[0]
+
+    segments.append((start, end, child.name, md_path))
 
 if not segments:
     raise SystemExit(f"没有找到分段目录：{segments_dir}/p0001-0020")
@@ -127,7 +155,6 @@ output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text("".join(pieces), encoding="utf-8")
 
 # 逐页锚点 warning 写入 manifest.json（存在才更新，不新建）
-manifest_path = output.parent / "manifest.json"
 if manifest_path.exists():
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
