@@ -415,6 +415,65 @@ class TestNativeTableTextOmission(unittest.TestCase):
             f"multi-word should not trigger: {metrics.get('missing_text')}",
         )
 
+    def test_no_text_layer_no_false_positive(self):
+        """扫描件无文本层（pdf_words 为空）时跳过原生检测，不误报。"""
+        html = ("<table><tr><td>字段名</td><td>字段值</td></tr>"
+                "<tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></table>")
+        signals, metrics = detect_native_table_text_omission(html, [], 500, 400)
+        self.assertNotIn("native_table_text_missing", signals)
+        self.assertEqual(metrics["native_table_missing"], 0)
+
+    def test_multi_table_missing_in_second_detected(self):
+        """同页多个表格：第二个表格缺失的字段仍被发现。"""
+        html = (
+            "<table><tr><td>参数</td><td>值</td></tr>"
+            "<tr><td>版本</td><td>V1</td></tr><tr><td>日期</td><td>Y</td></tr></table>"
+            "<table><tr><td>温度</td><td>50°C</td></tr>"
+            "<tr><td>气压</td><td>80%</td></tr><tr><td>风速</td><td>3米</td></tr></table>"
+        )
+        words = [
+            (50, 100, 90, 130, "湿度", 0, 0, 0),
+            (300, 100, 340, 130, "80%", 0, 0, 0),
+        ]
+        signals, metrics = detect_native_table_text_omission(html, words, 500, 400)
+        self.assertIn("native_table_text_missing", signals)
+        self.assertIn("湿度", metrics["missing_text"])
+
+    def test_multi_table_present_no_false_positive(self):
+        """同页多个表格：跨表格多词首列字段完整时不误报。"""
+        html = (
+            "<table><tr><td>参数</td><td>值</td></tr>"
+            "<tr><td>版本</td><td>V1</td></tr><tr><td>日期</td><td>Y</td></tr></table>"
+            "<table><tr><td>进气温度</td><td>50°C</td></tr>"
+            "<tr><td>排气温度</td><td>60°C</td></tr><tr><td>水温</td><td>70°C</td></tr></table>"
+        )
+        words = [
+            (50, 100, 90, 130, "进气", 0, 0, 0),
+            (95, 100, 135, 130, "温度", 0, 0, 0),
+            (300, 100, 340, 130, "50°C", 0, 0, 0),
+        ]
+        signals, metrics = detect_native_table_text_omission(html, words, 500, 400)
+        self.assertNotIn(
+            "native_table_text_missing", signals,
+            f"present multi-table field should not trigger: {metrics.get('missing_text')}",
+        )
+
+    def test_footer_text_no_false_positive(self):
+        """页脚区域（底部 15%）的文字被排除，不产生误报。"""
+        html = ("<table><tr><td>速度</td><td>快速</td></tr>"
+                "<tr><td>加速</td><td>迅猛</td></tr><tr><td>刹车</td><td>灵敏</td></tr></table>")
+        words = [
+            (50, 100, 90, 130, "速度", 0, 0, 0),
+            (300, 100, 340, 130, "快速", 0, 0, 0),
+            (50, 360, 90, 390, "版权", 0, 0, 0),
+            (300, 360, 340, 390, "快速", 0, 0, 0),
+        ]
+        signals, metrics = detect_native_table_text_omission(html, words, 500, 400)
+        self.assertNotIn(
+            "native_table_text_missing", signals,
+            f"footer text should not trigger: {metrics.get('missing_text')}",
+        )
+
     def test_rowspan_carried_in_grid(self):
         """rowspan 展开后，后续行对应列继承单元格文本。"""
         html = (
