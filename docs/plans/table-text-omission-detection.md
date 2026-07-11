@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 3：真实样本与边界验收（实施完成，待用户验收）
+- 状态：已完成
+- 当前阶段：阶段 3：真实样本与边界验收（已完成）
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -352,6 +352,19 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
 - `scripts/test-native-fallback.sh`：4/4；`scripts/test-phase2.sh`：37/37。
 - `python3 scripts/check_plan_governance.py .`、`git diff --check`：通过。
 - GitNexus `detect-changes`：风险 low，0 影响流程。
+
+#### 阶段 3 最终验收（2026-07-11）
+
+结论：**通过，阶段 3 已完成，专项计划已完成。**
+
+- demo20 p16 真实运行退出码为 2（`needs_review`），p16 触发 `native_table_text_missing`，识别缺失字段“百公里综合油耗”。
+- `manifest.page_fallback["16"]` 含完整证据：`selected=review`、`detector=pdf_native`、`quality_signals`、`missing_text`、原始/fallback 参数与指标。
+- `review.md` 的“页级质量复核”列出 p16，字段遗漏不会被静默吞掉。
+- 无文本层、未知字段、多表格、跨表格多词字段和页脚边界均通过。
+- 全量 Python 测试 114/114，`scripts/test-native-fallback.sh` 4/4，`scripts/test-phase2.sh` 37/37，`test-phase3.sh` 11/11。
+- 治理检查、`git diff --check` 和 GitNexus detect-changes 通过。
+
+注意：p16 fallback 未能可靠修复字段，因此最终 Markdown 保留原结果并进入 `review`；这是当前安全兜底契约允许的结果，不代表字段已经自动恢复。
 
 ## 验证方式
 
