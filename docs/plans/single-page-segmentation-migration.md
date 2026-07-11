@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 3：页级质量 fallback（实施中）
+- 当前阶段：阶段 3：页级质量 fallback（已完成，待未决问题：fallback 并行化）
 - 最后更新：2026-07-11
 
 ## 背景
@@ -366,6 +366,21 @@ scripts/pdf-merge <segments_dir>
 | 旧 10 页输出是否长期支持 | 不支持；迁移前直接删除，必要时从 PDF 重新生成 | 已决 |
 | 逐页锚点是否保留 | 单页新输出中冗余；阶段 4 先迁移消费者，再删除实现 | 已决 |
 | `pdf-auto` 是否继续保留段级 JSON 聚合字段 | 保留兼容摘要，新增页级重跑明细 | 已决 |
+| fallback 重跑是否并行化 | 当前串行逐页 `while read` 循环；9 页 demo20 ~4 分钟。计划改为 `&`+`wait` 并行，`_quality_succeeded` 改为按进程 ID 写入临时文件再聚合 | 候选 |
+
+## 端到端验收（demo20，2026-07-11）
+
+使用 demo20.pdf（20 页，含表格异常页 p12、p15）验证阶段 3 全流程：
+
+1. **解析**：`segment_size=1`，20 页全部 done。
+2. **质量检测**：触发 9 页（p2-p8 volume_inflation/text_coverage_low，p12/p15 全部 4 信号）。
+3. **Fallback 重跑**：每页 `image_analysis=false`，9/9 成功（串行 ~4 分钟；待并行化）。
+4. **比较选择**：p2 → original（fallback 输出更小），p3-p8 → review（fallback 与原始一致），p12/p15 → review（表格问题未改善）。
+5. **验证**：11 段 pass，9 段 review_only。合并成功 → `demo20.md`。最终状态 `needs_review`。
+
+修复记录：`compare_quality` 中 `orig_empty=0` 时 `td_improved=False`（非表格页不误判 SWAP）。  
+回归测试：test-phase2 38/38 pass。  
+证据文件：`/tmp/demo20-test/manifest.json`（含 `page_fallback` 字段）。
 
 ## 关联计划
 
