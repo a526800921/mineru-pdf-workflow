@@ -85,6 +85,7 @@ MODELPAD_PDF_START_TIMEOUT=120
 - 单页质量异常先在 consistency check 后、`pdf-validate` 前检测；fallback 只重跑异常页，使用 `effort=high` 与 `--image-analysis false`，并保留原始页与 `-fallback` 候选。
 - 表格字段遗漏检测使用 PDF 原生文字的 bbox/视觉行与 MinerU HTML 表格逻辑单元格做通用比对；发现 PDF 表格区域存在、HTML 缺失的字段时产生 `native_table_text_missing`，并记录 `missing_text`、`detector` 和指标。该规则不维护业务字段白名单；无法可靠定位表格区域、无文本层或结果不确定时进入 `review`，不自动覆盖原始结果。
 - `manifest.json.page_fallback` 记录每页触发信号、原始/fallback 参数、质量指标、执行状态和 `selected`；合并按 selected 选择同源候选，不只替换 Markdown。
+- `review.md` 除 pdf-validate 覆盖率类复核段外，还新增“页级质量复核”段，列出 `manifest.page_fallback` 中 `selected=review` 或 `fb_status=failed` 的页（含检测器、触发信号、缺失字段），使原生表格字段遗漏等页级质量问题在人工报告中可见；`selected=fallback` 的页已采纳，不列入。
 - `pdf-seg` 和 `pdf-auto` 启动时会校验 `manifest.json` 中的 PDF hash、页数、单页分段配置和 MinerU 关键参数；发现旧格式、旧多页目录、缺页或配置不匹配时，会清理 `segments/` 并从头按当前配置重建。
 - 启动清理只作用于 `segments/` 下的解析生成物；`pdf-rerun` 是定点修复入口，发现目录不匹配时应先重新执行全量 `pdf-seg`，不会静默删除整包。
 - `scripts/pdf-extract-data /path/to` 写入 `<pdf_dir>/data/`。

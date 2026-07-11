@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 2：接入既有 fallback 闭环（缺口已修复，待复验）
+- 当前阶段：阶段 3：真实样本与边界验收（实施完成，待用户验收）
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -287,11 +287,71 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
 - 全量 Python 测试：105/105 通过。
 - `python3 scripts/check_plan_governance.py .` 与 `git diff --check`：通过。
 
+#### 阶段 2 再次验收（2026-07-11）
+
+结论：**通过，阶段 2 已完成。**
+
+- `scripts/test-native-fallback.sh`：4/4 通过，覆盖字段恢复选择 `fallback`、仍缺失进入 `review`、fallback 失败进入 `review`、跨执行跳过并保留证据。
+- `scripts/test-phase2.sh`：37/37 通过；`test-phase3.sh`：11/11 通过。
+- 全量 Python 测试：105/105 通过。
+- `manifest.page_fallback` 已显式记录 `quality_signals`、`missing_text`、`detector`，并保留旧 `reason` 字段兼容性。
+- 治理检查和 `git diff --check` 通过。
+
+阶段 2 的实现与独立验收完成，专项计划进入阶段 3：真实样本与边界验收。
+
 ### 阶段 3：真实样本与边界验收
 
 - 用 demo20 p16 验证从发现、fallback、比较、合并到 review 的完整链路。
 - 增加没有 PDF 文本层、表格外同名文本、跨页表格和多个表格同页样本。
 - 验证不硬编码字段、不误报页眉页脚，并保持既有 JSON/manifest 兼容契约。
+
+#### 阶段 3 待实施门禁复核（2026-07-11）
+
+结论：**已达到待实施标准。**
+
+- Step 0 已固定：demo20 p16 的 PDF 原生文字包含“百公里综合油耗”，当前 MinerU 单页 Markdown 和中间结构缺失该字段；VLM 报告可识别完整视觉行，仅作为补充证据。
+- 阶段3目标已限定为真实样本和边界验收，不再扩展检测器算法、fallback 参数或 manifest Schema。
+- 验收边界已明确：无文本层、表格外同名文字、跨页表格、多表格、页眉页脚和未知字段；不硬编码字段白名单。
+- 通过条件已明确：p16 触发并产生完整 manifest 证据；fallback 修复成功/未修复/失败分别得到正确选择；最终 Markdown、review.md 和同源中间产物可追溯。
+- 风险与回滚已明确：无法可靠判断进入 `review`；原始和 fallback 双目录保留，可重新合并；VLM 不直接覆盖 MinerU HTML。
+- 没有需要用户确认的阶段3前置问题；真实样本运行本身属于阶段3实施内容。
+
+进入阶段3后，涉及真实 PDF 运行或边界 fixture 扩展时，先更新运行证据，再按 GitNexus impact → 实现/测试 → `detect_changes()` → 治理检查的顺序推进。
+
+#### 阶段 3 实施记录（2026-07-11）
+
+结论：**真实样本与边界验收完成，待用户最终验收。**
+
+提交 `acf04b5`（边界 fixture）+ `4a6ba55`（review.md 页级质量复核段）。
+
+**demo20 p16 真实全链路验收**
+
+重置 manifest fallback 状态后用当前代码全量重跑 `pdf-auto pdf/demo20/demo20.pdf pdf/demo20/segments`，退出码 2（needs_review）：
+
+- p16 触发 `native_table_text_missing`，clean 检测识别缺失字段“百公里综合油耗”。
+- 真实 `manifest.page_fallback["16"]` 含完整契约字段：`selected=review`、`detector=pdf_native`、`quality_signals=["native_table_text_missing"]`、`missing_text=["百公里综合油耗"]`、`fb_status=completed`。
+- detector 区分正确：p16=`pdf_native`；p12/p15=`page_quality`（四类旧信号，`missing_text=[]`）。
+- `parse_status=needs_review`，`review.md` 生成，p16 出现在新“页级质量复核”段。
+- TOC 页 p2–p8 仍由 pdf-validate 的 `review_only` 路径覆盖，两条复核路径互补。
+
+**边界 fixture（`tests/test_page_quality.py`，50/50）**
+
+- `test_no_text_layer_no_false_positive`：扫描件无文本层（`pdf_words=[]`）跳过检测。
+- `test_multi_table_missing_in_second_detected`：同页多表格，第二个表格缺失字段“湿度”（代码中不存在的字段）被发现。
+- `test_multi_table_present_no_false_positive`：跨表格多词首列（“进气温度”）完整时不误报。
+- `test_footer_text_no_false_positive`：页脚区域（底部 15%）文字排除，不误报。
+
+**review.md 纳入页级质量复核（用户要求）**
+
+- `review_report._append_page_fallback_review` 读取 `manifest.page_fallback`，新增“页级质量复核”段列出 `selected=review`/`fb_status=failed` 页；`selected=fallback` 页排除。
+- 新增 `tests/test_review_report.py` 5/5；项目级与用户级 `pdf2md` skill 已同步说明。
+
+**验证**
+
+- 全量 Python 测试：114/114 通过（page_quality 50、review_report 5、native-fallback 依赖等）。
+- `scripts/test-native-fallback.sh`：4/4；`scripts/test-phase2.sh`：37/37。
+- `python3 scripts/check_plan_governance.py .`、`git diff --check`：通过。
+- GitNexus `detect-changes`：风险 low，0 影响流程。
 
 ## 验证方式
 
@@ -319,10 +379,10 @@ git diff --check
 
 ## 完成条件
 
-- [ ] 无字段白名单的原生表格遗漏检测器实现并通过单元测试。
-- [ ] p16 red baseline 转为 green，且至少一个未知字段 fixture 通过。
-- [ ] 检测结果接入页级 fallback，成功修复、未修复、失败和不确定四条路径均有回归。
-- [ ] `manifest.page_fallback` 记录检测器、缺失文本、选择结果和执行状态。
-- [ ] demo20 p16 真实验收通过，或明确进入 `review` 且报告包含缺失字段证据。
-- [ ] 项目级 `skills/pdf2md/SKILL.md` 与用户级 skill 同步说明该检测边界。
-- [ ] 治理检查、全量测试、`git diff --check` 和 GitNexus `detect_changes()` 通过。
+- [x] 无字段白名单的原生表格遗漏检测器实现并通过单元测试。
+- [x] p16 red baseline 转为 green，且至少一个未知字段 fixture 通过。
+- [x] 检测结果接入页级 fallback，成功修复、未修复、失败和不确定四条路径均有回归。
+- [x] `manifest.page_fallback` 记录检测器、缺失文本、选择结果和执行状态。
+- [x] demo20 p16 真实验收通过，或明确进入 `review` 且报告包含缺失字段证据。
+- [x] 项目级 `skills/pdf2md/SKILL.md` 与用户级 skill 同步说明该检测边界。
+- [x] 治理检查、全量测试、`git diff --check` 和 GitNexus `detect_changes()` 通过。
