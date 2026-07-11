@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：待实施
-- 当前阶段：阶段 2：接入既有 fallback 闭环
+- 状态：实施中
+- 当前阶段：阶段 3：真实样本与边界验收
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -211,6 +211,32 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
 - 在 `pdf-auto` 的 consistency check 之后、`pdf-validate` 之前执行该检测。
 - 复用阶段 3 的单页 `effort=high + image_analysis=false` fallback、双目录保存、manifest 选择和 `review` 兜底。
 - 确保 fallback 恢复字段时选择 `fallback`，未恢复时选择 `review`，不能因为整页覆盖率正常而返回 `all_passed`。
+
+#### 阶段 2 完成证据（2026-07-11）
+
+提交 `552319b`：
+
+1. **`compare_quality` 新增 `native_table_missing` 优先判定规则**
+   - 原始页有表格字段缺失（`native_table_missing > 0`）：
+     - fallback 恢复（`fb_missing == 0`）且文本 OK → `fallback`
+     - fallback 恢复但文本丢失 → `review`
+     - 未恢复或部分改善 → `review`（已知有问题不选 `original`）
+   - 无 `native_table_missing` 时完全不影响既有判定逻辑
+
+2. **`pdf-auto` 比较选择阶段传入 `pdf_words` + page bbox**
+   - 检测阶段已传 `pdf_words`（阶段 1），比较选择阶段补齐
+   - `assess_page_quality` 在原始/fallback Markdown 上均能检测 `native_table_text_missing`
+
+3. **回归测试 5 个新增 fixture**
+   - `test_missing_resolved_text_ok` → fallback ✓
+   - `test_missing_resolved_text_lost` → review ✓
+   - `test_missing_not_resolved` → review ✓
+   - `test_missing_partially_resolved` → review ✓
+   - `test_missing_not_present_fallthrough` → 既有逻辑不变 ✓
+   - 全量 Python 测试 105/105 通过；test-phase2 37/37 通过
+   - 治理检查通过
+
+4. **mock 修复**：`test-phase2.sh` 的 mock `page_quality.py` 签名补上 `**kwargs`
 
 ### 阶段 3：真实样本与边界验收
 
