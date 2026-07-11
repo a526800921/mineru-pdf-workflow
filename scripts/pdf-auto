@@ -14,8 +14,9 @@ source "$_scripts_dir/lib/modelpad-pdf-service"
 # --- JSON mode infrastructure ---
 json_mode="${PDF_AUTO_JSON:-0}"
 
-# Temp file for rerun segment name tracking (cleanup added to existing traps in Task 2)
+# Temp files for rerun tracking
 _rerun_names_file="$(mktemp)"
+_rerun_detail_file="$(mktemp)"
 
 # In JSON mode, silence subprocess stdout to /dev/null (prevent polluting JSON output)
 if [[ "$json_mode" == "1" ]]; then
@@ -75,7 +76,7 @@ emit_json() {
   local review_path="${4:-}"
   local validate_tmp="${5:-}"
 
-  python3 - "$status" "$exit_code" "$merged_path" "$review_path" "$validate_tmp" "$_rerun_names_file" <<'PY'
+  python3 - "$status" "$exit_code" "$merged_path" "$review_path" "$validate_tmp" "$_rerun_names_file" "$_rerun_detail_file" <<'PY'
 import json, sys
 
 status = sys.argv[1]
@@ -93,7 +94,7 @@ if rerun_names_file:
     except Exception:
         pass
 
-# Read validation JSON to get rerun segment statuses
+# Read validation JSON to match rerun segment statuses
 rerun_segments = []
 validate_tmp = sys.argv[5]
 if validate_tmp and rerun_names:
@@ -106,12 +107,39 @@ if validate_tmp and rerun_names:
     except Exception:
         pass
 
+# Read rerun detail (per-segment execution result)
+rerun_detail = []
+rerun_detail_file = sys.argv[7]
+if rerun_detail_file:
+    try:
+        with open(rerun_detail_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(":")
+                if len(parts) >= 4:
+                    name, status, restored_str, final_source = parts[0], parts[1], parts[2], parts[3]
+                elif len(parts) == 1:
+                    name, status, restored_str, final_source = parts[0], "unknown", "false", "rerun"
+                else:
+                    continue
+                rerun_detail.append({
+                    "name": name,
+                    "status": status,
+                    "restored": restored_str.lower() == "true",
+                    "final_source": final_source,
+                })
+    except Exception:
+        pass
+
 output = {
     "status": status,
     "exit_code": exit_code,
     "merged_markdown": merged,
     "review_markdown": review,
     "rerun_segments": rerun_segments,
+    "rerun_detail": rerun_detail if rerun_detail else None,
 }
 json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
 sys.stdout.write("\n")
@@ -230,7 +258,7 @@ step_start 2 "验证分段覆盖率"
 
 # 临时文件保存 pdf-validate 的 JSON 输出
 validate_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$_rerun_names_file"; modelpad_stop_pdf_if_started log' EXIT
+trap 'rm -f "$validate_tmp" "$_rerun_names_file" "$_rerun_detail_file"; modelpad_stop_pdf_if_started log' EXIT
 
 # JSON 模式：stdout=JSON, stderr=人可读
 PDF_VALIDATE_JSON=1 "$_scripts_dir/pdf-validate" "$pdf_path" "$segments_dir" >"$validate_tmp" 2>/dev/null || true
@@ -468,9 +496,6 @@ for s in report['segments']:
     log
     log "重跑分段: $name ($segment_pages 页)"
 
-    # 标记此段是否成功
-    segment_ok=true
-
     if mineru \
         -p "$pdf_path" \
         -o "$rerun_dir" \
@@ -481,28 +506,24 @@ for s in report['segments']:
         -s "$start_page" \
         -e "$end_page" \
         --api-url "$api_url" >"$_subprocess_stdout" 2>&1; then
-      mineru_rc=0
-    else
-      mineru_rc=$?
-    fi
-    if [[ "$mineru_rc" -eq 0 ]]; then
-      log "    ✓ 完成"
+      # mineru 成功退出
       find_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
       if [[ -n "$find_md" && -f "$find_md" ]]; then
         cp "$find_md" "$rerun_dir/$(basename "$pdf_stem").md"
+        log "    ✓ 完成"
+        echo "$name" >> "$_rerun_names_file"
+        echo "$name:done:false:rerun" >> "$_rerun_detail_file"
+      else
+        log "    ✗ 完成但无 Markdown 输出"
+        rerun_failures="$rerun_failures $name"
+        echo "$name:no_markdown:false:original" >> "$_rerun_detail_file"
       fi
     else
       log "    ✗ 失败 (mineru 退出非0)"
-      segment_ok=false
-    fi
-
-    if $segment_ok; then
-      echo "$name" >> "$_rerun_names_file"
-    else
-      log "重跑部分失败: $name（将使用原始结果继续）"
       rerun_failures="$rerun_failures $name"
-      echo "$name" >> "$_rerun_names_file"
+      echo "$name:failed:false:original" >> "$_rerun_detail_file"
     fi
+    unset find_md
   done <<< "$rerun_names"
 
   if [[ -n "$rerun_failures" ]]; then
@@ -516,7 +537,7 @@ log
 step_start "$_step_total" "二次验证"
 
 validate2_tmp="$(mktemp)"
-trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file"; modelpad_stop_pdf_if_started log' EXIT
+trap 'rm -f "$validate_tmp" "$validate2_tmp" "$_rerun_names_file" "$_rerun_detail_file"; modelpad_stop_pdf_if_started log' EXIT
 
 PDF_VALIDATE_JSON=1 "$_scripts_dir/pdf-validate" "$pdf_path" "$segments_dir" >"$validate2_tmp" 2>/dev/null || true
 
@@ -579,19 +600,70 @@ if echo "$decision" | grep -q "^all_passed$"; then
     [[ -d "$rerun_dir" ]] || continue
     name="$(basename "$rerun_dir")"
     name="${name%-rerun}"
+
+    # 只应用成功重跑（_rerun_names_file 中有记录）
+    if ! grep -qxF "$name" "$_rerun_names_file" 2>/dev/null; then
+      log "跳过失败重跑（不覆盖）: ${name}"
+      rm -rf "$rerun_dir"
+      continue
+    fi
+
     original_dir="$segments_dir/$name"
+    [[ -d "$original_dir" ]] || continue
 
     rerun_md="$(find "$rerun_dir" -maxdepth 1 -name "*.md" -type f | head -1)"
     if [[ -z "$rerun_md" ]]; then
       rerun_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
     fi
-    if [[ -n "$rerun_md" && -f "$rerun_md" ]]; then
-      original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
-      if [[ -n "$original_md" ]]; then
-        log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
-        cp "$rerun_md" "$original_md"
-      fi
+    if [[ -z "$rerun_md" || ! -f "$rerun_md" ]]; then
+      log "跳过重跑（无 Markdown）: ${name}"
+      rm -rf "$rerun_dir"
+      continue
     fi
+
+    original_md="$(find "$original_dir" -maxdepth 1 -name "*.md" -type f | head -1)"
+    if [[ -z "$original_md" ]]; then
+      original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
+    fi
+    if [[ -z "$original_md" || ! -f "$original_md" ]]; then
+      log "警告：找不到原段 Markdown（跳过覆盖）: ${name}"
+      continue
+    fi
+
+    # 复制 Markdown 到原段
+    log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+    cp "$rerun_md" "$original_md"
+
+    # --- 同步中间产物以确保正文与中间结构同源 ---
+    _rerun_mineru_dir="$(dirname "$rerun_md")"
+    _orig_mineru_dir="$(dirname "$original_md")"
+
+    # 复制 content_list (v1)
+    _cl_src="$(find "$_rerun_mineru_dir" -maxdepth 1 -name "*_content_list.json" -type f ! -name "*_v2.json" | head -1)"
+    if [[ -n "$_cl_src" && -f "$_cl_src" ]]; then
+      cp "$_cl_src" "$_orig_mineru_dir/$(basename "$_cl_src")"
+    fi
+
+    # 复制 middle.json
+    if [[ -f "$_rerun_mineru_dir/middle.json" ]]; then
+      cp "$_rerun_mineru_dir/middle.json" "$_orig_mineru_dir/"
+    fi
+
+    # 复制 model.json
+    if [[ -f "$_rerun_mineru_dir/model.json" ]]; then
+      cp "$_rerun_mineru_dir/model.json" "$_orig_mineru_dir/"
+    fi
+
+    # 复制 images
+    if [[ -d "$_rerun_mineru_dir/images" ]]; then
+      mkdir -p "$_orig_mineru_dir/images"
+      for _img in "$_rerun_mineru_dir/images"/*; do
+        [[ -f "$_img" ]] || continue
+        cp "$_img" "$_orig_mineru_dir/images/"
+      done
+    fi
+
+    unset _rerun_mineru_dir _orig_mineru_dir _cl_src _img
   done
 
   log
@@ -624,6 +696,67 @@ fi
 if echo "$decision" | grep -q "^has_issues$"; then
   review_output="$(dirname "$segments_dir")/review.md"
   merge_output="${PDF_AUTO_MERGE_OUTPUT:-$(dirname "$segments_dir")/${pdf_stem}.md}"
+
+  #--- 应用重跑结果到原段（同 all_passed 路径的合并逻辑）---
+  for rerun_dir in "$segments_dir"/*-rerun/; do
+    [[ -d "$rerun_dir" ]] || continue
+    name="$(basename "$rerun_dir")"
+    name="${name%-rerun}"
+
+    # 只应用成功重跑
+    if ! grep -qxF "$name" "$_rerun_names_file" 2>/dev/null; then
+      log "跳过失败重跑（不覆盖）: ${name}"
+      rm -rf "$rerun_dir"
+      continue
+    fi
+
+    original_dir="$segments_dir/$name"
+    [[ -d "$original_dir" ]] || continue
+
+    rerun_md="$(find "$rerun_dir" -maxdepth 1 -name "*.md" -type f | head -1)"
+    if [[ -z "$rerun_md" ]]; then
+      rerun_md="$(find "$rerun_dir" -name "*.md" -type f | head -1)"
+    fi
+    if [[ -z "$rerun_md" || ! -f "$rerun_md" ]]; then
+      log "跳过重跑（无 Markdown）: ${name}"
+      rm -rf "$rerun_dir"
+      continue
+    fi
+
+    original_md="$(find "$original_dir" -maxdepth 1 -name "*.md" -type f | head -1)"
+    if [[ -z "$original_md" ]]; then
+      original_md="$(find "$original_dir" -name "*.md" -type f | head -1)"
+    fi
+    if [[ -z "$original_md" || ! -f "$original_md" ]]; then
+      log "警告：找不到原段 Markdown（跳过覆盖）: ${name}"
+      continue
+    fi
+
+    log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+    cp "$rerun_md" "$original_md"
+
+    # --- 同步中间产物 ---
+    _rerun_mineru_dir="$(dirname "$rerun_md")"
+    _orig_mineru_dir="$(dirname "$original_md")"
+    _cl_src="$(find "$_rerun_mineru_dir" -maxdepth 1 -name "*_content_list.json" -type f ! -name "*_v2.json" | head -1)"
+    if [[ -n "$_cl_src" && -f "$_cl_src" ]]; then
+      cp "$_cl_src" "$_orig_mineru_dir/$(basename "$_cl_src")"
+    fi
+    if [[ -f "$_rerun_mineru_dir/middle.json" ]]; then
+      cp "$_rerun_mineru_dir/middle.json" "$_orig_mineru_dir/"
+    fi
+    if [[ -f "$_rerun_mineru_dir/model.json" ]]; then
+      cp "$_rerun_mineru_dir/model.json" "$_orig_mineru_dir/"
+    fi
+    if [[ -d "$_rerun_mineru_dir/images" ]]; then
+      mkdir -p "$_orig_mineru_dir/images"
+      for _img in "$_rerun_mineru_dir/images"/*; do
+        [[ -f "$_img" ]] || continue
+        cp "$_img" "$_orig_mineru_dir/images/"
+      done
+    fi
+    unset _rerun_mineru_dir _orig_mineru_dir _cl_src _img
+  done
 
   #--- TOC 段级修复 ---
   _step_total=$((_step_total + 1))

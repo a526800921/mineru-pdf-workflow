@@ -51,7 +51,7 @@ emit_json() {
   local rerun_count="$3"
   local merge_output="$4"
   shift 4
-  # remaining args are result tuples: segment_name:start_page:end_page:seg_status
+  # remaining args are result tuples: segment_name:start_page:end_page:seg_status[:restored:final_source]
 
   python3 - "$status" "$exit_code" "$rerun_count" "$merge_output" "$@" <<'PY'
 import json, sys
@@ -66,14 +66,17 @@ for arg in sys.argv[5:]:
     if not arg.strip():
         continue
     parts = arg.split(":")
-    if len(parts) != 4:
-        continue
-    name, start, end, seg_status = parts
+    name, start, end = parts[0], parts[1], parts[2]
+    seg_status = parts[3] if len(parts) > 3 else "unknown"
+    restored = parts[4].lower() == "true" if len(parts) > 4 else False
+    final_source = parts[5] if len(parts) > 5 else "rerun"
     results.append({
         "name": name,
         "start_page": int(start),
         "end_page": int(end),
         "status": seg_status,
+        "restored": restored,
+        "final_source": final_source,
     })
 
 output = {
@@ -210,13 +213,24 @@ for target in "$@"; do
   log "重跑: $seg_name (PDF 第 ${start_page} 页)"
   # 备份原段，重跑成功则删除备份，失败则恢复
   _backup_dir="${seg_dir}.backup"
+  # 清除可能残留的 backup（上次中断遗留）
+  if [[ -d "$_backup_dir" ]]; then
+    log "  ⚠ 清除残留备份目录: $_backup_dir"
+    rm -rf "$_backup_dir"
+  fi
+  # 是否实际做了备份（用于判断最终来源）
+  _had_backup=false
   if [[ -d "$seg_dir" ]]; then
     mv "$seg_dir" "$_backup_dir"
+    _had_backup=true
   fi
   mkdir -p "$seg_dir"
 
   _api_arg=(--api-url "$api_url")
 
+  # 重跑结果状态变量（在恢复处理后才写入结果数组）
+  _seg_executed=true
+  _seg_status="failed"
   _rerun_ok=false
   # mineru uses 0-based page indices
   if mineru \
@@ -233,30 +247,49 @@ for target in "$@"; do
     find_md="$(find "$seg_dir" -name "*.md" -type f | head -1)"
     if [[ -n "$find_md" && -f "$find_md" ]]; then
       cp "$find_md" "$seg_dir/${pdf_stem}.md"
+      # 同步复制 content_list 以保证合并时逐页锚点能同源生成
+      _find_cl="$(find "$(dirname "$find_md")" -maxdepth 1 -name "*_content_list.json" -type f ! -name "*_v2.json" | head -1)"
+      if [[ -n "$_find_cl" && -f "$_find_cl" ]]; then
+        cp "$_find_cl" "$seg_dir/${pdf_stem}_content_list.json"
+      fi
+      unset _find_cl
       log "  ✓ 完成"
       rerun_count=$((rerun_count + 1))
-      _rerun_results+=("${seg_name}:${start_page}:${end_page}:done")
+      _seg_status="done"
       _rerun_ok=true
     else
       log "  ✗ 完成但无 Markdown 输出"
-      _rerun_results+=("${seg_name}:${start_page}:${end_page}:no_markdown")
+      _seg_status="no_markdown"
     fi
   else
     log "  ✗ 失败"
-    _rerun_results+=("${seg_name}:${start_page}:${end_page}:failed")
+    _seg_status="failed"
   fi
 
-  # 重跑成功则清理备份，否则恢复原始
+  # 恢复处理：重跑成功则清理备份，失败则恢复原始
+  # 同时确定 restored 和 final_source
+  _seg_restored=false
+  _seg_final_source="rerun"
   if $_rerun_ok; then
     rm -rf "$_backup_dir"
+    _seg_restored=false
+    _seg_final_source="rerun"
   else
     rm -rf "$seg_dir"
-    if [[ -d "$_backup_dir" ]]; then
+    if $_had_backup && [[ -d "$_backup_dir" ]]; then
       mv "$_backup_dir" "$seg_dir"
       log "  ℹ 已恢复原始段: $seg_name"
+      _seg_restored=true
+      _seg_final_source="original"
+    else
+      # 无备份可恢复（原始目录本不存在）
+      _seg_restored=false
+      _seg_final_source="none"
     fi
   fi
-  unset _rerun_ok _backup_dir
+  # 写入结果数组（含 restored 和 final_source）
+  _rerun_results+=("${seg_name}:${start_page}:${end_page}:${_seg_status}:${_seg_restored}:${_seg_final_source}")
+  unset _rerun_ok _backup_dir _had_backup _seg_executed _seg_status _seg_restored _seg_final_source
 done
 
 log
