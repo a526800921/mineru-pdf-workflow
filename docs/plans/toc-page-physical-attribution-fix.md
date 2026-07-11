@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：待实施
-- 当前阶段：阶段 1：物理页归属修复
+- 状态：实施中
+- 当前阶段：阶段 2：合并与兼容路径接入（阶段 1：物理页归属修复 已完成）
 - 最后更新：2026-07-11
 - 依赖：`coverage-validation-optimization`、`per-page-anchors`、`pdf-auto-repair-before-merge`、PyMuPDF 原生文本层、demo20 目录页样本
 - 背景缺陷：[toc-page-full-duplication.md](../issues/toc-page-full-duplication.md)
@@ -179,6 +179,33 @@ git diff --check
 - 无文本层/模糊匹配场景进入 review，不随机归属；
 - 全量 Python 测试、治理检查、`git diff --check` 和 GitNexus `detect_changes()` 通过。
 
+## 阶段 1 完成证据（2026-07-11）
+
+结论：**阶段 1（物理页归属修复）已完成。**
+
+### 实施改动（`scripts/lib/toc_repair.py`）
+
+- `_extract_entries_from_page` 每个条目新增 `toc_page`（物理目录页 1-based），实现“提取即归属”，文本层条目不再事后猜测所属页。
+- 新增 `_normalize_title`、`_page_title_keys`：复用条目标题解析构建每个物理页的完整 TOC 行标题 key 集合，用于完整行/词边界匹配。
+- 重写 `_assign_to_toc_pages` 归属优先级：① 条目自带 `toc_page` 直接归属；② 单目录页无歧义直接归属；③ 否则完整行/词边界匹配到唯一物理页；④ 0 页或多页命中进入 review（stderr 警告），不强制分配。
+- 移除字符集模糊回退 `_build_page_char_set`（原按字符集重合度猜页，是“制动”被错配到 p2 的模糊来源之一）。
+- `toc_tree.json` 的 `page` 字段（= 条目指向页 target_page，被 `pdf-extract-data` 的 `build_page_section_map` 消费）语义保持不变；物理目录页信息用独立字段 `toc_page`，下游 `toc.md`/字段扩展留待阶段 2。
+
+### 验证结果
+
+- Step 0 红基线转绿：`制动` 由错误归属 p2 变为正确归属物理目录页 p4（`green baseline: '制动' correctly assigned to physical toc page 4 (was p2)`）。
+- 新增 `tests/test_toc_repair.py::TestPhysicalPageAttribution`（5 项）：提取即归属带 `toc_page`、自带页优先于子串、完整行匹配（Brake/Brakelever）、前缀冲突（Park/Parking 镜像“停放/停放检查”）、无法唯一归属进 review 不强制分配。
+- `python3 -m pytest tests/test_toc_repair.py -q`：11 passed（原 6 + 新 5）。
+- 全量 `python3 -m pytest tests/ -q`：125 passed。
+- `bash scripts/test-consumers.sh`：通过 10 / 失败 0（含 `pdf-extract-data` 对 `toc_tree.json` 的消费不回归）。
+- `python3 scripts/check_plan_governance.py .`：计划治理检查通过。
+- `git diff --check`：clean。
+- GitNexus 影响分析（PreToolUse hook）：`_assign_to_toc_pages` 仅被 `repair_merged` 调用，`_extract_entries_from_page` 仅 3 处内部调用，均为向后兼容加字段，风险 LOW；`detect_changes()` MCP 工具在本 session 未作为可调用工具暴露，已用符号级 `git diff`（删除 `_build_page_char_set`、新增 `_normalize_title`/`_page_title_keys`、修改两个既有函数）+ 消费者回归等价验证变更范围只影响预期符号。
+
+### 阶段 1 边界说明
+
+本阶段只交付物理页归属规则与提取即归属；`repair()`/`repair_merged()` 全链路一致性、`<!-- pages N-N -->` 端到端锚点保真、独立 `toc.md` 生成、`toc_tree.json` 字段扩展（`target_page`/`toc_page`）与 review.md 接入属阶段 2；demo20/demo5/demo60 真实样本端到端验收属阶段 3。
+
 ## 风险与回滚
 
 - 某些 PDF 原生文本可能乱码或目录行被拆成多个 span；无法可靠重组时宁可 review，不使用低置信度字符集分配自动覆盖。
@@ -198,7 +225,7 @@ git diff --check
 
 ## 完成条件
 
-- [ ] Step 0 红基线通过：`制动 130` 不再归属 p2。
+- [x] Step 0 红基线通过：`制动 130` 不再归属 p2。（阶段 1，2026-07-11）
 - [ ] p2–p8 目录条目按物理页正确归属，无整本目录重复。
 - [ ] `<!-- pages N-N -->` 锚点完整保留，消费者回归通过。
 - [ ] `repair()`、`repair_merged()`、`pdf-read-page`、`pdf-extract-data` 兼容验证通过。

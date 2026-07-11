@@ -51,7 +51,10 @@ def _build_from_outline(doc) -> list[dict] | None:
 # ── 方案 B：文本层 x 坐标（fallback）──────────────────────────────
 
 def _extract_entries_from_page(doc, page_index: int) -> list[dict]:
-    """从单页提取 TOC 条目，返回 [{title, page, x0}, ...]."""
+    """从单页提取 TOC 条目，返回 [{title, page, x0, toc_page}, ...].
+
+    page 是条目指向页(target)，toc_page 是条目所在物理目录页(1-based)。
+    """
     blocks = doc[page_index].get_text("dict")["blocks"]
 
     text_lines = []
@@ -84,6 +87,7 @@ def _extract_entries_from_page(doc, page_index: int) -> list[dict]:
                     "title": title,
                     "page": int(page_ref),
                     "x0": x0s[i],
+                    "toc_page": page_index + 1,  # 物理目录页(1-based)，提取即归属
                 })
                 prev_key = key
 
@@ -119,53 +123,69 @@ def _compute_depths(entries: list[dict]) -> None:
 
 # ── 合并 md 级修复 ─────────────────────────────────────────────────
 
-def _build_page_char_set(page_text: str) -> set:
-    """从页文本构建非空白字符集，用于模糊匹配。"""
-    return set(re.sub(r'\s', '', page_text))
+def _normalize_title(text: str) -> str:
+    """规范化标题用于完整行/词边界匹配：去除所有空白。"""
+    return re.sub(r'\s', '', text)
+
+
+def _page_title_keys(doc, page_num: int) -> set:
+    """返回某物理页(1-based)所有 TOC 行标题的规范化 key 集合。
+
+    复用 _extract_entries_from_page 的标题解析，保证匹配的是完整目录行标题
+    而非页面文本的任意子串——因此 '制动' 不会命中 '前制动手柄'。
+    """
+    return {
+        _normalize_title(e["title"])
+        for e in _extract_entries_from_page(doc, page_num - 1)
+    }
 
 
 def _assign_to_toc_pages(
     entries: list[dict], doc, toc_page_nums: list[int]
 ) -> dict[int, list]:
-    """通过逐页文本精确匹配 + 字符集模糊回退，将条目分配到实际目录页。
+    """将条目按物理目录页归属。
 
-    优先 title in page_text（乱码只是重复，不改变字符顺序），
-    未匹配的条目用字符集重合度做模糊分配。
+    归属优先级（见 toc-page-physical-attribution-fix 设计契约）：
+    1. 条目自带 toc_page（提取即归属）时直接使用，不回溯猜测；
+    2. 否则用规范化完整行/词边界匹配唯一物理页（用于内置大纲等无 toc_page 来源）；
+    3. 无法唯一归属（0 页或多页命中）时进入 review，不强制分配、不做字符集模糊回退。
     """
-    page_texts = {}
-    for pn in toc_page_nums:
-        page_texts[pn] = doc[pn - 1].get_text("text")  # PyMuPDF page index 是 0-based
-
     assigned = {pn: [] for pn in toc_page_nums}
-    unassigned = []
 
-    # 第一轮：精确匹配（利用乱码不改变字符顺序的特点）
+    # 单目录页无归属歧义：条目只能属于该页，直接归属
+    if len(toc_page_nums) == 1:
+        assigned[toc_page_nums[0]] = list(entries)
+        return assigned
+
+    review = []
+    page_keys = None  # 完整行匹配所需，仅当存在缺 toc_page 的条目时才懒构建
+
     for e in entries:
-        title = e["title"]
-        found = False
-        for pn in toc_page_nums:
-            if title in page_texts[pn]:
-                assigned[pn].append(e)
-                found = True
-                break
-        if not found:
-            unassigned.append(e)
+        # 1. 提取即归属：条目已知其物理目录页
+        tp = e.get("toc_page")
+        if tp in assigned:
+            assigned[tp].append(e)
+            continue
 
-    # 第二轮：模糊回退（字符集重合度）
-    if unassigned:
-        page_chars = {
-            pn: _build_page_char_set(t) for pn, t in page_texts.items()
-        }
-        for e in unassigned:
-            chars = _build_page_char_set(e["title"])
-            if not chars:
-                assigned[toc_page_nums[0]].append(e)
-                continue
-            best_page = max(
-                toc_page_nums,
-                key=lambda p: len(chars & page_chars[p]),
-            )
-            assigned[best_page].append(e)
+        # 2. 完整行/词边界匹配到唯一物理页
+        if page_keys is None:
+            page_keys = {pn: _page_title_keys(doc, pn) for pn in toc_page_nums}
+        key = _normalize_title(e["title"])
+        hits = [pn for pn in toc_page_nums if key in page_keys[pn]]
+        if len(hits) == 1:
+            assigned[hits[0]].append(e)
+        else:
+            # 3. 0 或多页命中 → 无法唯一归属，进入 review（不强制分配）
+            review.append(e)
+
+    if review:
+        titles = ", ".join(e["title"] for e in review[:5])
+        more = "…" if len(review) > 5 else ""
+        print(
+            f"  TOC 归属 review: {len(review)} 条无法唯一归属物理页，"
+            f"不自动分配（{titles}{more}）",
+            file=sys.stderr,
+        )
 
     return assigned
 

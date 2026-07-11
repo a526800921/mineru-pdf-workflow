@@ -11,7 +11,13 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import fitz
 
-from lib.toc_repair import repair_merged, _build_merged_toc_block
+from lib.toc_repair import (
+    repair_merged,
+    _build_merged_toc_block,
+    _extract_entries_from_page,
+    _assign_to_toc_pages,
+    _compute_depths,
+)
 
 
 def _create_test_pdf(toc_entries: list[list] | None, pages: int = 3) -> str:
@@ -217,6 +223,116 @@ class TestBuildMergedTocBlock(unittest.TestCase):
         toc_lines = [l for l in lines if l.strip().startswith("-")]
         indent_line = [l for l in toc_lines if "子项" in l]
         self.assertTrue(any(l.startswith("  -") for l in indent_line))
+
+
+class TestPhysicalPageAttribution(unittest.TestCase):
+    """阶段1：目录条目物理页归属（完整行/词边界匹配 + 提取即归属）。
+
+    真实回归用 demo20；词边界机制用 Latin 合成 PDF——CJK 字体在字符间插空格会
+    破坏点线正则，Latin 文本稳定复现 '前制动手柄/制动'、'停放检查/停放' 前缀冲突。
+    """
+
+    DEMO20 = Path(__file__).parent / ".." / "pdf" / "demo20" / "demo20.pdf"
+
+    def _prefix_conflict_pdf(
+        self, longer: str, shorter: str, longer_pg: int, shorter_pg: int
+    ) -> str:
+        """合成两页 PDF：index0 仅含更长标题(短标题的前缀)，index1 含独立短标题。
+
+        镜像 '前制动手柄(p2)/制动(p4)'、'停放检查/停放' 跨页前缀冲突。
+        """
+        doc = fitz.open()
+        pa = doc.new_page(width=400, height=600)
+        pa.insert_text((72, 100), f"{longer}........", fontsize=12)
+        pa.insert_text((72, 130), f"........{longer_pg}", fontsize=12)
+        pb = doc.new_page(width=400, height=600)
+        pb.insert_text((72, 100), f"{shorter}........", fontsize=12)
+        pb.insert_text((72, 130), f"........{shorter_pg}", fontsize=12)
+        path = tempfile.mktemp(suffix=".pdf")
+        doc.save(path)
+        doc.close()
+        return path
+
+    # ── demo20 真实回归 ──────────────────────────────────────────────
+
+    def test_extract_carries_physical_toc_page(self):
+        """提取即归属：条目带物理目录页(1-based) toc_page 字段。"""
+        if not self.DEMO20.exists():
+            self.skipTest("demo20.pdf not available")
+        doc = fitz.open(str(self.DEMO20))
+        try:
+            p4 = _extract_entries_from_page(doc, 3)  # 物理页4 = index3
+            zhidong = [e for e in p4 if e["title"] == "制动"]
+            self.assertTrue(zhidong, "p4 应提取独立'制动'条目")
+            self.assertEqual(zhidong[0].get("toc_page"), 4)
+        finally:
+            doc.close()
+
+    def test_carried_toc_page_beats_substring(self):
+        """Step 0 红基线绿版：'制动'归物理页4，不因子串落到含'前制动手柄'的p2。"""
+        if not self.DEMO20.exists():
+            self.skipTest("demo20.pdf not available")
+        doc = fitz.open(str(self.DEMO20))
+        try:
+            entries = []
+            for pi in range(1, 8):
+                entries.extend(_extract_entries_from_page(doc, pi))
+            _compute_depths(entries)
+            assigned = _assign_to_toc_pages(entries, doc, list(range(2, 9)))
+            pages_with = [
+                p for p, rows in assigned.items()
+                if any(e["title"] == "制动" for e in rows)
+            ]
+            self.assertEqual(pages_with, [4])
+            self.assertFalse(
+                any(e["title"] == "制动" for e in assigned[2]),
+                "p2 不得含'制动'(子串误匹配'前制动手柄')",
+            )
+        finally:
+            doc.close()
+
+    # ── 词边界机制（Latin 合成）───────────────────────────────────────
+
+    def test_wholeline_match_when_no_carried_page(self):
+        """无 toc_page(模拟内置大纲)时用完整行匹配唯一归属，不用裸子串。"""
+        path = self._prefix_conflict_pdf("Brakelever", "Brake", 34, 130)
+        doc = fitz.open(path)
+        try:
+            entries = [{"title": "Brake", "page": 130, "depth": 0}]  # 无 toc_page
+            assigned = _assign_to_toc_pages(entries, doc, [1, 2])
+            pages = [p for p, rows in assigned.items() if rows]
+            self.assertEqual(
+                pages, [2], "'Brake'应完整行匹配 page2，而非子串命中 page1"
+            )
+        finally:
+            doc.close()
+            os.unlink(path)
+
+    def test_prefix_conflict_park_parking(self):
+        """停放/停放检查前缀冲突镜像：'Park'不被'Parking'子串吸附。"""
+        path = self._prefix_conflict_pdf("Parking", "Park", 50, 200)
+        doc = fitz.open(path)
+        try:
+            entries = [{"title": "Park", "page": 200, "depth": 0}]
+            assigned = _assign_to_toc_pages(entries, doc, [1, 2])
+            pages = [p for p, rows in assigned.items() if rows]
+            self.assertEqual(pages, [2])
+        finally:
+            doc.close()
+            os.unlink(path)
+
+    def test_unmatched_entry_not_force_assigned(self):
+        """无法唯一归属的条目进入 review，不被强制分配(移除字符集模糊回退)。"""
+        path = self._prefix_conflict_pdf("Brakelever", "Brake", 34, 130)
+        doc = fitz.open(path)
+        try:
+            entries = [{"title": "Nonexistent", "page": 9, "depth": 0}]
+            assigned = _assign_to_toc_pages(entries, doc, [1, 2])
+            total = sum(len(rows) for rows in assigned.values())
+            self.assertEqual(total, 0, "无法唯一归属不得强制分配到任意页")
+        finally:
+            doc.close()
+            os.unlink(path)
 
 
 if __name__ == "__main__":

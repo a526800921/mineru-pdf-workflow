@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 4：整表头/顶部列头漏报补强（实施完成，待用户验收）
+- 状态：已完成
+- 当前阶段：阶段 4：整表头/顶部列头漏报补强（已完成）
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -471,11 +471,26 @@ PY
 - 治理检查、`git diff --check`、GitNexus `detect-changes`（风险 low）通过。
 - 红基线缺陷单：[native-detector-header-row-false-negative.md](../issues/native-detector-header-row-false-negative.md)（已修复）。
 
+### 阶段 4 最终验收（2026-07-11）
+
+结论：**通过，阶段 4 已完成，专项计划已完成。**
+
+独立验收结果：
+
+- p14 绿基线通过：`signals=['native_table_text_missing']`，`native_table_missing=3`，缺失证据为 `AURA`、`CF150T-32`、`CF150T-32A`，`missing_scope=header_row`。
+- p14 真实 `manifest.page_fallback["14"]` 记录 `selected=review`、`detector=pdf_native`、`quality_signals`、`missing_text`、`fb_status=completed`、原始/fallback 路径与双版本指标。
+- fallback 未恢复车型列头时正确进入 `review`，`pdf/demo20/review.md` 的页级质量复核包含 p14 及车型列头证据；没有误返回 `all_passed`。
+- `tests/test_page_quality.py`：56/56；全量 Python 测试：120/120。
+- `scripts/test-native-fallback.sh`：4/4；`scripts/test-phase2.sh`：37/37；根目录 `test-phase3.sh`：11/11；`scripts/test-consumers.sh`：10/10。
+- 治理检查、`git diff --check` 通过；GitNexus `detect_changes(scope=unstaged)` 返回无变更、无受影响流程。
+
+验收期间发现并修正一处文档路径漂移：阶段4验证命令应使用根目录 `bash test-phase3.sh`，仓库中不存在 `scripts/test-phase3.sh`。
+
 ## 验证方式
 
 ```bash
 python3 -m pytest tests/test_page_quality.py -q
-bash scripts/test-phase3.sh
+bash test-phase3.sh
 python3 scripts/check_plan_governance.py .
 git diff --check
 ```
