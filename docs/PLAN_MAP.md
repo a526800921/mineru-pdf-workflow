@@ -2,7 +2,7 @@
 
 ## 治理范围
 
-本文件只跟踪跨阶段、依赖真实运行反馈、会被后续 MCP 接入复用的计划。普通一次性任务不加入这里。
+本文件只跟踪跨阶段、依赖真实运行反馈或影响公共 CLI 契约的计划。普通一次性任务不加入这里。
 
 ## 文档事实源职责
 
@@ -11,7 +11,7 @@
 - 总路线图、优先级计划和索引只保留顺序、状态摘要和专项计划链接；字段级方案、枚举、Step 0 细节或完成定义必须链接到专项计划。
 - 专项计划状态、字段方案、完成条件或验证结果变化时，必须同步本文件和所有引用该计划的路线图、优先级计划或索引。
 - 验收治理文档时必须用 `rg` 搜索同名计划、P 编号、状态名和关键字段，检查重复定义或漂移。
-- 项目级 `pdf2md` skill 事实源为 `skills/pdf2md/SKILL.md`。涉及 PDF 解析流程、输出包结构、MCP `run_pdf_auto` 契约、ModelPad PDF 服务编排、结构化数据/入库导出流程的更新，必须先更新该项目级 skill，再同步覆盖 Claude Code 用户级 skill：`/Users/jafish/.claude/skills/pdf2md/SKILL.md`；若当次无法同步，必须在相关计划的未决问题或风险中记录原因和补同步动作。
+- 项目级 `pdf2md` skill 事实源为 `skills/pdf2md/SKILL.md`。涉及 PDF 解析流程、输出包结构、CLI JSON 契约、ModelPad PDF 服务编排、结构化数据/入库导出流程的更新，必须先更新该项目级 skill，再同步覆盖 Claude Code 用户级 skill：`/Users/jafish/.claude/skills/pdf2md/SKILL.md`；若当次无法同步，必须在相关计划的未决问题或风险中记录原因和补同步动作。
 
 ## 计划索引
 
@@ -32,7 +32,8 @@
 | [pdf-evaluation-suite](plans/pdf-evaluation-suite.md) | 已完成 | P4a/P4b/P4c 全部已完成 | 2026-07-10 | pdf-workflow-enhancement-roadmap、coverage-validation-optimization、春风 150AURA 输出包 | [P4a 验收](plans/pdf-evaluation-suite.md#验收记录2026-07-08)、[P4b 验收](plans/pdf-evaluation-suite.md#验收记录p4b2026-07-08)、[P4c 验收](plans/pdf-evaluation-suite.md#验收记录p4c2026-07-10) |
 | [per-page-anchors](plans/per-page-anchors.md) | 已完成 | 全阶段（0-4） | 2026-07-10 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、structured-data-extraction、春风 150AURA 输出包 | [阶段 4 验收](plans/per-page-anchors.md#阶段-4-验收记录2026-07-10) |
 | [pdf-auto-repair-before-merge](plans/pdf-auto-repair-before-merge.md) | 已完成 | 全阶段（0-3）：修复—合并顺序、manifest 泄漏修复、真实样本验收 | 2026-07-11 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、per-page-anchors、demo5 真实样本 | [阶段 3 验收](plans/pdf-auto-repair-before-merge.md#阶段-3-验收记录2026-07-11) |
-| [single-page-segmentation-migration](plans/single-page-segmentation-migration.md) | 实施中 | 阶段 3：页级质量 fallback（待实施；阶段 1 补充收尾已通过；阶段 4 收敛逐页锚点） | 2026-07-11 | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors、demo20 第 12 页 fallback 证据 | [阶段 1 验收](plans/single-page-segmentation-migration.md#阶段-1-验收记录2026-07-11)、[阶段 2 再次验收](reports/single-page-segmentation-stage2-reacceptance-2026-07-11.md)、[阶段 3 实施契约](plans/single-page-segmentation-migration.md#阶段-3-实施契约确认2026-07-11)、[阶段 1 补充收尾验收](plans/single-page-segmentation-migration.md#阶段-1-补充收尾验收2026-07-11) |
+| [single-page-segmentation-migration](plans/single-page-segmentation-migration.md) | 实施中 | 阶段 3：页级质量 fallback（待实施；阶段 4 收敛逐页锚点） | 2026-07-11 | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors、demo20 第 12 页 fallback 证据 | [阶段 1 验收](plans/single-page-segmentation-migration.md#阶段-1-验收记录2026-07-11)、[阶段 2 再次验收](reports/single-page-segmentation-stage2-reacceptance-2026-07-11.md)、[阶段 3 实施契约](plans/single-page-segmentation-migration.md#阶段-3-实施契约确认2026-07-11)、[阶段 3 待实施契约](plans/single-page-segmentation-migration.md#阶段-3-待实施契约用户确认2026-07-11)、[阶段 3 待实施门禁复核](plans/single-page-segmentation-migration.md#阶段-3-待实施门禁复核2026-07-11)、[阶段 1 补充收尾验收](plans/single-page-segmentation-migration.md#阶段-1-补充收尾验收2026-07-11) |
+| [cli-only-migration](plans/cli-only-migration.md) | 已完成 | 阶段 1 已完成：移除 MCP 适配层 | 2026-07-11 | 已验证的 CLI 脚本、`PDF_AUTO_JSON=1` JSON 契约、ADR 0002 | [完成证据](plans/cli-only-migration.md#完成证据-2026-07-11) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -86,7 +87,7 @@
 | modelpad-dynamic-env-cleanup | modelpad-pdf-service-orchestration | 在已有启停编排上增加动态 env 传递和临时输出目录自动清理 |
 | modelpad-dynamic-env-cleanup | ModelPad API | start 请求体传入 `env` 覆盖，stop 后清理临时目录 |
 | pdf-workflow-enhancement-roadmap | automated-pdf-pipeline | P2-P5 增强均基于现有流水线能力 |
-| pdf-workflow-enhancement-roadmap | mcp/README.md | P2 拆分式 MCP 工具设计已就绪 |
+| pdf-workflow-enhancement-roadmap | CLI 脚本和输出包契约 | P2/P3 的 MCP 记录仅作为历史证据，当前不再推进 MCP 适配层 |
 | pdf-evaluation-suite | pdf-workflow-enhancement-roadmap | P4 从路线图拆分为独立评测套件专项计划 |
 | pdf-evaluation-suite | coverage-validation-optimization | P4a TOC 条目字段方案（`toc_entries`/`toc_stats`）事实源 |
 | pdf-evaluation-suite | 春风 150AURA 输出包 | P4b 表格结构自检以 content_list.json 的 115 个 table 元素（104 含 table_body）为 Step 0 样本 |
@@ -110,15 +111,15 @@
 
 | 问题 | 推荐方案 | 影响范围 | 是否阻塞当前阶段 | 状态 |
 |---|---|---|---|---|
-| `pdf-validate` 暂未输出 JSON | 已实现 `PDF_VALIDATE_JSON=1` | MCP 自动调度重跑前需要机器可读报告 | 否 | 已解决 |
-| MCP server 尚未实现 | 已实现 `mcp/server/`，运行手册和排障清单已就绪 | Claude Code 现已可通过 MCP 调用 PDF 流水线 | 否 | 已解决 |
+| `pdf-validate` 暂未输出 JSON | 已实现 `PDF_VALIDATE_JSON=1` | CLI 自动调度重跑需要机器可读报告 | 否 | 已解决 |
+| MCP Server 适配层已移除 | 当前统一使用 `scripts/` CLI；机器调用保留 `PDF_AUTO_JSON=1` | Claude Code 不再通过本项目 MCP 工具调用 | 否 | 已解决 |
 | 阶段 6 验收未执行 | 已完成三类路径验证和手册固化 | 运行手册可被后续会话按步骤复现 | 否 | 已解决 |
-| 覆盖率低页面触发无效 high 重跑 | 已实现：区分 `rerun` 与 `review_only`，只重跑可修复段 | `pdf-validate`、`pdf-auto`、MCP 诊断输出 | 否 | 已解决 |
-| 输出产物分散在旧目录 | 阶段 8 已完成：统一为 `<package>/` 输出包结构，demo5 无/有 API 双路径验收通过 | `pdf-seg`、`pdf-merge`、`pdf-auto`、MCP 返回路径 | 否 | 已解决 |
+| 覆盖率低页面触发无效 high 重跑 | 已实现：区分 `rerun` 与 `review_only`，只重跑可修复段 | `pdf-validate`、`pdf-auto`、CLI JSON 诊断输出 | 否 | 已解决 |
+| 输出产物分散在旧目录 | 阶段 8 已完成：统一为 `<package>/` 输出包结构，demo5 无/有 API 双路径验收通过 | `pdf-seg`、`pdf-merge`、`pdf-auto`、CLI JSON 返回路径 | 否 | 已解决 |
 | 首次验证 `review_only` 段误触发合并（`pdf-auto` 行 230） | 已修复 Python 分支 + bash `needs_review` 处理分支，复验返回 `needs_review` 并生成 `<package>/review.md` | `pdf-auto` | 否 | 已解决 |
 | 真实样本 `pdf-seg` 环境依赖未满足 | 根因 `transformers 5.x` 不兼容；已创建隔离 venv（`~/Documents/models/.venv`, `transformers 4.57.6`），scripts 自动检测优先使用 | Phase 8 端到端验收 | 否 | 已解决 |
 | 未检测到 MinerU API 时 `pdf-seg` 因 `_api_arg[@]` 未绑定失败 | 已修复：`if/else` 分支替代空数组 `set -u` 展开，无 API 时自动启动临时服务 | Phase 8 端到端验收、无 API 服务启动路径 | 否 | 已解决 |
-| `pdf-auto` 重跑失败路径可能被 `set -e` 提前中断 | 阶段 2 已修复：`mineru` 重跑调用改为 `if mineru ... ; then rc=0; else rc=$?; fi` 包装，`set -e` 下失败不再提前退出 | `pdf-auto` 自动重跑、MCP `run_pdf_auto` 失败诊断 | 否 | 已解决 |
+| `pdf-auto` 重跑失败路径可能被 `set -e` 提前中断 | 阶段 2 已修复：`mineru` 重跑调用改为 `if mineru ... ; then rc=0; else rc=$?; fi` 包装，`set -e` 下失败不再提前退出 | `pdf-auto` 自动重跑、CLI JSON 失败诊断 | 否 | 已解决 |
 | `pdf-merge` 图片同名冲突可能被静默跳过 | 阶段 3 已修复：SHA-256 内容校验；同名同内容跳过，同名不同内容失败并输出冲突路径 | 输出包 `images/`、合并 Markdown 图片引用 | 否 | 已解决 |
 | PDF 服务生命周期将由 ModelPad app 托管 | 全阶段（0-3）已完成：脚本不再管理服务进程/shared 输出目录，`pdf-auto` 重跑失败安全兜底，`pdf-merge` 图片同名冲突检测 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 已解决 |
 | PDF 服务未启动时需要按需调用 ModelPad start/stop | 全阶段（0-3）已完成：helper 封装启停逻辑，三个入口已接入；无服务时自启、用完自停；已有服务时只复用不停止；失败路径可诊断 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、ModelPad API | 否 | 已解决 |

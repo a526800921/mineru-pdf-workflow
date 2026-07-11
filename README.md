@@ -8,7 +8,7 @@
 - 自动验证 MinerU 输出和原 PDF 文本层的覆盖率，筛出可疑页段。
 - 对可疑页段支持重跑更高精度配置。
 - 生成最终合并 Markdown，保留人工兜底入口。
-- 预留 MCP 接入 Claude Code 的工具边界。
+- 以 CLI 为唯一运行入口，支持人类执行和机器可读 JSON 输出。
 
 ## 脚本
 
@@ -90,5 +90,6 @@ scripts/pdf-extract-data /path/to
 
 - [计划索引](docs/PLAN_MAP.md)
 - [自动化流水线计划](docs/plans/automated-pdf-pipeline.md)
-- [MCP 接入设计](mcp/README.md)
+- [CLI-only 工作流迁移计划](docs/plans/cli-only-migration.md)
+- [ADR 0002：CLI-only 工作流，移除 MCP Server](docs/adr/0002-cli-only-workflow.md)
 - [Claude Code pdf2md skill 源文件](skills/pdf2md/SKILL.md)

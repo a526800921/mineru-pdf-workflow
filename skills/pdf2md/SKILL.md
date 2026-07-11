@@ -20,14 +20,13 @@ mkdir -p /Users/jafish/.claude/skills/pdf2md
 cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 ```
 
-涉及 PDF 解析流程、输出包结构、MCP `run_pdf_auto` 契约、ModelPad PDF 服务编排、结构化数据/入库导出流程的更新，必须先更新本文件，再同步到 Claude Code 用户级 skill。若当次无法同步，必须在相关计划的未决问题或风险中记录原因和补同步动作。
+涉及 PDF 解析流程、输出包结构、CLI JSON 契约、ModelPad PDF 服务编排、结构化数据/入库导出流程的更新，必须先更新本文件，再同步到 Claude Code 用户级 skill。若当次无法同步，必须在相关计划的未决问题或风险中记录原因和补同步动作。
 
 ## 前置条件
 
 - PDF 可放在任意路径；所有产物（segments、md、review、manifest、images、data）默认输出到 **PDF 所在目录**，无需将 PDF 复制到本项目。
 - 脚本位于 `<project>/scripts/`，可通过绝对路径调用，也可将 `scripts/` 加入 `PATH`。
-- MCP 工具 `run_pdf_auto` 封装了 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>`，可直接使用。
-- 如果 MCP 工具不可用，可直接运行同等 CLI 命令。
+- 自动化 PDF 流程使用 `scripts/pdf-auto <pdf> <segments_dir>`；需要机器可读结果时设置 `PDF_AUTO_JSON=1`。
 - ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9999`。
 
 ## ModelPad PDF 服务
@@ -109,14 +108,14 @@ scripts/pdf-export-ingest /path/to
 <project>/scripts/pdf-auto /path/to/doc.pdf /path/to/segments
 ```
 
-已有 `segments/` 时可以跳过 `pdf-seg`，直接调用 `run_pdf_auto` 或 `scripts/pdf-auto`。
+已有 `segments/` 时可以跳过 `pdf-seg`，直接调用 `scripts/pdf-auto`。
 
 ## 工具选择
 
 | 情况 | 做法 |
 |---|---|
 | 只有 PDF，没有分段 | 先 `scripts/pdf-seg <pdf>` |
-| 已有 `<package>/segments/` | 直接用 `run_pdf_auto` 或 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>` |
+| 已有 `<package>/segments/` | 直接用 `scripts/pdf-auto` 或 `PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>` |
 | 用户只要 Markdown | 跑到 `pdf-auto` 即可 |
 | 用户要结构化草案 | 继续跑 `scripts/pdf-extract-data <package>` |
 | 用户要入库候选 | 继续跑 `scripts/pdf-prepare-ingest <package>` |
@@ -124,7 +123,7 @@ scripts/pdf-export-ingest /path/to
 | 用户明确要快速结果 | 可降低 `PDF_VALIDATE_THRESHOLD`，例如 0.5-0.7 |
 | 用户要高质量 | 默认阈值 0.82，`MINERU_RERUN_EFFORT=high` |
 
-## run_pdf_auto 参数
+## `pdf-auto` CLI 参数
 
 必填：
 
@@ -145,7 +144,7 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 
 ## 结果解读
 
-`pdf-auto` / `run_pdf_auto`：
+`pdf-auto`：
 
 - `all_passed` / `passed`：验证通过，已合并 Markdown。
 - `needs_review` / `needs_review`：已合并 Markdown，同时生成 `review.md`，需要人工复核。
@@ -157,15 +156,14 @@ PDF_AUTO_JSON=1 scripts/pdf-auto <pdf> <segments_dir>
 - `review_markdown`：人工复核清单 `<pdf所在目录>/review.md`。
 - `rerun_segments`：真正执行 high 重跑的段。目录页、图片稀疏页、表格页通常进入 review_only，不做无效 high 重跑。
 
-## 其他 MCP 工具
+## 其他 CLI 工具
 
-除 `run_pdf_auto` 外，流水线还提供若干只读查询和导出工具：
+流水线还提供若干只读查询和导出 CLI：
 
 ### read_page — 按页码读取 Markdown
 
 ```bash
 scripts/pdf-read-page <package_dir> <page> [page_end]
-# 或通过 MCP: read_page
 ```
 
 返回合并 Markdown 中指定页的内容。合并 md 由 `<!-- pages N-M -->` 段级锚点和 `<!-- page N -->` 逐页锚点共同定位：
@@ -177,7 +175,6 @@ scripts/pdf-read-page <package_dir> <page> [page_end]
 
 ```bash
 scripts/pdf-search-content <package_dir> <query>
-# 或通过 MCP: search_pdf_content
 ```
 
 在合并 Markdown 和 `quick_lookup_draft.csv` 中搜索关键词，返回页码、章节、原文片段。
@@ -186,7 +183,6 @@ scripts/pdf-search-content <package_dir> <query>
 
 ```bash
 scripts/pdf-export-chunks <package_dir>
-# 或通过 MCP: export_chunks
 ```
 
 将合并 Markdown 预处理为 `data/chunks.jsonl`（纯文本块，按 `##` 切分、HTML 表格展开、图片替换、token 上限 384）。
@@ -317,7 +313,6 @@ data/ingest_manifest.json
 | `segments_dir does not exist` | 先跑 `scripts/pdf-seg <pdf>` |
 | ModelPad API 无响应 | 先启动 `/Users/jafish/Documents/work/ModelPad` app，并确认 `GET http://127.0.0.1:9999/api/health` 返回可用 |
 | PDF 服务启动超时 | 检查 ModelPad 中 `pdf` 模型状态，必要时调大 `MODELPAD_PDF_START_TIMEOUT` |
-| MCP 工具找不到 | 确认项目 `.mcp.json` 指向 `mcp/server/dist/index.js`，必要时在 `mcp/server` 执行 `npm run build` 并重启 Claude Code |
 | `needs_review` 但用户要先看结果 | 可降低 `PDF_VALIDATE_THRESHOLD` 或手动运行 `scripts/pdf-merge <segments_dir>` |
 | `review_overrides.csv` 报非法字段 | 只允许 `record_id,review_status,notes` |
 | 没有导出批次记录 | 检查 `ingest_ready.csv` 中是否存在 `review_status=approved` 且 `ingest_status=ready` |

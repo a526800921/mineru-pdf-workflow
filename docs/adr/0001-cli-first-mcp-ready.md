@@ -2,7 +2,9 @@
 
 ## 状态
 
-已接受
+已替代
+
+> MCP 接入决策已由 [ADR 0002：CLI-only 工作流，移除 MCP Server](0002-cli-only-workflow.md) 替代。本文件保留历史背景和当时的 CLI-first 设计记录。
 
 ## 背景
 
