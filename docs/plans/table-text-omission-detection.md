@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：待实施
-- 当前阶段：阶段 1：通用原生表格检测器
+- 状态：实施中
+- 当前阶段：阶段 1：通用原生表格检测器边界修复
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -68,6 +68,41 @@ PY
 - 验证方式、边界 fixture、完成条件和回滚方式已具备；当前没有未解决的实施前置阻塞项。
 
 进入阶段 1 后，修改共享质量检测符号前必须先执行 GitNexus upstream impact；完成实现后执行 `detect_changes()`、测试和治理检查。
+
+## 阶段 1 验收记录（2026-07-11）
+
+结论：**不通过，暂不能标记阶段 1 已完成。**
+
+### 已通过
+
+- `5a325ee feat: 阶段1 通用原生表格检测器` 已实现 `native_table_text_missing` 信号，并接入 `pdf-auto` 的质量检测调用。
+- demo20 p16 能检测到缺失字段“百公里综合油耗”，实际结果为 `native_table_missing=1`。
+- 检测结果包含 `signals`、`native_table_candidates`、`native_table_missing` 和 `missing_text`。
+- 现有 `tests/test_page_quality.py`：37/37 通过；全量 Python 测试：96/96 通过；`test-phase3.sh`：11/11 通过；阶段1清理回归：10/10 通过。
+- 旧调用方不传 `pdf_words` 时仍保持原有四类质量信号行为。
+
+### 未通过项
+
+1. **没有真正按表格区域检测**：当前 `_find_pdf_table_labels()` 使用“页面左侧 40% + 非页脚”作为表格区域，没有使用 PDF/MinerU 表格 bbox；表格外左侧正文会被误报为缺失字段。
+2. **没有视觉行聚类或字段重组**：`get_text("words")` 的每个词直接作为候选。PDF 中的多词字段会被拆成多个候选词，即使 HTML 有完整单元格也会误报。
+3. **只解析第一个 HTML 表格**：页面存在多个表格时，后续表格的字段无法正确比较。
+4. **`rowspan/colspan` 仅写在注释中，未真正展开逻辑网格**：当前实现只是提取原始 `<td>` 文本集合，契约与实现不一致。
+5. **尚未完成未知字段 fixture**：p16 测试证明了当前案例，但还不能证明替换成未出现在代码中的多词字段、第二个表格字段后仍能正确工作。
+
+### 已复现的边界探针
+
+```text
+表格外左侧正文：误报 native_table_text_missing，missing_text=["正文遗漏词"]
+PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["Max", "power"]
+第二个 HTML 表格字段：只读取第一个表格，误报第二个表格的 X/Y/Z/缺失字段
+```
+
+### 后续通过条件
+
+- 使用实际表格 bbox 或等价可靠区域边界，不再用页面左侧比例代替表格区域。
+- 按 bbox 的 y 坐标聚类并重组同一视觉行/字段，支持多词标签和中英文混合字段。
+- 遍历页面全部 HTML 表格，并真正处理 `rowspan/colspan` 逻辑单元格。
+- 增加至少一个未知多词字段、多个表格、表格外正文和合并单元格 fixture；所有边界测试通过后再重新验收。
 
 ## 检测契约
 

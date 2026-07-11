@@ -14,8 +14,8 @@ from lib.page_quality import (  # noqa: E402
     compare_quality,
     count_empty_td,
     max_td_per_row,
-    _extract_html_cell_texts,
     _normalize_table_text,
+    _parse_all_tables,
     detect_native_table_text_omission,
 )
 try:
@@ -323,17 +323,39 @@ class TestNativeTableTextOmission(unittest.TestCase):
         # 无 HTML 表格时返回空 signals
         self.assertNotIn("native_table_text_missing", signals)
 
+    def test_p4_body_text_no_false_positive(self):
+        """纯正文页（无表格）不误触发。"""
+        doc = fitz.open(self.pdf_path)
+        words = doc[3].get_text("words")  # p4
+        md_text = self._get_page_md(4)
+        doc.close()
+        if not md_text:
+            self.skipTest("p4 md not available")
+        signals, metrics = detect_native_table_text_omission(
+            md_text, words, 556, 386,
+        )
+        self.assertNotIn("native_table_text_missing", signals,
+                         f"p4 should not trigger: {metrics.get('missing_text')}")
+
     def test_normalize_consistency(self):
         """归一化对于已知表格内容的一致性。"""
         md = self._get_page_md(16)
         if not md:
             self.skipTest("p16 md not available")
-        cells = _extract_html_cell_texts(md)
+        tables = _parse_all_tables(md)
+        self.assertGreater(len(tables), 0)
+        # 收集所有展开后的单元格文本
+        all_cells: set[str] = set()
+        for grid in tables:
+            for row in grid:
+                for ct in row:
+                    if ct.strip():
+                        all_cells.add(_normalize_table_text(ct))
         for known in ["电器装置", "蓄电池", "12V/7Ah", "前照灯", "不可调节"]:
             self.assertIn(
                 _normalize_table_text(known),
-                cells,
-                f"'{known}' should be in HTML cells after normalization",
+                all_cells,
+                f"'{known}' should be in expanded grid cells",
             )
 
 

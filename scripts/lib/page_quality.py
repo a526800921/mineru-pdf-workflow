@@ -197,102 +197,93 @@ def assess_page_quality(
     }
 
 
-# ── 通用表格字段缺失检测（阶段 5 新增）───────────────────────
+# ── 通用表格字段缺失检测 ──────────────────────────
 
 def _normalize_table_text(text: str) -> str:
-    """
-    归一化表格文本用于比较：统一全角→半角、空白折叠、去两端。
-    """
+    """归一化表格文本：统一全角→半角、空白折叠。"""
     text = text.strip()
-    # 全角字母数字 → 半角
     text = text.translate(str.maketrans(
         "０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
         "ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ",
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz",
     ))
-    # 全角标点 → 半角（保留冒号用于数值单位判断）
     text = text.replace("：", ":").replace("（", "(").replace("）", ")")
     text = text.replace("，", ",").replace("；", ";")
-    # 折叠空白
     text = re.sub(r"\s+", "", text)
     return text
 
 
-def _extract_html_cell_texts(md_text: str) -> set[str]:
+def _expand_html_table_grid(table_html: str) -> list[list[str]]:
     """
-    从 MinerU Markdown 的 HTML <table> 中提取所有非空逻辑单元格文本。
-    考虑 colspan/rowspan 展开，返回归一化后的去重集合。
+    展开单个 HTML <table>，考虑 colspan，返回逻辑网格（行 × 列）。
+    同一单元格因 colspan 展开多次时各副本保留相同文本。
     """
-    m = re.search(r"<table>(.*?)</table>", md_text, re.DOTALL | re.IGNORECASE)
-    if not m:
-        return set()
-
-    table_html = m.group(1)
-    cells: set[str] = set()
-
-    # 提取所有 <td> 文本，忽略属性
-    for td in re.findall(r"<td[^>]*>(.*?)</td>", table_html, re.DOTALL):
-        text = td.strip()
-        if text and not re.match(r"^\s*$", text):
-            cells.add(_normalize_table_text(text))
-
-    return cells
-
-
-def _is_spec_table(md_text: str) -> bool:
-    """
-    判断 HTML 表格是否为真正的规格表（≥ 3 行）。
-    排除 2 行以内的警告框、装饰性框等。
-    """
-    m = re.search(r"<table>(.*?)</table>", md_text, re.DOTALL | re.IGNORECASE)
-    if not m:
-        return False
-    rows = len(re.findall(r"<tr[^>]*>", m.group(1)))
-    return rows >= 3
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE)
+    grid: list[list[str]] = []
+    for row_html in rows:
+        tds = re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.DOTALL | re.IGNORECASE)
+        expanded: list[str] = []
+        for td in tds:
+            text_raw = re.sub(r"<[^>]+>", "", td).strip()
+            cs_match = re.search(
+                r'colspan\s*=\s*["\'"]?(\\d+)["\'"]?', td, re.IGNORECASE,
+            )
+            cs = int(cs_match.group(1)) if cs_match else 1
+            for _ in range(cs):
+                expanded.append(text_raw)
+        grid.append(expanded)
+    return grid
 
 
-def _find_pdf_table_labels(
+def _parse_all_tables(md_text: str) -> list[list[list[str]]]:
+    """提取所有 HTML <table>，展开为逻辑网格，返回≥3行的规格表列表。"""
+    tables: list[list[list[str]]] = []
+    for m in re.finditer(r"<table>(.*?)</table>", md_text, re.DOTALL | re.IGNORECASE):
+        grid = _expand_html_table_grid(m.group(1))
+        if len(grid) >= 3:
+            tables.append(grid)
+    return tables
+
+
+def _cluster_pdf_words(
     pdf_words: list[tuple],
-    page_width: float = 600.0,
     page_height: float = 400.0,
-) -> set[str]:
+) -> list[list[tuple[float, float, float, str]]]:
     """
-    从 PDF 原生 words 中提取表格区域内的左列候选标签。
-
-    pdf_words: PyMuPDF get_text("words") 输出，每项为
-               (x0, y0, x1, y1, word, block_no, line_no, word_no)
-
-    判定规则：
-    - 左列文字：x0 < page_width × 0.4（排除右列数值和页脚页码）
-    - 排除页脚区域：y > page_height × 0.85（页码、页脚）
-    - 排除页码样式的纯数字
-    - 标签长度 <= 30 字符（排除大段正文被误当表格标签）
+    按 y 坐标重叠将 PDF words 聚类为视觉行。
+    过滤页脚（底部 15%）和纯数字页码。
+    返回 list[visual_line]，每行按 x0 排序。
     """
-    labels: set[str] = set()
-    left_col_x = page_width * 0.4
-    footer_y = page_height * 0.85
+    FOOTER_Y = page_height * 0.85
+    filtered = [
+        w for w in pdf_words
+        if w[4].strip() and not re.match(r"^\d+$", w[4].strip()) and w[1] <= FOOTER_Y
+    ]
+    if not filtered:
+        return []
 
-    for w in pdf_words:
-        x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
-        text = text.strip()
-        if not text:
-            continue
-        # 排除右列数值区域
-        if x0 >= left_col_x:
-            continue
-        # 排除页脚
-        if y0 > footer_y:
-            continue
-        # 排除纯数字页码
-        if re.match(r"^\d+$", text):
-            continue
-        # 表格标签通常是短字段名，排除长句正文
-        if len(text) > 30:
-            continue
-        labels.add(_normalize_table_text(text))
+    filtered.sort(key=lambda w: (w[1], w[0]))
+    lines: list[list] = []
+    current: list = []
+    cur_y1 = 0.0
 
-    return labels
+    for w in filtered:
+        y0, y1 = w[1], w[3]
+        if not current or y0 <= cur_y1:
+            current.append(w)
+            cur_y1 = max(cur_y1, y1)
+        else:
+            lines.append(sorted(current, key=lambda x: x[0]))
+            current = [w]
+            cur_y1 = y1
+    if current:
+        lines.append(sorted(current, key=lambda x: x[0]))
+
+    result: list[list[tuple[float, float, float, str]]] = []
+    for line in lines:
+        result.append([(w[0], w[2], (w[1] + w[3]) / 2, w[4].strip()) for w in line])
+    return result
 
 
 def detect_native_table_text_omission(
@@ -302,43 +293,65 @@ def detect_native_table_text_omission(
     page_height: float = 400.0,
 ) -> tuple[list[str], dict]:
     """
-    检测 MinerU HTML 表格中是否遗漏了 PDF 原生文本中的表格字段。
+    检测 MinerU HTML 表格中遗漏的 PDF 原生表格字段。
 
-    返回 (signals, metrics):
-        signals: ["native_table_text_missing"] 或 []
-        metrics: {
-            "native_table_candidates": int,      # PDF 表格区域候选标签数
-            "native_table_missing": int,          # 遗漏数
-            "missing_text": list[str],            # 遗漏的原文
-        }
+    算法：
+    1. 解析所有 HTML <table> → 展开 colspan → 逻辑网格
+    2. 提取所有网格文本 → html_all；首列文本 → html_first_col
+    3. PDF words 按 y 聚类为视觉行
+    4. 逐行：若任一 word 匹配 html_all（确认是表格行），
+       检查该行左列候选标签在 html_first_col 中是否存在
+    5. 遗漏 → native_table_text_missing
     """
-    # 1. 检查页面是否有合格的规格表（≥ 3 行）
-    if not _is_spec_table(md_text):
-        return [], {"native_table_candidates": 0, "native_table_missing": 0,
-                     "missing_text": []}
-    html_cells = _extract_html_cell_texts(md_text)
-    if not html_cells:
-        return [], {"native_table_candidates": 0, "native_table_missing": 0,
-                     "missing_text": []}
+    tables = _parse_all_tables(md_text)
+    if not tables:
+        return [], {"native_table_candidates": 0, "native_table_missing": 0, "missing_text": []}
 
-    # 2. 从 PDF 提取左列候选标签
-    pdf_labels = _find_pdf_table_labels(pdf_words, page_width, page_height)
-    if not pdf_labels:
-        return [], {"native_table_candidates": 0, "native_table_missing": 0,
-                     "missing_text": []}
+    html_all: set[str] = set()
+    html_first_col: set[str] = set()
+    for grid in tables:
+        for row in grid:
+            for ct in row:
+                if ct.strip():
+                    html_all.add(_normalize_table_text(ct))
+            if row and row[0].strip():
+                html_first_col.add(_normalize_table_text(row[0]))
 
-    # 3. 比较：PDF 中存在但 HTML 中缺失的标签
-    missing = sorted(pdf_labels - html_cells)
+    if not html_all:
+        return [], {"native_table_candidates": 0, "native_table_missing": 0, "missing_text": []}
 
-    signals = []
-    if missing:
-        signals.append("native_table_text_missing")
+    visual_lines = _cluster_pdf_words(pdf_words, page_height)
+    if not visual_lines:
+        return [], {"native_table_candidates": 0, "native_table_missing": 0, "missing_text": []}
 
+    # 确定左右分界 x：从 html_all 匹配到的 words 中取最小 x0
+    right_x0s = [x0 for line in visual_lines for x0, _, _, t in line
+                 if _normalize_table_text(t) in html_all]
+    split_x = max(page_width * 0.3, (min(right_x0s) * 0.9 if right_x0s else page_width * 0.4))
+
+    # 逐行检测：仅对至少有一个 word 匹配 html_all 的视觉行
+    missing_raw: set[str] = set()
+    for line in visual_lines:
+        has_html_match = any(_normalize_table_text(t) in html_all for _, _, _, t in line)
+        if not has_html_match:
+            continue
+        for x0, _, _, text in line:
+            norm = _normalize_table_text(text)
+            if norm in html_all:
+                continue  # 已在表格中
+            if x0 >= split_x:
+                continue  # 右列正文
+            if norm not in html_first_col:
+                missing_raw.add(text)
+
+    missing_texts = sorted(missing_raw)
+    signals = ["native_table_text_missing"] if missing_texts else []
     return signals, {
-        "native_table_candidates": len(pdf_labels),
-        "native_table_missing": len(missing),
-        "missing_text": missing,
+        "native_table_candidates": len(html_first_col),
+        "native_table_missing": len(missing_texts),
+        "missing_text": missing_texts,
     }
+
 
 
 def compare_quality(
