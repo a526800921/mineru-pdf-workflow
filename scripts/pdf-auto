@@ -239,6 +239,89 @@ with open(manifest_path, "w", encoding="utf-8") as f:
 PY
 }
 
+# Output directory consistency check
+_check_seg_consistency() {
+  local seg_dir="$1"
+  local pdf="$2"
+  local manifest="${seg_dir%/segments*}/manifest.json"
+  if [[ ! -d "$seg_dir" ]] || [[ -z "$(ls -A "$seg_dir" 2>/dev/null)" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$manifest" ]]; then
+    log "Old output package missing manifest.json, cleaning and rebuilding"
+    rm -rf "$seg_dir"/*
+    return 1
+  fi
+  local result
+  result="$(python3 - "$manifest" "$pdf" <<'PY'
+import json, sys, hashlib
+from pathlib import Path
+manifest_path, pdf_path = sys.argv[1], sys.argv[2]
+with open(manifest_path) as f:
+    manifest = json.load(f)
+reasons = []
+old_hash = manifest.get("hash", {}).get("sha256", "")
+if old_hash:
+    with open(pdf_path, "rb") as f:
+        new_hash = hashlib.sha256(f.read()).hexdigest()
+    if old_hash != new_hash:
+        reasons.append("PDF file changed (SHA-256 mismatch)")
+seg = manifest.get("segmentation", {})
+if not seg:
+    reasons.append("Missing segmentation fingerprint (old output format)")
+else:
+    if seg.get("segment_size") == 1:
+        seg_root = Path(manifest_path).parent / "segments"
+        if seg_root.exists():
+            for d in sorted(seg_root.iterdir()):
+                if not d.is_dir() or not d.name.startswith("p"):
+                    continue
+                parts = d.name[1:].split("-")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    if int(parts[1]) - int(parts[0]) > 0:
+                        reasons.append(f"Old multi-page segment residual: {d.name}")
+                        break
+            seg_info = manifest.get("segmentation", {})
+            expected_pages = seg_info.get("total_pages", 0)
+            found_dirs = set()
+            for d in sorted(seg_root.iterdir()):
+                if d.is_dir() and d.name.startswith("p"):
+                    parts = d.name[1:].split("-")
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        s, e = int(parts[0]), int(parts[1])
+                        if s == e:
+                            found_dirs.add(s)
+            if found_dirs and expected_pages > 0:
+                expected = set(range(1, expected_pages + 1))
+                missing = expected - found_dirs
+                extra = found_dirs - expected
+                if missing:
+                    ms = ", ".join(str(p) for p in sorted(missing)[:10])
+                    if len(missing) > 10:
+                        ms += f" ... (total {len(missing)} pages)"
+                    reasons.append(f"Missing pages: {ms}")
+                if extra:
+                    es = ", ".join(str(p) for p in sorted(extra)[:5])
+                    reasons.append(f"Extra pages: {es}")
+for reason in reasons:
+    print(reason)
+if reasons:
+    sys.exit(1)
+PY
+)"
+  local rc=$?
+  if [[ $rc -ne 0 ]] || [[ -n "$result" ]]; then
+    while IFS= read -r reason; do
+      [[ -n "$reason" ]] && log "  - ${reason}"
+    done <<< "$result"
+    log "Cleaning old output, re-parsing"
+    rm -rf "$seg_dir"/*
+    return 1
+  fi
+  log "  Output directory consistency check passed"
+  return 0
+}
+
 usage() {
   cat <<'EOF'
 用法:
@@ -314,6 +397,9 @@ for _d in "$segments_dir"/*-rerun/; do
   log "清理残留重跑目录: $(basename "$_d")"
   rm -rf "$_d"
 done
+
+# Output directory consistency check: clean on mismatch
+_check_seg_consistency "$segments_dir" "$pdf_path" || true
 
 # 提取 PDF 文件名（无扩展名） 用于自动推导合并输出
 pdf_stem="$(basename "$pdf_path" .pdf)"

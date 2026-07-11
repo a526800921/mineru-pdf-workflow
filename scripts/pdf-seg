@@ -89,6 +89,132 @@ sys.stdout.write("\n")
 PY
 }
 
+# 输出目录一致性检查
+# 检查现有 segments/ 是否匹配当前 PDF 和运行配置
+# 不一致时清理旧内容并返回非零退出码
+_check_seg_consistency() {
+  local seg_dir="$1" pdf="$2" pages="$3" seg_size="$4"
+  local cur_backend="$5" cur_method="$6" cur_effort="$7" cur_lang="$8"
+  local manifest="${seg_dir%/segments*}/manifest.json"
+
+  # 无旧输出 → 干净状态
+  if [[ ! -d "$seg_dir" ]] || [[ -z "$(ls -A "$seg_dir" 2>/dev/null)" ]]; then
+    return 0
+  fi
+
+  # 无 manifest → 无法校验，清理
+  if [[ ! -f "$manifest" ]]; then
+    log "⚠ 旧输出包缺少 manifest.json，清理重建"
+    rm -rf "$seg_dir"/*
+    return 1
+  fi
+
+  # Python 校验
+  local result
+  result="$(python3 - "$manifest" "$pdf" "$pages" "$seg_size" "$cur_backend" "$cur_method" "$cur_effort" "$cur_lang" <<'PY'
+import json, sys, hashlib
+from pathlib import Path
+
+manifest_path = sys.argv[1]
+pdf_path = sys.argv[2]
+current_pages = int(sys.argv[3])
+current_seg_size = int(sys.argv[4])
+cur_backend = sys.argv[5]
+cur_method = sys.argv[6]
+cur_effort = sys.argv[7]
+cur_lang = sys.argv[8]
+
+with open(manifest_path) as f:
+    manifest = json.load(f)
+
+reasons = []
+
+# Verify PDF hash
+old_hash = manifest.get("hash", {}).get("sha256", "")
+if old_hash:
+    with open(pdf_path, "rb") as f:
+        new_hash = hashlib.sha256(f.read()).hexdigest()
+    if old_hash != new_hash:
+        reasons.append("PDF 文件变更 (SHA-256 不匹配)")
+
+# Verify segmentation fingerprint
+seg = manifest.get("segmentation", {})
+if not seg:
+    reasons.append("缺少 segmentation 指纹 (旧输出格式)")
+else:
+    if seg.get("total_pages") != current_pages:
+        reasons.append(f"页数变更: {seg.get('total_pages')} -> {current_pages}")
+    if seg.get("segment_size") != current_seg_size:
+        reasons.append(f"分段大小变更: {seg.get('segment_size')} -> {current_seg_size}")
+    mu = seg.get("mineru", {})
+    if mu.get("backend") != cur_backend:
+        reasons.append(f"backend 变更: {mu.get('backend')} -> {cur_backend}")
+    if mu.get("method") != cur_method:
+        reasons.append(f"method 变更: {mu.get('method')} -> {cur_method}")
+    if mu.get("effort") != cur_effort:
+        reasons.append(f"effort 变更: {mu.get('effort')} -> {cur_effort}")
+    if mu.get("lang") != cur_lang:
+        reasons.append(f"lang 变更: {mu.get('lang')} -> {cur_lang}")
+
+# 单页模式下检查旧多页段残留
+if current_seg_size == 1:
+    seg_root = Path(manifest_path).parent / "segments"
+    if seg_root.exists():
+        for d in sorted(seg_root.iterdir()):
+            if not d.is_dir() or not d.name.startswith("p"):
+                continue
+            parts = d.name[1:].split("-")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                if int(parts[1]) - int(parts[0]) > 0:
+                    reasons.append(f"旧多页段残留: {d.name}")
+                    break
+
+        # Consecutive single-page directory completeness check
+        seg_root = Path(manifest_path).parent / "segments"
+        expected_pages = current_pages
+        found_dirs = set()
+        for d in sorted(seg_root.iterdir()):
+            if d.is_dir() and d.name.startswith("p"):
+                parts = d.name[1:].split("-")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    s = int(parts[0]); e = int(parts[1])
+                    if s == e:
+                        found_dirs.add(s)
+        if found_dirs:
+            expected = set(range(1, expected_pages + 1))
+            missing = expected - found_dirs
+            extra = found_dirs - expected
+            if missing:
+                missing_str = ", ".join(str(p) for p in sorted(missing)[:10])
+                if len(missing) > 10:
+                    missing_str += f" ... (共 {len(missing)} 页)"
+                reasons.append(f"缺少页面: {missing_str}")
+            if extra:
+                extra_str = ", ".join(str(p) for p in sorted(extra)[:5])
+                reasons.append(f"多余页面: {extra_str}")
+
+for reason in reasons:
+    print(reason)
+
+if reasons:
+    sys.exit(1)
+PY
+)"
+  local rc=$?
+
+  if [[ $rc -ne 0 ]] || [[ -n "$result" ]]; then
+    while IFS= read -r reason; do
+      [[ -n "$reason" ]] && log "  - ${reason}"
+    done <<< "$result"
+    log "Cleaning old output, re-parsing"
+    rm -rf "$seg_dir"/*
+    return 1
+  fi
+
+  log "  Output directory consistency check passed"
+  return 0
+}
+
 if [[ $# -ne 1 ]]; then
   if [[ "$json_mode" == "1" ]]; then
     usage >&2
@@ -180,6 +306,9 @@ fi
 root_output_dir="${MINERU_SEGMENT_DIR:-$pdf_dir/segments}"
 mkdir -p "$root_output_dir"
 
+# 输出目录一致性检查：若旧输出与当前配置不一致则清理重建
+_check_seg_consistency "$root_output_dir" "$pdf_path" "$pages" "$segment_size" "$backend" "$method" "$effort" "$lang" || true
+
 log "PDF: $pdf_path"
 log "总页数: $pages"
 log "每段页数: $segment_size"
@@ -230,16 +359,22 @@ done
 mkdir -p "$pdf_dir/images"
 mkdir -p "$pdf_dir/data"
 
-# 生成 manifest.json
+# 生成 manifest.json（含 segmentation 运行指纹供后续一致性检查）
 manifest_path="$pdf_dir/manifest.json"
 sha256="$(shasum -a 256 "$pdf_path" | awk '{print $1}')"
-python3 - "$manifest_path" "$pdf_stem" "$pdf_path" "$pdf_name" "$sha256" <<'PY'
+python3 - "$manifest_path" "$pdf_stem" "$pdf_path" "$pdf_name" "$sha256" "$segment_size" "$pages" "$backend" "$method" "$effort" "$lang" <<'PY'
 import json, sys
 manifest_path = sys.argv[1]
 model = sys.argv[2]
 source_pdf = sys.argv[3]
 pdf_name = sys.argv[4]
 sha256 = sys.argv[5]
+segment_size = int(sys.argv[6])
+total_pages = int(sys.argv[7])
+backend = sys.argv[8]
+method = sys.argv[9]
+effort = sys.argv[10]
+lang = sys.argv[11]
 
 manifest = {
     "model": model,
@@ -255,6 +390,18 @@ manifest = {
     },
     "hash": {
         "sha256": sha256
+    },
+    "segmentation": {
+        "schema_version": 1,
+        "layout": "single_page" if segment_size == 1 else "batch",
+        "segment_size": segment_size,
+        "total_pages": total_pages,
+        "mineru": {
+            "backend": backend,
+            "method": method,
+            "effort": effort,
+            "lang": lang,
+        }
     },
     "parse_status": "segmented"
 }

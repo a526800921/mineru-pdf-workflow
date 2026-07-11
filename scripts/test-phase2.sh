@@ -135,15 +135,66 @@ cp "$SCRIPTS_DIR/pdf-auto" "$MOCK_DIR/pdf-auto"
 chmod +x "$MOCK_DIR/pdf-auto"
 cp "$SCRIPTS_DIR/pdf-rerun" "$MOCK_DIR/pdf-rerun"
 chmod +x "$MOCK_DIR/pdf-rerun"
+cp "$SCRIPTS_DIR/pdf-seg" "$MOCK_DIR/pdf-seg"
+chmod +x "$MOCK_DIR/pdf-seg"
 
 # ── 辅助函数：重置 pdf-validate 调用计数器 ────────────────
 reset_validate_stage() { echo 1 > "$MOCK_DIR/.validate_stage"; }
-cp "$SCRIPTS_DIR/pdf-rerun" "$MOCK_DIR/pdf-rerun"
-chmod +x "$MOCK_DIR/pdf-rerun"
 
-# ── 辅助函数 ───────────────────────────────────────────────────────
+# ── 辅助函数：为 mock pdf-auto 创建最小 manifest.json（通过一致性检查）─
 ok()   { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+
+create_mock_manifest() {
+  local pkg_dir="$1" pdf_path="$2" pages="${3:-2}"
+  # 空文件 SHA-256
+  local sha256
+  if [[ -s "$pdf_path" ]]; then
+    sha256="$(shasum -a 256 "$pdf_path" | awk '{print $1}')"
+  else
+    # 空文件固定 SHA-256
+    sha256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  fi
+  python3 - "$pkg_dir" "$pdf_path" "$sha256" "$pages" << 'PY'
+import json, sys
+pkg_dir = sys.argv[1]
+pdf_path = sys.argv[2]
+sha256 = sys.argv[3]
+pages = int(sys.argv[4])
+manifest = {
+    "model": "test-model",
+    "version": None,
+    "source_pdf": pdf_path,
+    "files": {
+        "pdf": "dummy.pdf",
+        "markdown": None,
+        "review": None,
+        "segments": "segments",
+        "images": "images",
+        "data": "data"
+    },
+    "hash": {"sha256": sha256},
+    "segmentation": {
+        "schema_version": 1,
+        "layout": "single_page",
+        "segment_size": 1,
+        "total_pages": pages,
+        "mineru": {
+            "backend": "hybrid-engine",
+            "method": "auto",
+            "effort": "medium",
+            "lang": "ch"
+        }
+    },
+    "parse_status": "segmented"
+}
+with open(f"{pkg_dir}/manifest.json", "w") as f:
+    json.dump(manifest, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PY
+}
+cp "$SCRIPTS_DIR/pdf-rerun" "$MOCK_DIR/pdf-rerun"
+chmod +x "$MOCK_DIR/pdf-rerun"
 
 assert_file_exists() {
     local desc="$1" path="$2"
@@ -431,6 +482,7 @@ echo "original p1" > "$T11/segments/p0001-0001/page.md"
 echo '{"pages":[{"page_idx":0}]}' > "$T11/segments/p0001-0001/page_content_list.json"
 echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T11/segments/p0001-0001/page_content_list_v2.json"
 touch "$T11/dummy.pdf"
+create_mock_manifest "$T11" "$T11/dummy.pdf" 1
 
 reset_validate_stage
 HOME="$MOCK_HOME" PDF_VALIDATE_BEHAVIOR=all_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T11/dummy.pdf" "$T11/segments" 2>/dev/null > "$OUT11" || true
@@ -459,6 +511,7 @@ echo '{"pages":[{"page_idx":0}]}' > "$T12/segments/p0001-0001/page_content_list.
 echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T12/segments/p0001-0001/page_content_list_v2.json"
 echo "original p2" > "$T12/segments/p0002-0002/page.md"
 touch "$T12/dummy.pdf"
+create_mock_manifest "$T12" "$T12/dummy.pdf" 2
 
 reset_validate_stage
 HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=rerun_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T12/dummy.pdf" "$T12/segments" 2>/dev/null > "$OUT12" || true
@@ -492,6 +545,7 @@ echo '{"pages":[{"page_idx":0}]}' > "$T13/segments/p0001-0001/page_content_list.
 echo '{"pages":[{"page_idx":0,"type":"text"}]}' > "$T13/segments/p0001-0001/page_content_list_v2.json"
 echo "original p2" > "$T13/segments/p0002-0002/page.md"
 touch "$T13/dummy.pdf"
+create_mock_manifest "$T13" "$T13/dummy.pdf" 2
 
 reset_validate_stage
 HOME="$MOCK_HOME" MINERU_MOCK_MODE=failed PDF_VALIDATE_BEHAVIOR=rerun_fail PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T13/dummy.pdf" "$T13/segments" 2>/dev/null > "$OUT13" || true
@@ -517,7 +571,69 @@ else
     fail "pdf-auto 重跑失败路径校验失败"
 fi
 
-# ── 汇总 ──────────────────────────────────────────────────────────
+# ── 场景 15：pdf-auto 一致性检查通过 → 保留旧输出 ──
+echo ""
+echo "=== 场景 15：pdf-auto 一致性检查通过 → 保留旧输出 ==="
+T15="$TEST_ROOT/t15"
+OUT15="$T15/out.json"
+mkdir -p "$T15/segments/p0001-0001" "$T15/segments/p0002-0002"
+echo "keep p1" > "$T15/segments/p0001-0001/page.md"
+echo "keep p2" > "$T15/segments/p0002-0002/page.md"
+touch "$T15/dummy.pdf"
+create_mock_manifest "$T15" "$T15/dummy.pdf" 2
+
+echo 1 > "$MOCK_DIR/.validate_stage"
+HOME="$MOCK_HOME" PDF_VALIDATE_BEHAVIOR=all_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T15/dummy.pdf" "$T15/segments" 2>/dev/null > "$OUT15" || true
+
+assert_str_eq "pdf-auto 一致性检查后原内容保留" "keep p1" "$(cat "$T15/segments/p0001-0001/page.md")"
+
+# ── 场景 16：pdf-auto 文件变更 → 一致性检查触发清理 ──
+echo ""
+echo "=== 场景 16：pdf-auto 文件变更 → 一致性检查触发清理 ==="
+T16="$TEST_ROOT/t16"
+OUT16="$T16/out.json"
+mkdir -p "$T16/segments/p0001-0001" "$T16/segments/p0002-0002"
+echo "will be cleaned" > "$T16/segments/p0001-0001/page.md"
+echo "will be cleaned" > "$T16/segments/p0002-0002/page.md"
+touch "$T16/dummy.pdf"
+
+# 创建一个 hash 不匹配的 manifest（写入错误 hash）
+python3 -c "
+import json
+sha = '0000000000000000000000000000000000000000000000000000000000000000'
+m = {'model':'test','files':{'pdf':'dummy.pdf','segments':'segments'},'hash':{'sha256':sha},'segmentation':{'schema_version':1,'layout':'single_page','segment_size':1,'total_pages':2,'mineru':{'backend':'hybrid-engine','method':'auto','effort':'medium','lang':'ch'}},'parse_status':'segmented'}
+with open('$T16/manifest.json','w') as f:
+    json.dump(m, f, indent=2)
+    f.write('\n')
+"
+echo 1 > "$MOCK_DIR/.validate_stage"
+HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=all_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T16/dummy.pdf" "$T16/segments" 2>/dev/null > "$OUT16" || true
+
+# hash 不匹配 → 清理触发 → 原内容被删 → pdf-auto 重新创建
+# pdf-auto 在清理后直接继续运行，mock 环境会创建新的 rerun/merge 内容
+# 因此 p0001-0001 的原始内容不再存在
+assert_file_missing "hash 不匹配触发清理，原内容已删除" "$T16/segments/p0001-0001/page.md"
+
+# ── 场景 17：pdf-auto 旧多页段残留 → 一致性检查触发清理 ──
+echo ""
+echo "=== 场景 17：pdf-auto 旧多页段残留 → 一致性检查触发清理 ==="
+T17="$TEST_ROOT/t17"
+OUT17="$T17/out.json"
+mkdir -p "$T17/segments/p0001-0001" "$T17/segments/p0011-0020" "$T17/segments/p0002-0002"
+echo "clean me" > "$T17/segments/p0001-0001/page.md"
+echo "multi-page" > "$T17/segments/p0011-0020/page.md"
+echo "keep" > "$T17/segments/p0002-0002/page.md"
+touch "$T17/dummy.pdf"
+create_mock_manifest "$T17" "$T17/dummy.pdf" 2
+
+echo 1 > "$MOCK_DIR/.validate_stage"
+HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=all_pass PATH="$MOCK_DIR:$PATH" PDF_AUTO_JSON=1 bash "$MOCK_DIR/pdf-auto" "$T17/dummy.pdf" "$T17/segments" 2>/dev/null > "$OUT17" || true
+
+# 多页段残留 → 清理触发 → 所有段目录被删除
+assert_file_missing "多页段残留触发清理" "$T17/segments/p0001-0001/page.md"
+assert_file_missing "多页段本身被删除" "$T17/segments/p0011-0020/page.md"
+assert_file_missing "正常单页段也被删除（因为清理是整体 rm -rf）" "$T17/segments/p0002-0002/page.md"
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  通过: $PASS  失败: $FAIL"
