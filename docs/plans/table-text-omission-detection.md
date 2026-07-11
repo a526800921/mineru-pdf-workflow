@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 1：通用原生表格检测器边界修复
+- 状态：待实施
+- 当前阶段：阶段 2：接入既有 fallback 闭环
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -125,6 +125,46 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
 3. **回归测试缺口**：现有 97 个测试没有覆盖上述多词字段和 `rowspan` 失败用例，因此“全绿”不能证明阶段1完成。
 
 因此阶段状态继续保持“实施中”，下一次验收至少必须补齐多词字段重组、`rowspan` 网格展开及对应回归测试。
+
+## 阶段 1 再次验收（第二次，2026-07-11）
+
+结论：**通过，阶段 1 已完成。**
+
+基于提交 `997a932 fixup: rowspan展开+多词字段n-gram合并+回归测试` 的独立复验结果：
+
+- p16 真实样本仍能发现 `native_table_text_missing`，缺失字段为“百公里综合油耗”。
+- 多词字段 `Max power` 的同视觉行 n-gram 重组通过，不再误报 `Max`、`power`。
+- `rowspan` 逻辑网格展开通过；`colspan`、多表格和表格外正文边界均通过。
+- 全量 Python 测试：100/100 通过。
+- `test-phase3.sh`：11/11 通过，其中页质量单测 41/41 通过。
+- 计划治理检查、`git diff --check`：通过。
+
+本次验收前的收尾条件：
+
+- `skills/pdf2md/SKILL.md` 与 `/Users/jafish/.claude/skills/pdf2md/SKILL.md` 已同步记录“PDF 原生表格字段遗漏检测”的触发边界、`native_table_text_missing` 证据和不硬编码字段白名单原则。
+
+因此当前判断为：阶段 1 的代码、边界回归、治理文档和双份 skill 已完成同步；阶段 1 标记为“已完成”，专项计划继续进入阶段 2。
+
+### 阶段 1 完成证据
+
+- 提交：`997a932 fixup: rowspan展开+多词字段n-gram合并+回归测试`。
+- p16 真实样本检测到 `native_table_text_missing`，并识别缺失字段“百公里综合油耗”。
+- 多词字段、`rowspan`、`colspan`、多表格、表格外正文边界测试通过。
+- 全量 Python 测试 100/100，`test-phase3.sh` 11/11，治理检查和 `git diff --check` 通过。
+- 项目级与用户级 `pdf2md` skill 已同步。
+
+## 阶段 2 待实施门禁复核（2026-07-11）
+
+结论：**已达到待实施标准。**
+
+- 执行顺序已固定：`pdf-auto` 在 consistency check 后、`pdf-validate` 前调用 `assess_page_quality`；调用时传入 PDF 原生 `words` 和页面 bbox 信息。
+- fallback 参数已固定：仅重跑异常单页，使用 `effort=high` 与 `--image-analysis false`，不改变首次解析参数。
+- 结果边界已固定：原始页与 `-fallback` 候选并存，`manifest.page_fallback.selected` 是合并选择依据；成功改善选择 `fallback`，无法判断或未恢复选择 `review`。
+- 失败策略已固定：fallback 失败、无有效 Markdown、跨次已尝试或指标无法判断时保留原始结果并进入 `review`，不循环重跑。
+- 既有阶段 3 回归已覆盖 fallback 的 `fallback/original/review/failed`、同源候选、manifest Schema、合并选择和 `needs_review` 兜底。
+- 当前没有需要用户确认的阶段2前置问题；阶段2实施时只需补齐原生表格遗漏信号的专用闭环 fixture 和 demo20 p16 端到端证据。
+
+进入阶段 2 后，修改 `pdf-auto`、`page_quality` 或 `pdf-merge` 相关符号前，必须先执行 GitNexus upstream impact；完成后执行 `detect_changes()`、专项回归、全量测试和治理检查。
 
 ## 检测契约
 
