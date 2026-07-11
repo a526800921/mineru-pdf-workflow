@@ -47,6 +47,20 @@ python3 scripts/check_plan_governance.py .
 - `pdf-auto` 仍以段名生成重跑计划，页级行为依赖 `MINERU_SEGMENT_SIZE=1`，没有独立页级 JSON 契约；
 - 尚未完成真实 MinerU 服务下的单页成功、无 Markdown、非零退出和恢复原始页端到端复验。
 
+## 修复提交后的再次复核
+
+提交 `6db572c` 已覆盖前一轮发现的主要问题：失败重跑不应用、`no_markdown` 判定、`pdf-auto` 的中间产物同步、`pdf-rerun` 的 v1 content list、残留 backup 处理和 `rerun_detail` JSON 字段。
+
+但仍有以下阻塞项：
+
+1. `content_list_v2.json` 未纳入同步，而页面类型验证依赖 v2。
+2. `pdf-rerun` 直接入口没有同步 middle/model/v2 content list/images。
+3. 发现旧 `.backup` 时直接删除，原目录缺失时可能丢失唯一备份。
+4. `pdf-auto` 覆盖原目录不是事务操作，中间同步失败可能留下半更新结果。
+5. 没有独立回归测试覆盖这些失败和恢复场景；当前主要证据来自代码检查和提交说明。
+
+因此修复提交不能直接视为验收通过，阶段 2 仍保持 `实施中`。
+
 ## 二次审计新增遗漏
 
 以下问题在首次阶段 2 记录中遗漏，现补充为阻塞项：

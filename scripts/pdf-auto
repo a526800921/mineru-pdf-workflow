@@ -630,40 +630,45 @@ if echo "$decision" | grep -q "^all_passed$"; then
       continue
     fi
 
-    # 复制 Markdown 到原段
-    log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
-    cp "$rerun_md" "$original_md"
-
-    # --- 同步中间产物以确保正文与中间结构同源 ---
+    # 事务同步：先复制到临时目录，全部成功后 mv 覆盖
     _rerun_mineru_dir="$(dirname "$rerun_md")"
     _orig_mineru_dir="$(dirname "$original_md")"
+    _tx_dir="$(mktemp -d "$_orig_mineru_dir/.tx_XXXXXX" 2>/dev/null)" || {
+      log "⚠ 无法创建临时目录（保留原结果）: ${name}"
+      continue
+    }
 
-    # 复制 content_list (v1)
-    _cl_src="$(find "$_rerun_mineru_dir" -maxdepth 1 -name "*_content_list.json" -type f ! -name "*_v2.json" | head -1)"
-    if [[ -n "$_cl_src" && -f "$_cl_src" ]]; then
-      cp "$_cl_src" "$_orig_mineru_dir/$(basename "$_cl_src")"
-    fi
+    log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
 
-    # 复制 middle.json
-    if [[ -f "$_rerun_mineru_dir/middle.json" ]]; then
-      cp "$_rerun_mineru_dir/middle.json" "$_orig_mineru_dir/"
-    fi
-
-    # 复制 model.json
-    if [[ -f "$_rerun_mineru_dir/model.json" ]]; then
-      cp "$_rerun_mineru_dir/model.json" "$_orig_mineru_dir/"
-    fi
-
-    # 复制 images
-    if [[ -d "$_rerun_mineru_dir/images" ]]; then
-      mkdir -p "$_orig_mineru_dir/images"
-      for _img in "$_rerun_mineru_dir/images"/*; do
-        [[ -f "$_img" ]] || continue
-        cp "$_img" "$_orig_mineru_dir/images/"
+    if ! (
+      set -e
+      cp "$rerun_md" "$_tx_dir/$(basename "$original_md")"
+      # content_list v1 + v2
+      for _cl in "$_rerun_mineru_dir"/*_content_list.json; do
+        [[ -f "$_cl" ]] && cp "$_cl" "$_tx_dir/"
       done
+      # middle.json / model.json
+      [[ -f "$_rerun_mineru_dir/middle.json" ]] && cp "$_rerun_mineru_dir/middle.json" "$_tx_dir/"
+      [[ -f "$_rerun_mineru_dir/model.json" ]] && cp "$_rerun_mineru_dir/model.json" "$_tx_dir/"
+      # images
+      if [[ -d "$_rerun_mineru_dir/images" ]]; then
+        mkdir -p "$_tx_dir/images"
+        for _img in "$_rerun_mineru_dir/images"/*; do
+          [[ -f "$_img" ]] || continue
+          cp "$_img" "$_tx_dir/images/"
+        done
+      fi
+      # 全部成功 → mv 覆盖目标目录（同文件系统，原子操作）
+      for _f in "$_tx_dir"/* "$_tx_dir"/.*; do
+        [[ -e "$_f" ]] || continue
+        mv "$_f" "$_orig_mineru_dir/"
+      done
+      rmdir "$_tx_dir"
+    ); then
+      log "⚠ 同步失败，已回滚（保留原结果）: ${name}"
+      rm -rf "$_tx_dir"
     fi
-
-    unset _rerun_mineru_dir _orig_mineru_dir _cl_src _img
+    unset _rerun_mineru_dir _orig_mineru_dir _tx_dir
   done
 
   log
@@ -732,30 +737,41 @@ if echo "$decision" | grep -q "^has_issues$"; then
       continue
     fi
 
-    log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
-    cp "$rerun_md" "$original_md"
-
-    # --- 同步中间产物 ---
+    # 事务同步：先复制到临时目录，全部成功后 mv 覆盖
     _rerun_mineru_dir="$(dirname "$rerun_md")"
     _orig_mineru_dir="$(dirname "$original_md")"
-    _cl_src="$(find "$_rerun_mineru_dir" -maxdepth 1 -name "*_content_list.json" -type f ! -name "*_v2.json" | head -1)"
-    if [[ -n "$_cl_src" && -f "$_cl_src" ]]; then
-      cp "$_cl_src" "$_orig_mineru_dir/$(basename "$_cl_src")"
-    fi
-    if [[ -f "$_rerun_mineru_dir/middle.json" ]]; then
-      cp "$_rerun_mineru_dir/middle.json" "$_orig_mineru_dir/"
-    fi
-    if [[ -f "$_rerun_mineru_dir/model.json" ]]; then
-      cp "$_rerun_mineru_dir/model.json" "$_orig_mineru_dir/"
-    fi
-    if [[ -d "$_rerun_mineru_dir/images" ]]; then
-      mkdir -p "$_orig_mineru_dir/images"
-      for _img in "$_rerun_mineru_dir/images"/*; do
-        [[ -f "$_img" ]] || continue
-        cp "$_img" "$_orig_mineru_dir/images/"
+    _tx_dir="$(mktemp -d "$_orig_mineru_dir/.tx_XXXXXX" 2>/dev/null)" || {
+      log "⚠ 无法创建临时目录（保留原结果）: ${name}"
+      continue
+    }
+
+    log "用重跑结果覆盖: ${name} ($(basename "$rerun_md") → $(basename "$original_md"))"
+
+    if ! (
+      set -e
+      cp "$rerun_md" "$_tx_dir/$(basename "$original_md")"
+      for _cl in "$_rerun_mineru_dir"/*_content_list.json; do
+        [[ -f "$_cl" ]] && cp "$_cl" "$_tx_dir/"
       done
+      [[ -f "$_rerun_mineru_dir/middle.json" ]] && cp "$_rerun_mineru_dir/middle.json" "$_tx_dir/"
+      [[ -f "$_rerun_mineru_dir/model.json" ]] && cp "$_rerun_mineru_dir/model.json" "$_tx_dir/"
+      if [[ -d "$_rerun_mineru_dir/images" ]]; then
+        mkdir -p "$_tx_dir/images"
+        for _img in "$_rerun_mineru_dir/images"/*; do
+          [[ -f "$_img" ]] || continue
+          cp "$_img" "$_tx_dir/images/"
+        done
+      fi
+      for _f in "$_tx_dir"/* "$_tx_dir"/.*; do
+        [[ -e "$_f" ]] || continue
+        mv "$_f" "$_orig_mineru_dir/"
+      done
+      rmdir "$_tx_dir"
+    ); then
+      log "⚠ 同步失败，已回滚（保留原结果）: ${name}"
+      rm -rf "$_tx_dir"
     fi
-    unset _rerun_mineru_dir _orig_mineru_dir _cl_src _img
+    unset _rerun_mineru_dir _orig_mineru_dir _tx_dir
   done
 
   #--- TOC 段级修复 ---

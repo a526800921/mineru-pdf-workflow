@@ -166,16 +166,29 @@ for target in "$@"; do
     # 分段名：p0001-0020（1-based，对齐 PDF 页码）
     seg_name="$target"
     seg_dir="$segments_dir/$seg_name"
-    if [[ ! -d "$seg_dir" ]]; then
-      log "  ✗ 分段不存在：$seg_name，跳过"
-      _rerun_results+=("${seg_name}:0:0:skipped")
-      continue
-    fi
     start_page="${seg_name#p}"
     start_page="${start_page%-*}"
     start_page=$((10#${start_page}))
     end_page="${seg_name##*-}"
     end_page=$((10#${end_page}))
+    # 安全处理残留 backup（在 seg_dir 检查之前，确保 backup 可还原）
+    _backup_dir="${seg_dir}.backup"
+    if [[ -d "$_backup_dir" ]]; then
+      if [[ -d "$seg_dir" ]]; then
+        # seg_dir 存在 → backup 是陈旧的，清理
+        log "  ⚠ 清除陈旧残留备份: $_backup_dir"
+        rm -rf "$_backup_dir"
+      else
+        # seg_dir 不存在且 backup 存在 → 还原唯一原始数据
+        log "  ℹ 还原上次中断的备份: $_backup_dir → $seg_name"
+        mv "$_backup_dir" "$seg_dir"
+      fi
+    fi
+    # 若无 seg_dir 也无 backup，则创建全新分段（直接段名输入视为合法操作）
+    if [[ ! -d "$seg_dir" ]]; then
+      log "  ℹ 创建新分段: $seg_name"
+      mkdir -p "$seg_dir"
+    fi
   elif [[ "$target" =~ ^[0-9]+$ ]]; then
     # 页码（1-based）→ 找到对应分段（分段名已 1-based）
     seg_dir=""
@@ -198,7 +211,7 @@ for target in "$@"; do
       continue
     fi
   else
-    log "  ✗ 无法识别：$target（需要页码或 p0000-0000 分段名），跳过"
+    log "  ✗ 无法识别：${target}（需要页码或 p0000-0000 分段名），跳过"
     continue
   fi
 
@@ -213,10 +226,17 @@ for target in "$@"; do
   log "重跑: $seg_name (PDF 第 ${start_page} 页)"
   # 备份原段，重跑成功则删除备份，失败则恢复
   _backup_dir="${seg_dir}.backup"
-  # 清除可能残留的 backup（上次中断遗留）
+  # 安全处理残留 backup
   if [[ -d "$_backup_dir" ]]; then
-    log "  ⚠ 清除残留备份目录: $_backup_dir"
-    rm -rf "$_backup_dir"
+    if [[ -d "$seg_dir" ]]; then
+      # seg_dir 存在 → backup 是陈旧的，清理
+      log "  ⚠ 清除陈旧残留备份: $_backup_dir"
+      rm -rf "$_backup_dir"
+    else
+      # seg_dir 不存在且 backup 存在 → 还原唯一原始数据
+      log "  ℹ 还原上次中断的备份: $_backup_dir → $seg_name"
+      mv "$_backup_dir" "$seg_dir"
+    fi
   fi
   # 是否实际做了备份（用于判断最终来源）
   _had_backup=false
@@ -247,12 +267,20 @@ for target in "$@"; do
     find_md="$(find "$seg_dir" -name "*.md" -type f | head -1)"
     if [[ -n "$find_md" && -f "$find_md" ]]; then
       cp "$find_md" "$seg_dir/${pdf_stem}.md"
-      # 同步复制 content_list 以保证合并时逐页锚点能同源生成
-      _find_cl="$(find "$(dirname "$find_md")" -maxdepth 1 -name "*_content_list.json" -type f ! -name "*_v2.json" | head -1)"
-      if [[ -n "$_find_cl" && -f "$_find_cl" ]]; then
-        cp "$_find_cl" "$seg_dir/${pdf_stem}_content_list.json"
+      # 同步全部 MinerU 输出产物到段根目录（保正文与中间结构同源）
+      _find_mineru_dir="$(dirname "$find_md")"
+      if [[ "$_find_mineru_dir" != "$seg_dir" ]]; then
+        # content_list v1 + v2
+        for _cl in "$_find_mineru_dir"/*_content_list*.json; do
+          [[ -f "$_cl" ]] && cp "$_cl" "$seg_dir/"
+        done
+        # middle.json / model.json
+        [[ -f "$_find_mineru_dir/middle.json" ]] && cp "$_find_mineru_dir/middle.json" "$seg_dir/"
+        [[ -f "$_find_mineru_dir/model.json" ]] && cp "$_find_mineru_dir/model.json" "$seg_dir/"
+        # images 目录
+        [[ -d "$_find_mineru_dir/images" ]] && cp -a "$_find_mineru_dir/images" "$seg_dir/"
       fi
-      unset _find_cl
+      unset _find_mineru_dir _cl
       log "  ✓ 完成"
       rerun_count=$((rerun_count + 1))
       _seg_status="done"
@@ -296,10 +324,14 @@ log
 log "重跑完成: $rerun_count 段"
 
 
-# 自动合并
+# 自动合并（JSON 模式下输出到 stderr，避免污染 stdout）
 log
 log "=== 合并 ==="
-"$_scripts_dir/pdf-merge" "$segments_dir"
+if [[ "$json_mode" == "1" ]]; then
+  "$_scripts_dir/pdf-merge" "$segments_dir" >&2 || true
+else
+  "$_scripts_dir/pdf-merge" "$segments_dir"
+fi
 
 # JSON 模式：输出结构化 JSON 到 stdout
 if [[ "$json_mode" == "1" ]]; then
