@@ -79,6 +79,9 @@ def generate_review_report(
     # --- 目录页条目级验证（P4a） ---
     _append_toc_entry_details(lines, report)
 
+    # --- 目录归属复核（无法唯一归属物理页的 TOC 条目） ---
+    _append_toc_unassigned(lines, report)
+
     content = "\n".join(lines)
     if file is not None:
         file.write(content)
@@ -351,6 +354,31 @@ def _append_toc_entry_details(lines: list[str], report: dict) -> None:
         else:
             lines.append("目录条目全部在 MinerU 输出中找到。")
         lines.append("")
+
+
+def _append_toc_unassigned(lines: list[str], report: dict) -> None:
+    """目录归属复核：无法唯一归属到物理目录页的 TOC 条目。
+
+    数据源为 toc_repair.repair_merged 写回的 report['toc_unassigned']。这些条目
+    已从 toc.md / toc_tree.json / 合并目录块排除（不静默猜测），需人工确认其物理
+    目录页。仅展示，不改变任何页面决策。
+    """
+    unassigned = report.get("toc_unassigned")
+    if not unassigned:
+        return
+
+    lines.append("## 目录归属复核")
+    lines.append("")
+    lines.append(
+        f"以下 {len(unassigned)} 个目录条目无法唯一归属到物理目录页，"
+        "已从 toc.md / toc_tree.json / 合并目录块排除，需人工确认物理目录页："
+    )
+    lines.append("")
+    lines.append("| 标题 | 指向页 |")
+    lines.append("|------|--------|")
+    for e in unassigned:
+        lines.append(f"| {e.get('title', '')} | {e.get('target_page', '')} |")
+    lines.append("")
 
 
 # ---- CLI entry point (used by scripts/pdf-review) ----

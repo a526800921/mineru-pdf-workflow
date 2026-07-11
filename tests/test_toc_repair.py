@@ -504,5 +504,49 @@ class TestMergedAndCompatPaths(unittest.TestCase):
             os.unlink(pdf)
 
 
+    def test_repair_merged_persists_unassigned_to_validate(self):
+        """无法归属的 TOC 条目写回 validate 报告 toc_unassigned，供 review.md 展示。"""
+        doc = fitz.open()
+        pa = doc.new_page(width=400, height=600)
+        pa.insert_text((72, 100), "Alpha........")
+        pa.insert_text((72, 130), "........1")
+        pb = doc.new_page(width=400, height=600)
+        pb.insert_text((72, 100), "Gamma........")
+        pb.insert_text((72, 130), "........3")
+        doc.new_page(width=400, height=600)
+        doc.set_toc([[1, "Alpha", 1], [1, "Beta", 2], [1, "Gamma", 3]])
+        pdf = tempfile.mktemp(suffix=".pdf")
+        doc.save(pdf)
+        doc.close()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                md = Path(d) / "m.md"
+                md.write_text(
+                    "<!-- pages 1-1 -->\n\na\n\n"
+                    "<!-- pages 2-2 -->\n\nb\n\n"
+                    "<!-- pages 3-3 -->\n\nc",
+                    encoding="utf-8",
+                )
+                vpath = _create_validate_json([
+                    {"name": "p0001-0001", "start_page": 1, "end_page": 1,
+                     "page_type_summary": {"toc": 1},
+                     "pages": [{"page": 0, "page_type": "toc"}]},
+                    {"name": "p0002-0002", "start_page": 2, "end_page": 2,
+                     "page_type_summary": {"toc": 1},
+                     "pages": [{"page": 1, "page_type": "toc"}]},
+                    {"name": "p0003-0003", "start_page": 3, "end_page": 3,
+                     "page_type_summary": {"text": 1},
+                     "pages": [{"page": 2, "page_type": "text"}]},
+                ])
+                repair_merged(Path(pdf), md, vpath)
+                report = json.load(open(vpath, encoding="utf-8"))
+                titles = [e["title"] for e in report.get("toc_unassigned", [])]
+                self.assertIn("Beta", titles)  # 未归属 → 进 toc_unassigned
+                self.assertNotIn("Alpha", titles)  # 已归属 → 不进
+                os.unlink(vpath)
+        finally:
+            os.unlink(pdf)
+
+
 if __name__ == "__main__":
     unittest.main()

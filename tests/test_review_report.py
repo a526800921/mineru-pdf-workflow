@@ -114,5 +114,38 @@ class TestPageFallbackReview(unittest.TestCase):
         self.assertNotIn("| 12 |", content)
 
 
+class TestTocUnassignedReview(unittest.TestCase):
+    """目录归属复核段：展示无法唯一归属物理页的 TOC 条目。"""
+
+    def _gen(self, toc_unassigned) -> str:
+        tmp = tempfile.mkdtemp()
+        pkg = Path(tmp)
+        (pkg / "segments").mkdir()
+        (pkg / "manifest.json").write_text(
+            json.dumps({"segmentation": {"segment_size": 1}}), encoding="utf-8"
+        )
+        report = _minimal_validate_report()
+        if toc_unassigned is not None:
+            report["toc_unassigned"] = toc_unassigned
+        vt = pkg / "validate.json"
+        vt.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        out = pkg / "review.md"
+        generate_review_report(
+            validate_json_path=str(vt), review_output_path=str(out),
+            threshold=0.82, pdf_path=str(pkg / "d.pdf"),
+            segments_dir=str(pkg / "segments"),
+        )
+        return out.read_text(encoding="utf-8")
+
+    def test_unassigned_section_rendered(self):
+        content = self._gen([{"title": "制动", "target_page": 130, "depth": 1}])
+        self.assertIn("目录归属复核", content)
+        self.assertIn("制动", content)
+
+    def test_no_unassigned_no_section(self):
+        content = self._gen(None)
+        self.assertNotIn("目录归属复核", content)
+
+
 if __name__ == "__main__":
     unittest.main()

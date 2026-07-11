@@ -305,6 +305,18 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     _write_toc_tree(merged_md_path.parent, assigned)
     _write_toc_md(merged_md_path.parent, assigned)
 
+    # 无法唯一归属的条目已从三种目录产物排除，持久化到 validate 报告供 review.md
+    # 展示（可见性）：让用户知道有条目未能归属，而非静默丢弃
+    assigned_ids = {id(e) for e in assigned}
+    review_entries = [e for e in entries if id(e) not in assigned_ids]
+    if review_entries:
+        report["toc_unassigned"] = [
+            {"title": e["title"], "target_page": e["page"], "depth": e.get("depth", 0)}
+            for e in review_entries
+        ]
+        with open(validate_tmp, "w") as f:
+            json.dump(report, f, ensure_ascii=False)
+
     print(
         f"  合并级 TOC 修复: 页码 {first_toc}–{last_toc}, "
         f"{len(assigned)}/{len(entries)} 条目已归属"

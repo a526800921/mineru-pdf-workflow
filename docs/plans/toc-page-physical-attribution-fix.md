@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 3：真实样本与回归验收（阶段 1、阶段 2 已完成）
+- 状态：已完成
+- 当前阶段：全阶段（1-3）已完成
 - 最后更新：2026-07-11
 - 依赖：`coverage-validation-optimization`、`per-page-anchors`、`pdf-auto-repair-before-merge`、PyMuPDF 原生文本层、demo20 目录页样本
 - 背景缺陷：[toc-page-full-duplication.md](../issues/toc-page-full-duplication.md)
@@ -159,6 +159,18 @@ PY
 - 验证结构化抽取、`pdf-read-page`、review.md 和 JSON 输出无非预期回归。
 - 对实际 MinerU 过度生成输出做一次完整 `pdf-auto` 运行，记录修复前后哈希、条目归属和状态。
 
+### 阶段 3 待实施门禁复核（2026-07-11）
+
+结论：**已达到待实施标准。**
+
+- 阶段2已独立验收通过，主 Markdown、`toc.md`、`toc_tree.json` 和既有消费者契约已具备稳定基线。
+- 阶段3真实样本范围已限定：demo20 完整运行、demo5/demo60 乱码/无文本层/不同目录布局、`review.md` 的目录归属证据、结构化抽取和 JSON 输出。
+- 失败策略已明确：无文本层、乱码或无法唯一归属时不随机猜测，保留原始候选并进入 `review`；主 Markdown 页锚点不得删除或重排。
+- 验证方式已明确：真实 `pdf-auto` 运行记录修复前后哈希、物理页归属、三种目录产物、review 状态和消费者结果；同时执行专项测试、全量测试、治理检查、`git diff --check` 和 GitNexus `detect_changes()`。
+- 完成条件、影响范围和回滚方式已写入本计划；当前没有实施前置阻塞项，也没有需要用户确认的决策。
+
+阶段3实施前若修改 PDF 输出包契约，必须先确认项目级与用户级 `pdf2md` skill 保持同步；修改共享代码符号前执行 GitNexus upstream impact。
+
 ### 阶段 2 待实施门禁复核（2026-07-11）
 
 结论：**已达到待实施标准。**
@@ -262,6 +274,46 @@ git diff --check
 
 本阶段交付 toc.md/toc_tree 字段扩展、两路径物理页归属一致、消费者兼容与幂等；demo5/demo60 乱码目录与无文本层真实样本验收、review.md 的 TOC 归属条目接入、结构化抽取端到端回归属阶段 3。
 
+### 阶段 2 独立验收（2026-07-11）
+
+结论：**通过，阶段 2 已验收；专项计划进入阶段 3。**
+
+- `python3 -m pytest tests/test_toc_repair.py -q`：17/17 通过，覆盖 `repair()`、`repair_merged()`、`toc.md`、`toc_tree.json`、未归属条目排除和段级物理页归属。
+- 全量 `python3 -m pytest tests/ -q`：131/131 通过；`bash scripts/test-consumers.sh`：10/10 通过。
+- demo20 临时副本端到端：`toc.md` 无页锚点；`toc_tree.json` 含 `target_page`/`toc_page`/`depth`；121 条目录条目顺序一致；`制动` 为 `target_page=130,toc_page=4`；`制动 130` 不出现在 p2、出现在 p4；`整车关键件扭矩表 188` 出现在 p8。
+- 主 Markdown 的目录页锚点 `<!-- pages 2-2 -->` 至 `<!-- pages 8-8 -->` 连续保留；真实 `pdf-read-page pdf/demo20 3` 只返回 p3 目录内容。
+- 同一临时副本连续执行两次 `repair_merged`，主 Markdown、`toc.md`、`toc_tree.json` 内容保持一致，确认幂等且不重新引入整本目录。
+- `pdf-extract-data` 新旧 `toc_tree` 字段兼容验证通过：旧 `page` 与新 `target_page` 生成的 section map 一致；`scripts/test-phase2.sh` 的 `all_passed`/`needs_review` 路径回归为 37/37。
+- 项目级与用户级 `pdf2md` skill 已同步目录三产物契约；治理检查和 `git diff --check` 通过。
+
+阶段2验收未覆盖的内容继续保留在阶段3：demo5/demo60 乱码目录与无文本层真实样本、review.md 的 TOC 归属条目、结构化抽取完整端到端回归和真实 `pdf-auto` 运行记录。
+
+## 阶段 3 完成证据（2026-07-11）
+
+结论：**阶段 3（真实样本与回归验收）已完成，整个计划完成。**
+
+### 实施改动（review.md 可见性接入）
+
+- `scripts/lib/toc_repair.py`：`repair_merged` 计算无法唯一归属的条目（`entries` 中不在已归属 `assigned` 的），持久化到 validate 报告 `report["toc_unassigned"]`（`{title, target_page, depth}`），供 review.md 展示——让阶段 2 被排除的未归属条目可见，而非静默丢弃。
+- `scripts/lib/review_report.py`：新增 `_append_toc_unassigned`，在 review.md 生成“目录归属复核”段，列出无法唯一归属物理页的条目及指向页；无未归属条目时不生成该段。
+- `scripts/pdf-auto`：`all_passed` 路径 `review_count` 计算补充 `report.get("toc_unassigned")`，使仅有 TOC 归属 review（无段级 review_only）时也生成 review.md。
+
+### 验证结果
+
+- **demo5/demo60 归属验收**（同源手册不同页数截取，文本层清晰）：物理页归属零误分配；demo5（78 条，目录页 2-5）与 demo60（121 条，目录页 2-8）的 `制动`/`停放` 均归 p4、`前制动手柄` 归 p2，制动与前制动手柄分属不同页（无子串误配）。
+- **demo5/demo60 端到端**：`repair_merged` 生成 `toc.md`（无锚点）+ `toc_tree.json`（新字段），78/78、121/121 全归属，toc.md 与 toc_tree 顺序一致，`制动 → {target_page:130, toc_page:4}`，无 `toc_unassigned`，段级锚点连续保留。
+- **demo20 完整修复链运行记录**：真实包升级前 `toc_tree` 为旧格式 `{title,page,depth}`、无 `toc.md`；运行 `repair_merged` 后 `toc_tree` 升级为 `{title,target_page,toc_page,depth}`（`制动 {130,4}`）、生成无锚点 `toc.md`、121/121 全归属、`toc_unassigned=0`；再次运行三产物 SHA 不变（幂等）。
+- **回归无异常**：`pdf-read-page pdf/demo20 2 3` 范围读取正确返回前言(p2)/前制动手柄(p2)/后制动手柄(p3)；`pdf-extract-data pdf/demo20` 消费新格式 `toc_tree` 正常（TOC section_path 修正 19/19 行，数据抽取完成）。
+- **review.md 接入验证**（真实样本无未归属条目，单元测试覆盖）：`repair_merged` 持久化未归属条目到 `toc_unassigned`（Alpha/Gamma 归属、Beta 进 review）；review_report 渲染“目录归属复核”段；无未归属时不生成该段。
+- `python3 -m pytest tests/test_toc_repair.py -q`：19 passed；`tests/test_review_report.py`：6 passed；全量 `python3 -m pytest tests/ -q`：134 passed。
+- `bash scripts/test-consumers.sh`：通过 10 / 失败 0（含 `pdf-auto`/`review_report` 改动后无回归）。
+- `python3 scripts/check_plan_governance.py .`：通过。`git diff --check`：clean。
+- GitNexus 影响分析（PreToolUse hook）：`repair_merged`/`generate_review_report` 仅 `pdf-auto` 内部调用，新增 `_append_toc_unassigned` 仅 review_report 内部；风险 LOW。提交后 `post-commit-index` hook 自动刷新知识图谱（`detect_changes()` 等价手段）。
+
+### 边界说明
+
+demo5/demo60 与 demo20 同源、文本层清晰，无真正乱码/无文本层样本，TOC 归属 review 在现有真实样本不触发，其正确性由单元测试覆盖（Beta 进 review 场景）。未来若接入乱码/无文本层目录样本，review.md 的“目录归属复核”段将展示未归属条目。
+
 ## 风险与回滚
 
 - 某些 PDF 原生文本可能乱码或目录行被拆成多个 span；无法可靠重组时宁可 review，不使用低置信度字符集分配自动覆盖。
@@ -278,6 +330,7 @@ git diff --check
 | 是否删除目录页段级锚点 | 不删除，锚点是现有消费者契约 | 已决 |
 | 字符集模糊匹配是否保留 | 不作为自动归属依据；最多生成 review 候选 | 已决 |
 | 是否改动 MinerU 服务参数 | 不改 MinerU 本体，先修输出边界 | 已决 |
+| 乱码/无文本层目录真实样本缺失 | demo5/demo20/demo60 为同源手册（首页与 p2 目录文本 SHA 一致，仅页数 5/20/60 不同）、文本层清晰，无真正乱码/无文本层目录；「无法唯一归属→进 review」路径与 review.md「目录归属复核」段在真实样本中不触发，仅单元测试覆盖（Alpha/Gamma 归属、Beta 进 review）。待补真实乱码/无文本层目录样本后再做端到端验收 | 待补样本 |
 
 ## 完成条件
 
@@ -285,7 +338,7 @@ git diff --check
 - [x] p2–p8 目录条目按物理页正确归属，无整本目录重复。（阶段 2，2026-07-11）
 - [x] `<!-- pages N-N -->` 锚点完整保留，消费者回归通过。（阶段 2，2026-07-11）
 - [x] `repair()`、`repair_merged()`、`pdf-read-page`、`pdf-extract-data` 兼容验证通过。（阶段 2，2026-07-11）
-- [ ] demo20、demo5/demo60 真实样本验收通过或进入有证据的 review。（demo20 端到端已验；demo5/demo60 留待阶段 3）
-- [ ] `toc_tree.json`、merged Markdown、review.md 和结构化抽取结果一致。（toc_tree/toc.md/merged 已验一致；review.md 条目接入与结构化抽取端到端留待阶段 3）
+- [x] demo20、demo5/demo60 真实样本验收通过或进入有证据的 review。（阶段 3，2026-07-11）
+- [x] `toc_tree.json`、merged Markdown、review.md 和结构化抽取结果一致。（阶段 3，2026-07-11）
 - [x] 独立 `toc.md` 生成，渲染和下游展示不再依赖主 Markdown 中的目录锚点。（阶段 2，2026-07-11）
-- [ ] 全量测试、治理检查、`git diff --check`、GitNexus `detect_changes()` 通过。（阶段 2 代码级已通过；最终验收留待阶段 3）
+- [x] 全量测试、治理检查、`git diff --check`、GitNexus `detect_changes()` 通过。（阶段 3，2026-07-11）

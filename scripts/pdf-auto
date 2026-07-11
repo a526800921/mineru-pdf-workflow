@@ -824,13 +824,13 @@ PY
 
   log "  → 输出: $merge_output"
 
-  # 检查是否有 review_only 段，生成人工复核清单
+  # 检查是否有 review_only 段或未归属 TOC 条目，生成人工复核清单
   review_count="$(python3 -c "
 import json
 with open('$validate_tmp') as f:
     report = json.load(f)
 review_only = [s for s in report['segments'] if s.get('decision') == 'review_only']
-print(len(review_only))
+print(len(review_only) + (1 if report.get('toc_unassigned') else 0))
 ")"
   review_output=""
   if [[ "$review_count" -gt 0 ]]; then
