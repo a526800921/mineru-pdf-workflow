@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：已完成
-- 当前阶段：阶段 3：真实样本与边界验收（已完成）
+- 状态：待实施
+- 当前阶段：阶段 4：整表头/顶部列头漏报补强
 - 最后更新：2026-07-11
 - 依赖：`single-page-segmentation-migration` 阶段 3、`pdf-evaluation-suite` P4b、PyMuPDF 原生文本层
 
@@ -355,7 +355,7 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
 
 #### 阶段 3 最终验收（2026-07-11）
 
-结论：**通过，阶段 3 已完成，专项计划已完成。**
+结论：**阶段 3（真实样本与边界验收）已完成；随后在 p14 发现整表头/顶部列头漏报缺口，计划重开阶段 4，见下文。**
 
 - demo20 p16 真实运行退出码为 2（`needs_review`），p16 触发 `native_table_text_missing`，识别缺失字段“百公里综合油耗”。
 - `manifest.page_fallback["16"]` 含完整证据：`selected=review`、`detector=pdf_native`、`quality_signals`、`missing_text`、原始/fallback 参数与指标。
@@ -365,6 +365,80 @@ PDF 多词字段 Max + power、HTML 单元格 Max power：误报 missing_text=["
 - 治理检查、`git diff --check` 和 GitNexus detect-changes 通过。
 
 注意：p16 fallback 未能可靠修复字段，因此最终 Markdown 保留原结果并进入 `review`；这是当前安全兜底契约允许的结果，不代表字段已经自动恢复。
+
+## 阶段 4：整表头/顶部列头漏报补强
+
+### 阶段 4 待实施门禁复核（2026-07-11）
+
+结论：**已达到待实施标准。**
+
+- p14 的真实失败基线已固定：PDF 原生文本包含车型列头，MinerU HTML 首行为空，当前检测器未产生遗漏信号。
+- 实施范围已限定为检测器对整表头/顶部列头的补强，复用现有 `native_table_text_missing`、页级 fallback、manifest 和 review 契约。
+- 检测边界已明确：只在表格候选、顶部/列头位置及空表头结构等几何证据同时成立时判定；不能把所有无 HTML 锚点的视觉行当作缺失。
+- 失败策略已明确：fallback 未恢复、重跑失败或坐标无法可靠判断时进入 `review`，不得静默返回 `all_passed`。
+- p14 真实 fixture、反例范围、验证命令、完成条件和回滚方式均已写入本阶段；当前没有未解决的实施前置阻塞项。
+
+进入阶段4实施后，修改共享检测器符号前必须先执行 GitNexus upstream impact；完成实现后执行 `detect_changes()`、专项回归、全量测试和治理检查。
+
+### 背景与范围
+
+demo20 p14 参数规格表的顶部车型列头 `150 AURA`、`CF150T-32`、`CF150T-32A` 在 PDF 原生文本中存在，但 MinerU 将整行输出为空 `<td>`。当前检测器因为该视觉行没有任何 HTML 单元格匹配，且列头位于右侧/居中区域，直接跳过并返回 `native_table_missing=0`。
+
+这是阶段1–3已完成检测器的覆盖缺口，不是新的检测协议；继续复用 `native_table_text_missing`、页级 fallback、manifest 和 review 契约。
+
+### Step 0 红基线
+
+- PDF p14 原生文本包含 `150 AURA`、`CF150T-32`、`CF150T-32A`。
+- p14 单页 Markdown 三个型号均缺失，表格首行是空单元格。
+- 当前检测结果为 `signals=[]`、`native_table_missing=0`，p14 会被判为 pass。
+- 红基线文件：[native-detector-header-row-false-negative.md](../issues/native-detector-header-row-false-negative.md)。
+
+可复现断言：
+
+```bash
+python3 - <<'PY'
+import sys
+sys.path.insert(0, "scripts")
+from lib.page_quality import detect_native_table_text_omission
+import fitz
+
+doc = fitz.open("pdf/demo20/demo20.pdf")
+words = doc[13].get_text("words")
+w, h = doc[13].rect.width, doc[13].rect.height
+native = doc[13].get_text()
+doc.close()
+md = open("pdf/demo20/segments/p0014-0014/demo20/hybrid_auto/demo20.md").read()
+assert "150 AURA" in native and "CF150T-32A" in native
+assert "150 AURA" not in md and "CF150T-32A" not in md
+signals, metrics = detect_native_table_text_omission(md, words, w, h)
+assert signals == [] and metrics["native_table_missing"] == 0
+print("red baseline: p14 header-row omission false negative reproduced")
+PY
+```
+
+### 实施契约
+
+- 当 HTML 表格顶部存在空表头行、而 PDF 表格区域顶部存在原生文字时，检测器必须检查该行，即使整行没有 HTML 锚点。
+- 顶部列头不限定在左列；右侧、居中列头也必须纳入候选。
+- 仍使用 `native_table_text_missing`，并在 `missing_text` 中记录原生存在而 HTML 缺失的候选文字；可在 metrics 中增加 `missing_scope=header_row` 供 review 解释。
+- 不能把所有“无 HTML 锚点的视觉行”直接判为缺失；必须同时满足表格候选、顶部/列头位置、空表头结构或等价几何证据，否则进入 `review` 或跳过。
+- p14 fallback 恢复车型列头则选择 `fallback`；仍缺失、重跑失败或无法判断则选择 `review`，不得返回 `all_passed`。
+
+### 实施步骤
+
+1. 扩展 `detect_native_table_text_omission`：识别顶部表头区域、空 HTML 首行和右侧/居中原生文字。
+2. 保持现有 `pdf-auto` fallback 和 manifest 证据契约，不新增业务字段白名单。
+3. 增加 p14 真实 fixture，以及合法空表头、正文无锚点行、页脚和无文本层反例。
+4. 用 demo20 p14 运行完整检测、fallback、比较、合并和 review 流程。
+
+### 验收条件
+
+- [ ] p14 红基线从静默 pass 变为 `native_table_text_missing`，并记录至少一个缺失车型列头。
+- [ ] p14 fallback 恢复时选择 `fallback`；未恢复/失败/不确定时选择 `review`。
+- [ ] `manifest.page_fallback["14"]` 含 `quality_signals`、`missing_text`、`detector`、选择结果和双版本指标。
+- [ ] `review.md` 在 p14 进入 review 时显示缺失车型列头证据。
+- [ ] p16、现有多词字段、多表格、页脚和无文本层测试不回归。
+- [ ] 全量测试、治理检查、`git diff --check` 和 GitNexus `detect_changes()` 通过。
 
 ## 验证方式
 
@@ -390,7 +464,7 @@ git diff --check
 - 扫描件没有原生文本层时跳过原生检测，保留既有质量检测，并按需使用 VLM/OCR 补充证据。
 - 检测器误报时可关闭新 signal，保留阶段 3 的四类旧信号和 fallback 主流程；原始目录始终保留，可重新合并。
 
-## 完成条件
+## 完成条件（阶段 1–3）
 
 - [x] 无字段白名单的原生表格遗漏检测器实现并通过单元测试。
 - [x] p16 red baseline 转为 green，且至少一个未知字段 fixture 通过。
@@ -399,3 +473,5 @@ git diff --check
 - [x] demo20 p16 真实验收通过，或明确进入 `review` 且报告包含缺失字段证据。
 - [x] 项目级 `skills/pdf2md/SKILL.md` 与用户级 skill 同步说明该检测边界。
 - [x] 治理检查、全量测试、`git diff --check` 和 GitNexus `detect_changes()` 通过。
+
+> 阶段 4（整表头/顶部列头漏报补强）的完成定义见上文 [阶段 4 验收条件](#验收条件)；阶段 4 未通过前，本专项计划整体状态为"待实施"。

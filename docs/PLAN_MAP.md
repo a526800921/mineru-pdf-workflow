@@ -34,7 +34,8 @@
 | [per-page-anchors](plans/per-page-anchors.md) | 已完成 | 全阶段（0-4） | 2026-07-10 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、structured-data-extraction、春风 150AURA 输出包 | [阶段 4 验收](plans/per-page-anchors.md#阶段-4-验收记录2026-07-10) |
 | [pdf-auto-repair-before-merge](plans/pdf-auto-repair-before-merge.md) | 已完成 | 全阶段（0-3）：修复—合并顺序、manifest 泄漏修复、真实样本验收 | 2026-07-11 | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、per-page-anchors、demo5 真实样本 | [阶段 3 验收](plans/pdf-auto-repair-before-merge.md#阶段-3-验收记录2026-07-11) |
 | [single-page-segmentation-migration](plans/single-page-segmentation-migration.md) | 已完成 | 阶段 4：收敛段级遗留复杂度（已完成） | 2026-07-11 | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors、demo20 第 12 页 fallback 证据、demo20 端到端验收、test-phase3 45/45 通过 | [阶段 1 验收](plans/single-page-segmentation-migration.md#阶段-1-验收记录2026-07-11)、[阶段 2 再次验收](reports/single-page-segmentation-stage2-reacceptance-2026-07-11.md)、[阶段 3 实施契约](plans/single-page-segmentation-migration.md#阶段-3-实施契约确认2026-07-11)、[阶段 3 待实施契约](plans/single-page-segmentation-migration.md#阶段-3-待实施契约用户确认2026-07-11)、[阶段 3 最终验收](plans/single-page-segmentation-migration.md#最终验收2026-07-11)、[阶段 1 补充收尾验收](plans/single-page-segmentation-migration.md#阶段-1-补充收尾验收2026-07-11)、[阶段 4 子项实施证据](plans/single-page-segmentation-migration.md#阶段-4-逐页锚点收敛子项--实施证据2026-07-11)、[阶段 4 验收（第一次）](plans/single-page-segmentation-migration.md#阶段-4-验收2026-07-11)、[阶段 4 验收（第二次）](plans/single-page-segmentation-migration.md#阶段-4-验收2026-07-11第二次)、[demo20 端到端验收](docs/plans/single-page-segmentation-migration.md#端到端验收demo20-2026-07-11)、[阶段 3 修复证据](plans/single-page-segmentation-migration.md#修复验证同次会话2026-07-11) |
-| [table-text-omission-detection](plans/table-text-omission-detection.md) | 已完成 | 阶段 3：真实样本与边界验收（已完成） | 2026-07-11 | single-page-segmentation-migration 阶段 3、pdf-evaluation-suite P4b、PyMuPDF 原生文本层、demo20 p16 证据 | [阶段 3 最终验收](plans/table-text-omission-detection.md#阶段-3-最终验收2026-07-11) |
+| [table-text-omission-detection](plans/table-text-omission-detection.md) | 待实施 | 阶段 4：整表头/顶部列头漏报补强 | 2026-07-11 | single-page-segmentation-migration 阶段 3、pdf-evaluation-suite P4b、PyMuPDF 原生文本层、demo20 p14/p16 真实样本 | [阶段 4 待实施门禁复核](plans/table-text-omission-detection.md#阶段-4-待实施门禁复核2026-07-11) |
+| [toc-page-physical-attribution-fix](plans/toc-page-physical-attribution-fix.md) | 待实施 | 阶段 1：物理页归属修复 | 2026-07-11 | coverage-validation-optimization、per-page-anchors、pdf-auto-repair-before-merge、demo20 目录页真实样本 | [阶段 1 待实施门禁复核](plans/toc-page-physical-attribution-fix.md#阶段-0-完成与阶段-1-待实施门禁复核2026-07-11) |
 | [cli-only-migration](plans/cli-only-migration.md) | 已完成 | 阶段 1 已完成：移除 MCP 适配层 | 2026-07-11 | 已验证的 CLI 脚本、`PDF_AUTO_JSON=1` JSON 契约、ADR 0002 | [完成证据](plans/cli-only-migration.md#完成证据-2026-07-11) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
@@ -58,7 +59,8 @@
 15. `pdf-auto-repair-before-merge`（TOC 修复前置、`needs_review` 合并产物、manifest 泄漏修复；已完成）
 16. `single-page-segmentation-migration`（单页默认、页级重跑与 fallback；阶段 2 已按单页新输出范围通过）
 17. `table-text-omission-detection`（通用表格字段缺失检测与页级 fallback 触发）
-18. `local-vlm-autostart`（P4c 本地 VLM 自动启动、复用与完成后关闭）
+18. `toc-page-physical-attribution-fix`（目录页物理归属与过度生成修复）
+19. `local-vlm-autostart`（P4c 本地 VLM 自动启动、复用与完成后关闭）
 
 ## 依赖关系
 
@@ -102,6 +104,7 @@
 | pdf-auto-repair-before-merge | automated-pdf-pipeline、pdf-output-package-layout、coverage-validation-optimization、per-page-anchors | 调整 `pdf-auto` 的 TOC 修复时序、`needs_review` 合并产物和逐页锚点兼容边界 |
 | single-page-segmentation-migration | automated-pdf-pipeline、coverage-validation-optimization、pdf-auto-repair-before-merge、per-page-anchors | 将新解析、重跑、fallback 和合并的主操作单位从 10 页段收敛到单页；旧段级输出不纳入兼容范围 |
 | table-text-omission-detection | single-page-segmentation-migration、pdf-evaluation-suite、PyMuPDF 原生文本层 | 在阶段 3 已有 fallback 闭环上补充通用表格字段遗漏检测，避免把业务字段写死在代码中 |
+| toc-page-physical-attribution-fix | coverage-validation-optimization、per-page-anchors、pdf-auto-repair-before-merge、demo20 目录页真实样本 | 修复 MinerU 目录过度生成和 `toc_repair` 短标题子串错页，同时保留段级锚点消费者契约 |
 | per-page-anchors | structured-data-extraction | 阶段 4 复用逐页锚点收窄 `page_start/page_end` |
 | per-page-anchors | 春风 150AURA 输出包 | Step 0 保真度实测与 `content_list.json` `page_idx` 基线 |
 
