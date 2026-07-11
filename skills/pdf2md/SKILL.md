@@ -54,7 +54,9 @@ MODELPAD_PDF_START_TIMEOUT=120
 ```text
 /path/to/
   doc.pdf                  ← 原始 PDF
-  doc.md                   ← 合并后的 Markdown
+  doc.md                   ← 合并后的 Markdown（含段级锚点 <!-- pages N-M -->）
+  toc.md                   ← 目录展示视图（无锚点连续列表，供人工阅读/前端渲染）
+  toc_tree.json            ← 机器权威目录结构（title/target_page/toc_page/depth）
   review.md                ← 人工复核清单
   manifest.json            ← 解析状态元数据
   segments/                ← 分段解析产物（默认每页一段，可设 MINERU_SEGMENT_SIZE 覆盖）
@@ -94,6 +96,10 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
 - `scripts/pdf-eval-vlm /path/to` **可选**写入 `<pdf_dir>/data/vlm_eval.jsonl`（对 `image_or_sparse` 页做本地 VLM 视觉补充；默认自动启停 `qwen3-vl-8b`，设 `VLM_API_BASE` 可直连远程端口）。
 - `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 的合并 md。回填旧包时直接重跑此命令。
+- 目录页由 `toc_repair` 按**物理目录页**归属：条目只归属于其 PDF 原生文本实际出现的物理目录页（完整行/词边界匹配，短标题不命中更长词，如“制动”不命中“前制动手柄”）；无法唯一归属时进入 `review`，不静默猜测。目录输出分三个用途，禁止下游混用：
+  - `doc.md`：主文档，保留段级锚点 `<!-- pages N-M -->`，供按页读取、结构化抽取和 section 映射；
+  - `toc.md`：无锚点连续目录列表，供人工阅读和前端渲染；不含任何页级锚点，不重新解析或猜测页码；
+  - `toc_tree.json`：机器权威目录结构，每条含 `title`、`target_page`（条目指向正文页）、`toc_page`（条目所在物理目录页）、`depth`；`pdf-extract-data` 用 `target_page` 做 section 映射。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 
 ## 核心流程

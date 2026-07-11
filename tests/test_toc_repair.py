@@ -12,11 +12,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import fitz
 
 from lib.toc_repair import (
+    repair,
     repair_merged,
     _build_merged_toc_block,
     _extract_entries_from_page,
     _assign_to_toc_pages,
     _compute_depths,
+    _write_toc_tree,
 )
 
 
@@ -333,6 +335,173 @@ class TestPhysicalPageAttribution(unittest.TestCase):
         finally:
             doc.close()
             os.unlink(path)
+
+
+class TestMergedAndCompatPaths(unittest.TestCase):
+    """阶段2：合并与兼容路径接入（toc_tree 字段扩展、toc.md、repair 段级归属）。"""
+
+    DEMO20 = Path(__file__).parent / ".." / "pdf" / "demo20" / "demo20.pdf"
+
+    def test_toc_tree_uses_target_and_toc_page(self):
+        """toc_tree.json 每条含 target_page(指向页) 和 toc_page(物理目录页)。"""
+        entries = [
+            {"title": "前言", "page": 8, "toc_page": 2, "depth": 0},
+            {"title": "制动", "page": 130, "toc_page": 4, "depth": 1},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            _write_toc_tree(Path(d), entries)
+            tree = json.load(open(Path(d) / "toc_tree.json", encoding="utf-8"))
+        self.assertEqual(
+            tree[0], {"title": "前言", "target_page": 8, "toc_page": 2, "depth": 0}
+        )
+        self.assertEqual(
+            tree[1], {"title": "制动", "target_page": 130, "toc_page": 4, "depth": 1}
+        )
+
+    def test_build_toc_md_no_anchors(self):
+        """toc.md 是无锚点连续列表，保留缩进层级和指向页码。"""
+        from lib.toc_repair import _build_toc_md
+        entries = [
+            {"title": "前言", "page": 8, "toc_page": 2, "depth": 0},
+            {"title": "重要的注意事项", "page": 10, "toc_page": 2, "depth": 1},
+            {"title": "制动", "page": 130, "toc_page": 4, "depth": 1},
+        ]
+        md = _build_toc_md(entries)
+        self.assertNotIn("<!-- pages", md)
+        self.assertIn("## 目录", md)
+        self.assertIn("- 前言 8", md)
+        self.assertIn("  - 重要的注意事项 10", md)
+        self.assertIn("  - 制动 130", md)
+
+    def test_toc_md_matches_toc_tree_order(self):
+        """toc.md 条目顺序与 entries(即 toc_tree) 一致。"""
+        from lib.toc_repair import _build_toc_md
+        entries = [
+            {"title": "前言", "page": 8, "toc_page": 2, "depth": 0},
+            {"title": "制动", "page": 130, "toc_page": 4, "depth": 1},
+        ]
+        md = _build_toc_md(entries)
+        self.assertLess(md.index("前言 8"), md.index("制动 130"))
+
+    def test_repair_merged_writes_toc_md(self):
+        """repair_merged 成功后在包根目录生成无锚点 toc.md。"""
+        pdf = _create_test_pdf([[1, "概述", 1], [1, "规格", 2]], 3)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                md = Path(d) / "merged.md"
+                md.write_text(
+                    "<!-- pages 1-1 -->\n\n原始目录\n\n"
+                    "<!-- pages 2-2 -->\n\n正文\n\n"
+                    "<!-- pages 3-3 -->\n\n尾",
+                    encoding="utf-8",
+                )
+                validate = _create_validate_json([
+                    {"name": "p0001-0001", "start_page": 1, "end_page": 1,
+                     "page_type_summary": {"toc": 1},
+                     "pages": [{"page": 0, "page_type": "toc"}]},
+                    {"name": "p0002-0002", "start_page": 2, "end_page": 2,
+                     "page_type_summary": {"text": 1},
+                     "pages": [{"page": 1, "page_type": "text"}]},
+                    {"name": "p0003-0003", "start_page": 3, "end_page": 3,
+                     "page_type_summary": {"text": 1},
+                     "pages": [{"page": 2, "page_type": "text"}]},
+                ])
+                repair_merged(Path(pdf), md, validate)
+                toc_md = Path(d) / "toc.md"
+                self.assertTrue(toc_md.exists(), "repair_merged 应生成 toc.md")
+                content = toc_md.read_text(encoding="utf-8")
+                self.assertNotIn("<!-- pages", content)
+                self.assertIn("概述", content)
+                os.unlink(validate)
+        finally:
+            os.unlink(pdf)
+
+    def test_repair_segments_physical_attribution(self):
+        """repair() 段级按物理页归属：目录页段只含自己条目，不整本重复。"""
+        if not self.DEMO20.exists():
+            self.skipTest("demo20.pdf not available")
+        with tempfile.TemporaryDirectory() as d:
+            pkg = Path(d)
+            segdir = pkg / "segments"
+            segments = []
+            for pg in range(2, 9):
+                name = f"p{pg:04d}-{pg:04d}"
+                md_dir = segdir / name / "demo20" / "auto"
+                md_dir.mkdir(parents=True)
+                (md_dir / "demo20.md").write_text("原始目录占位", encoding="utf-8")
+                segments.append({
+                    "name": name, "start_page": pg, "end_page": pg,
+                    "page_type_summary": {"toc": 1},
+                    "pages": [{"page": pg - 1, "page_type": "toc"}],
+                })
+            validate = _create_validate_json(segments)
+            repair(self.DEMO20, segdir, validate)
+
+            def seg_md(name):
+                return (segdir / name / "demo20" / "auto" / "demo20.md").read_text(
+                    encoding="utf-8"
+                )
+            p2 = seg_md("p0002-0002")
+            p4 = seg_md("p0004-0004")
+            # 用精确条目行匹配（制动 target_page=130），避免"制动"子串命中"前制动手柄"
+            self.assertIn("前言 8", p2)
+            self.assertNotIn("制动 130", p2)  # 制动条目(→130)在 p4，不得出现在 p2 段
+            self.assertIn("制动 130", p4)
+            self.assertNotIn("前言 8", p4)  # 前言在 p2，不得出现在 p4 段
+            os.unlink(validate)
+
+
+    def test_unassigned_excluded_keeps_toc_md_tree_merged_consistent(self):
+        """未唯一归属条目不进 toc.md/toc_tree，三者与合并 md 目录块一致。"""
+        doc = fitz.open()
+        pa = doc.new_page(width=400, height=600)
+        pa.insert_text((72, 100), "Alpha........")
+        pa.insert_text((72, 130), "........5")
+        pb = doc.new_page(width=400, height=600)
+        pb.insert_text((72, 100), "Gamma........")
+        pb.insert_text((72, 130), "........9")
+        doc.new_page(width=400, height=600)
+        # 内置大纲含 Beta，但物理页无 Beta 行 → Beta 无法唯一归属
+        doc.set_toc([[1, "Alpha", 1], [1, "Beta", 2], [1, "Gamma", 3]])
+        pdf = tempfile.mktemp(suffix=".pdf")
+        doc.save(pdf)
+        doc.close()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                md = Path(d) / "m.md"
+                md.write_text(
+                    "<!-- pages 1-1 -->\n\ntocA\n\n"
+                    "<!-- pages 2-2 -->\n\ntocB\n\n"
+                    "<!-- pages 3-3 -->\n\nbody",
+                    encoding="utf-8",
+                )
+                validate = _create_validate_json([
+                    {"name": "p0001-0001", "start_page": 1, "end_page": 1,
+                     "page_type_summary": {"toc": 1},
+                     "pages": [{"page": 0, "page_type": "toc"}]},
+                    {"name": "p0002-0002", "start_page": 2, "end_page": 2,
+                     "page_type_summary": {"toc": 1},
+                     "pages": [{"page": 1, "page_type": "toc"}]},
+                    {"name": "p0003-0003", "start_page": 3, "end_page": 3,
+                     "page_type_summary": {"text": 1},
+                     "pages": [{"page": 2, "page_type": "text"}]},
+                ])
+                repair_merged(Path(pdf), md, validate)
+                toc_md = (Path(d) / "toc.md").read_text(encoding="utf-8")
+                tree = json.load(open(Path(d) / "toc_tree.json", encoding="utf-8"))
+                merged = md.read_text(encoding="utf-8")
+                tree_titles = [e["title"] for e in tree]
+                # Beta 未归属：不进 toc.md / toc_tree / 合并 md 目录块
+                self.assertNotIn("Beta", toc_md)
+                self.assertNotIn("Beta", tree_titles)
+                self.assertNotIn("Beta", merged)
+                # Alpha/Gamma 已归属：toc.md 与 toc_tree 均含，且集合一致
+                self.assertIn("Alpha", toc_md)
+                self.assertIn("Gamma", toc_md)
+                self.assertEqual(sorted(tree_titles), ["Alpha", "Gamma"])
+                os.unlink(validate)
+        finally:
+            os.unlink(pdf)
 
 
 if __name__ == "__main__":

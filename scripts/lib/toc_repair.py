@@ -6,8 +6,9 @@
   toc_repair.repair_merged(pdf_path, merged_md, validate_tmp) # 合并级（锚点感知，不丢失非目录页）
 
 产出：
-  - 更新 TOC 段的 Markdown，带缩进层级
-  - 输出包根目录写入 toc_tree.json（[{title, page, depth}, ...]）
+  - 更新 TOC 段的 Markdown，带缩进层级（按物理目录页归属）
+  - 输出包根目录写入 toc_tree.json（[{title, target_page, toc_page, depth}, ...]）
+  - 输出包根目录写入 toc.md（无锚点连续目录展示视图）
 """
 
 import json
@@ -259,6 +260,9 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     # 按实际目录页分配条目
     toc_page_nums = sorted(all_toc_pages)
     by_page = _assign_to_toc_pages(entries, doc, toc_page_nums)
+    _backfill_toc_page(by_page)  # 将归属物理页回填到 entries 的 toc_page
+    # 已归属有序条目：toc.md/toc_tree 与合并 md 目录块同源，排除未归属条目
+    assigned = _ordered_assigned_entries(by_page, toc_page_nums)
 
     # 构造替换用 TOC 块
     toc_block = _build_merged_toc_block(first_toc, last_toc, by_page)
@@ -296,12 +300,15 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
 
     merged_md_path.write_text(new_text, encoding="utf-8")
 
-    # 写入 toc_tree.json
-    _write_toc_tree(merged_md_path.parent, entries)
+    # 写入 toc_tree.json（机器权威结构）和 toc.md（无锚点展示视图）
+    # 均基于已归属有序条目，与合并 md 目录块严格一致
+    _write_toc_tree(merged_md_path.parent, assigned)
+    _write_toc_md(merged_md_path.parent, assigned)
 
     print(
         f"  合并级 TOC 修复: 页码 {first_toc}–{last_toc}, "
-        f"{len(entries)} 条目（{_depth_distribution(entries)}），来源: {source}",
+        f"{len(assigned)}/{len(entries)} 条目已归属"
+        f"（{_depth_distribution(assigned)}），来源: {source}",
         file=sys.stderr,
     )
     doc.close()
@@ -319,14 +326,59 @@ def _build_markdown(entries: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _build_toc_md(entries: list[dict]) -> str:
+    """生成无锚点连续目录展示视图（toc.md）。
+
+    结构与段级 Markdown 一致，仅用途不同：toc.md 是供人工阅读/前端渲染的
+    干净展示视图，不含任何 <!-- pages N-M --> 段级锚点，也不重新解析或猜测页码。
+    """
+    return _build_markdown(entries)
+
+
+def _write_toc_md(pkg_root: Path, entries: list[dict]):
+    """在包根目录写入无锚点展示视图 toc.md（由同一份已归属条目生成）。"""
+    (pkg_root / "toc.md").write_text(_build_toc_md(entries), encoding="utf-8")
+
+
+def _backfill_toc_page(by_page: dict[int, list]) -> None:
+    """将归属结果的物理目录页回填到每个条目的 toc_page 字段（原地）。"""
+    for pn, rows in by_page.items():
+        for e in rows:
+            e["toc_page"] = pn
+
+
+def _ordered_assigned_entries(
+    by_page: dict[int, list], toc_page_nums: list[int]
+) -> list[dict]:
+    """按物理目录页升序展开已归属条目，顺序与合并 md 目录块一致。
+
+    未唯一归属的条目不在 by_page 中，因此自然被排除——保证
+    toc.md / toc_tree.json 的条目集合与合并 md 目录块严格一致。
+    """
+    ordered = []
+    for pn in sorted(toc_page_nums):
+        ordered.extend(by_page.get(pn, []))
+    return ordered
+
+
 def _depth_distribution(entries: list[dict]) -> str:
     c = Counter(e["depth"] for e in entries)
     return ", ".join(f"{d}级:{c[d]}" for d in sorted(c))
 
 
 def _write_toc_tree(pkg_root: Path, entries: list[dict]):
+    """写机器权威目录结构 toc_tree.json。
+
+    区分 target_page（条目指向正文页）与 toc_page（条目所在物理目录页）；
+    未能唯一归属物理页的条目 toc_page 为 null。
+    """
     tree_data = [
-        {"title": e["title"], "page": e["page"], "depth": e["depth"]}
+        {
+            "title": e["title"],
+            "target_page": e["page"],
+            "toc_page": e.get("toc_page"),
+            "depth": e["depth"],
+        }
         for e in entries
     ]
     tree_path = pkg_root / "toc_tree.json"
@@ -373,7 +425,22 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
         doc.close()
         return 0
 
-    # 写回纯 TOC 段的 Markdown（跳过混合段：有非目录页，避免覆盖丢失内容）
+    # 收集所有物理目录页，按物理页归属条目（与 repair_merged 同一规则）
+    toc_page_nums = sorted({
+        p["page"] + 1
+        for seg in toc_segs
+        for p in seg.get("pages", [])
+        if p.get("page_type") == "toc"
+    })
+    by_page = _assign_to_toc_pages(entries, doc, toc_page_nums) if toc_page_nums else None
+    if by_page:
+        _backfill_toc_page(by_page)
+        tree_entries = _ordered_assigned_entries(by_page, toc_page_nums)
+    else:
+        tree_entries = entries
+
+    # 写回纯 TOC 段的 Markdown（每段只写归属该段物理页的条目，避免整本目录重复；
+    # 跳过混合段：有非目录页，避免覆盖丢失内容）
     for seg in toc_segs:
         total_pages = seg["end_page"] - seg["start_page"] + 1
         toc_pages = seg.get("page_type_summary", {}).get("toc", 0)
@@ -388,14 +455,22 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
         md_files = sorted(seg_dir.rglob("*.md"))
         if not md_files:
             continue
+        if by_page:
+            seg_entries = [
+                e for pn in range(seg["start_page"], seg["end_page"] + 1)
+                for e in by_page.get(pn, [])
+            ]
+        else:
+            # 无物理页信息时回退到全部条目（保持旧行为，不丢目录）
+            seg_entries = entries
         md_path = md_files[0]
-        md_path.write_text(_build_markdown(entries), encoding="utf-8")
+        md_path.write_text(_build_markdown(seg_entries), encoding="utf-8")
         fixed += 1
 
-    # 写入 toc_tree.json
-    _write_toc_tree(segments_dir.parent, entries)
+    # 写入 toc_tree.json（已归属有序条目，与段级/合并级目录一致）
+    _write_toc_tree(segments_dir.parent, tree_entries)
 
-    print(f"  {fixed} 个 TOC 段: {len(entries)} 条目（{_depth_distribution(entries)}），来源: {source}", file=sys.stderr)
+    print(f"  {fixed} 个 TOC 段: {len(tree_entries)} 条目（{_depth_distribution(tree_entries)}），来源: {source}", file=sys.stderr)
     doc.close()
     return fixed
 

@@ -222,7 +222,7 @@ def load_toc_tree(pkg: Path) -> list | None:
 def build_page_section_map(toc_tree: list) -> dict[int, str]:
     """构建 {page_num: section_path} 映射。
 
-    每个 TOC 条目覆盖从 page 到下一条目 page-1 的页面范围。
+    每个 TOC 条目覆盖从指向页(target_page) 到下一条目 target_page-1 的页面范围。
     """
     if not toc_tree:
         return {}
@@ -233,7 +233,8 @@ def build_page_section_map(toc_tree: list) -> dict[int, str]:
     for entry in toc_tree:
         depth = entry["depth"]
         title = entry["title"]
-        page = entry["page"]
+        # target_page 是条目指向的正文页；兼容旧包的 page 字段
+        page = entry.get("target_page", entry.get("page"))
 
         while depth_stack and depth_stack[-1][0] >= depth:
             depth_stack.pop()
