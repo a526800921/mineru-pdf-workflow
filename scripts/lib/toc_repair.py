@@ -317,7 +317,7 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     _write_toc_tree(merged_md_path.parent, assigned)
     _write_toc_md(merged_md_path.parent, assigned)
     _sync_manifest_page_numbering(merged_md_path.parent, numbering)
-    _write_toc_review_evidence(merged_md_path.parent, numbering)
+    _write_toc_review_evidence(merged_md_path.parent, numbering, validate_tmp)
 
     # 无法唯一归属的条目已从三种目录产物排除，持久化到 validate 报告供 review.md
     # 展示（可见性）：让用户知道有条目未能归属，而非静默丢弃
@@ -633,10 +633,13 @@ def _sync_manifest_page_numbering(pkg_root: Path, numbering: dict):
     )
 
 
-def _write_toc_review_evidence(pkg_root: Path, numbering: dict):
-    """当页码映射 needs_review 时，向 review.md 追加页码坐标系证据。
+def _write_toc_review_evidence(pkg_root: Path, numbering: dict,
+                               validate_tmp: str = None):
+    """当页码映射 needs_review 时，写入 validate report 供 review.md 生成。
 
-    不覆盖已有 review.md，只追加页码相关段落。
+    写入 report['toc_page_numbering_review']，由 review_report.py 的
+    generate_review_report() 统一生成 review.md 中的对应段落。
+    不会直接写 review.md（会被 generate_review_report 整体重写）。
     """
     mapping_type = numbering.get("mapping_type", "unknown")
     status = numbering.get("status", "needs_review")
@@ -644,85 +647,57 @@ def _write_toc_review_evidence(pkg_root: Path, numbering: dict):
     if status != "needs_review":
         return
 
-    review_path = pkg_root / "review.md"
-    existing = ""
-    if review_path.exists():
-        existing = review_path.read_text(encoding="utf-8")
+    # 写入 validate report 而非 review.md（review.md 由 generate_review_report
+    # 整体重写，直接写入会被覆盖）
+    if validate_tmp and Path(validate_tmp).exists():
+        try:
+            with open(validate_tmp, encoding="utf-8") as f:
+                report = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
 
-    # 构造页码坐标系 review 段落
-    lines = []
-    if "## 页码坐标系未验证" not in existing:
-        lines.append("")
-        lines.append("## 页码坐标系未验证")
-        lines.append("")
-    else:
-        # 该段落已存在则跳过
-        return
+        review_data = {
+            "mapping_type": mapping_type,
+            "status": status,
+            "evidence": numbering.get("evidence", []),
+        }
 
-    lines.append(
-        f"**mapping_type**: `{mapping_type}` | **status**: `{status}`"
-    )
-    lines.append("")
+        if mapping_type == "unknown":
+            review_data["message"] = (
+                "PDF 不含 page labels，无法自动检测印刷页与物理页的映射关系。"
+                "toc_tree.json.target_page 当前保留原始提取页码，"
+                "未经验证的页码不得作为物理页消费。"
+            )
+            review_data["fix_steps"] = [
+                "确认 PDF 正文第 1 页的印刷页码（通常为 1）和对应的 PDF 物理页码",
+                "计算偏移：物理页 - 印刷页",
+                "在 manifest.json 的 page_numbering 中设置 mapping_type、"
+                "printed_to_physical_offset 和 status: verified",
+                "重新运行 repair_merged 以标准化 toc_tree.json 的 target_page",
+            ]
+        else:
+            offset = numbering.get("printed_to_physical_offset", 0)
+            body_start = numbering.get("offset_applies_from_physical_page", 0)
+            review_data["printed_to_physical_offset"] = offset
+            review_data["offset_applies_from_physical_page"] = body_start
+            review_data["message"] = (
+                f"检测到偏移 printed_to_physical_offset={offset}，"
+                f"正文起始物理页 {body_start}，"
+                "但 TOC 条目来源为文本层提取，"
+                "无法自动判断原始页码是物理页还是印刷页。"
+            )
+            review_data["fix_steps"] = [
+                "检查 toc_tree.json 中最低 target_page 对应的 PDF 页面内容，"
+                "确认该页码是物理页还是印刷页",
+                "在 manifest.json 的 page_numbering 中设置 source_system "
+                "为 physical 或 printed，并将 status 改为 verified",
+                "如 source_system=printed，重新运行 repair_merged "
+                "以将 target_page 转为物理页",
+            ]
 
-    if mapping_type == "unknown":
-        lines.append(
-            "PDF 不含 page labels，无法自动检测印刷页与物理页的映射关系。"
-        )
-        lines.append(
-            "`toc_tree.json.target_page` 当前保留原始提取页码，"
-            "**未经验证的页码不得作为物理页消费**。"
-        )
-        lines.append("")
-        lines.append("**人工确认步骤**：")
-        lines.append("")
-        lines.append("1. 确认 PDF 正文第 1 页的印刷页码（通常为 1）和对应的 PDF 物理页码。")
-        lines.append("2. 计算偏移：`物理页 - 印刷页`。")
-        lines.append(
-            "3. 在 `manifest.json` 的 `page_numbering` 中设置正确的"
-            " `mapping_type`、`printed_to_physical_offset` 和 `status: verified`。"
-        )
-        lines.append(
-            "4. 重新运行 `repair_merged` 以标准化 `toc_tree.json` 的 `target_page`。"
-        )
-    else:
-        offset = numbering.get("printed_to_physical_offset", 0)
-        body_start = numbering.get("offset_applies_from_physical_page", 0)
-        lines.append(
-            f"检测到偏移 `printed_to_physical_offset={offset}`，"
-            f"正文起始物理页 `{body_start}`，"
-            f"但 TOC 条目来源为文本层提取，"
-            f"无法自动判断原始页码是物理页还是印刷页。"
-        )
-        lines.append("")
-        lines.append("**人工确认步骤**：")
-        lines.append("")
-        lines.append(
-            "1. 检查 `toc_tree.json` 中最低 `target_page` 对应的 PDF 页面内容，"
-            "确认该页码是物理页还是印刷页。"
-        )
-        lines.append(
-            "2. 在 `manifest.json` 的 `page_numbering` 中设置 `source_system`"
-            " 为 `physical` 或 `printed`，并将 `status` 改为 `verified`。"
-        )
-        lines.append(
-            "3. 如 `source_system=printed`，重新运行 `repair_merged`"
-            " 以将 `target_page` 转为物理页。"
-        )
-
-    lines.append("")
-    evidence = numbering.get("evidence", [])
-    if evidence:
-        lines.append("<details>")
-        lines.append("<summary>检测证据</summary>")
-        lines.append("")
-        lines.append("```json")
-        lines.append(json.dumps(evidence, ensure_ascii=False, indent=2))
-        lines.append("```")
-        lines.append("</details>")
-        lines.append("")
-
-    new_content = existing.rstrip() + "\n" + "\n".join(lines) + "\n"
-    review_path.write_text(new_content, encoding="utf-8")
+        report["toc_page_numbering_review"] = review_data
+        with open(validate_tmp, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False)
 
 
 # ── 主入口 ─────────────────────────────────────────────────────────
@@ -813,7 +788,7 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
     # 写入 toc_tree.json（已归属有序条目，与段级/合并级目录一致）
     _write_toc_tree(segments_dir.parent, tree_entries)
     _sync_manifest_page_numbering(segments_dir.parent, numbering)
-    _write_toc_review_evidence(segments_dir.parent, numbering)
+    _write_toc_review_evidence(segments_dir.parent, numbering, validate_tmp)
 
     print(f"  {fixed} 个 TOC 段: {len(tree_entries)} 条目（{_depth_distribution(tree_entries)}），来源: {source}", file=sys.stderr)
     doc.close()

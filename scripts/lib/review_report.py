@@ -82,6 +82,9 @@ def generate_review_report(
     # --- 目录归属复核（无法唯一归属物理页的 TOC 条目） ---
     _append_toc_unassigned(lines, report)
 
+    # --- 页码坐标系复核（无法自动验证的页码映射） ---
+    _append_toc_page_numbering_review(lines, report)
+
     content = "\n".join(lines)
     if file is not None:
         file.write(content)
@@ -382,6 +385,48 @@ def _append_toc_unassigned(lines: list[str], report: dict) -> None:
             f"| {e.get('title', '')} | {e.get('target_page', '')} | {source_note} |"
         )
     lines.append("")
+
+
+def _append_toc_page_numbering_review(lines: list[str], report: dict) -> None:
+    """页码坐标系复核：无法自动验证的页码映射。
+
+    数据源为 toc_repair 写回的 report['toc_page_numbering_review']。
+    仅在 mapping_type=unknown 或偏移歧义时出现。
+    """
+    review_data = report.get("toc_page_numbering_review")
+    if not review_data:
+        return
+
+    lines.append("## 页码坐标系未验证")
+    lines.append("")
+
+    mapping_type = review_data.get("mapping_type", "unknown")
+    status = review_data.get("status", "needs_review")
+    lines.append(
+        f"**mapping_type**: `{mapping_type}` | **status**: `{status}`"
+    )
+    lines.append("")
+    lines.append(review_data.get("message", ""))
+    lines.append("")
+
+    steps = review_data.get("fix_steps", [])
+    if steps:
+        lines.append("**人工确认步骤**：")
+        lines.append("")
+        for i, step in enumerate(steps, 1):
+            lines.append(f"{i}. {step}")
+        lines.append("")
+
+    evidence = review_data.get("evidence", [])
+    if evidence:
+        lines.append("<details>")
+        lines.append("<summary>检测证据</summary>")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(evidence, ensure_ascii=False, indent=2))
+        lines.append("```")
+        lines.append("</details>")
+        lines.append("")
 
 
 # ---- CLI entry point (used by scripts/pdf-review) ----

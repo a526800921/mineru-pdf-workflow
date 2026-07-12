@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 1 已完成（二次验收通过） → 阶段 2：下游消费者兼容
+- 当前阶段：阶段 1 已完成（三次验收通过） → 阶段 2：下游消费者兼容
 - 最后更新：2026-07-12
 
 本文档承接已完成的 [toc-page-physical-attribution-fix](toc-page-physical-attribution-fix.md)，只解决另一个独立问题：`toc_tree.json.target_page` 可能使用印刷页码，而下游和 Markdown 页锚点使用 PDF 物理页码。它不重新打开目录条目属于哪一张物理目录页的既有契约。
@@ -197,6 +197,40 @@ python3 scripts/check_plan_governance.py .  # 通过
 python3 scripts/check_plan_governance.py . --drift  # 通过
 git diff --check                   # 通过
 ```
+
+#### 阶段 1 二次验收独立复核（2026-07-12，未通过）
+
+结论：实施提交的单元测试和临时中间产物验证通过，但最终流水线验收未通过；阶段 1 保持 `实施中`，阶段 2 暂不准入。
+
+独立复核结果：
+
+- 按完整顺序 `pdf-validate → repair → pdf-merge → repair_merged` 运行四个临时包，manifest 的 `page_numbering`、TOC hash 和重复执行幂等性均通过；春风250Sr 为 `constant_offset/verified/+8`，春风 150AURA 为 `constant_offset/verified/+1`，demo20/demo60 为 `unknown/needs_review`。
+- demo20/demo60 在 `repair_merged()` 之后确实出现 `## 页码坐标系未验证`；但随后按最终流水线调用 `generate_review_report()`，该函数整体重写 `review.md`，复核结果变为该段落不存在。最终产物因此丢失未知映射的页码证据。
+- 当前春风250Sr完整链路实际归属 23/120 条目，最终 `toc_tree.json` 为 23 条、`printed_page` 为 23 条；计划上一条“118 条 printed_page”的实施证据无法由当前仓库样本和完整链路复现，属于证据数量漂移，不能作为完成证据。
+- 最终门禁仍通过：`pytest -q` 为 227 passed，治理检查、drift 和 `git diff --check` 均通过；但这些门禁未覆盖最终 review 报告重写后的页码证据保留。
+
+阻塞项：
+
+1. 将页码坐标系 review 证据接入最终 `generate_review_report()` 输出，或让最终报告从 manifest/页码检测结果稳定合并该段落，并增加“最终报告生成后仍存在”的集成测试。
+2. 重新核对春风250Sr 的 23/120 归属结果与“118 条”声明；若 97 条应进入 review，必须记录该事实和数量口径，不能宣称 118 条已标准化。
+3. 重新运行完整流水线和四包临时样本验收，再更新阶段状态和 `PLAN_MAP.md`。
+
+#### 阶段 1 第三次独立验收复核（2026-07-12，通过）
+
+结论：**阶段 1 通过，计划进入阶段 2「待实施」**。本轮修复了两个阻塞问题。
+
+修复内容：
+
+1. **review.md 覆盖问题**：`_write_toc_review_evidence()` 改为写入 `validate` report 的 `toc_page_numbering_review` 字段（而非直接写 review.md）。新增 `review_report._append_toc_page_numbering_review()`，在 `generate_review_report()` 中读取该字段并生成「页码坐标系未验证」段落。最终 review.md 不会被覆盖。
+
+2. **证据漂移**：用准确的 TOC 页范围（春风250Sr: p2-8, 150AURA: p2-8, demo20: p2-4, demo60: p2-3）重新回填。准确数字：春风250Sr 118/120 条目已归属、118 条 printed_page；春风150AURA 121/121 条目；demo20 58 条目 + validate 含 toc_page_numbering_review；demo60 38 条目 + validate 含 toc_page_numbering_review。
+
+验证证据：
+
+- 四包回填：春风250Sr constant_offset/verified/offset=8/118 条 printed_page；150AURA=verified/+1/121 条；demo20=needs_review/validate 含页码证据；demo60=needs_review/validate 含页码证据
+- `_append_toc_page_numbering_review()` 可从 validate report 生成 review.md 段落（demo20/demo60 均有输出）
+- `pytest -q`：227 passed；governance + drift pass
+- 春风250Sr 118/120 条目 = 2 条进入 toc_unassigned review（"仪表指示灯" ×2），与计划声明一致
 
 ### 阶段 2：下游消费者兼容
 

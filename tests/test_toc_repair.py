@@ -780,26 +780,30 @@ class TestPageNumbering(unittest.TestCase):
             self.assertIn("toc_tree_json_sha256", m["hash"])
 
     def test_review_evidence_unknown_mapping(self):
-        """unknown 映射 → review.md 包含检测证据。"""
+        """unknown 映射 → validate report 含 toc_page_numbering_review。"""
         with tempfile.TemporaryDirectory() as d:
             pkg = Path(d)
+            validate_path = str(pkg / "validate.json")
+            json.dump({"segments": []}, open(validate_path, 'w', encoding='utf-8'))
             numbering = {
                 "mapping_type": "unknown",
                 "status": "needs_review",
                 "evidence": [{"reason": "无 page labels"}],
             }
-            _write_toc_review_evidence(pkg, numbering)
-            review = (pkg / "review.md").read_text(encoding="utf-8")
-            self.assertIn("## 页码坐标系未验证", review)
-            self.assertIn("mapping_type", review)
-            self.assertIn("needs_review", review)
-            self.assertIn("PDF 不含 page labels", review)
-            self.assertIn("无 page labels", review)
+            _write_toc_review_evidence(pkg, numbering, validate_path)
+            report = json.load(open(validate_path, encoding='utf-8'))
+            rd = report.get("toc_page_numbering_review", {})
+            self.assertEqual(rd["mapping_type"], "unknown")
+            self.assertEqual(rd["status"], "needs_review")
+            self.assertIn("PDF 不含 page labels", rd["message"])
+            self.assertEqual(len(rd["fix_steps"]), 4)
 
     def test_review_evidence_ambiguous_native_text(self):
-        """偏移歧义 → review.md 含人工确认步骤和证据。"""
+        """偏移歧义 → validate report 含人工确认步骤。"""
         with tempfile.TemporaryDirectory() as d:
             pkg = Path(d)
+            validate_path = str(pkg / "validate.json")
+            json.dump({"segments": []}, open(validate_path, 'w', encoding='utf-8'))
             numbering = {
                 "mapping_type": "constant_offset",
                 "printed_to_physical_offset": 8,
@@ -809,41 +813,41 @@ class TestPageNumbering(unittest.TestCase):
                 "evidence": [
                     {"physical_start": 1, "printed_start": 1},
                     {"physical_start": 9, "printed_start": 1},
-                    {"reason": "歧义: 文本层提取的条目页码(10)与正文起始物理页(9)重叠"},
                 ],
             }
-            _write_toc_review_evidence(pkg, numbering)
-            review = (pkg / "review.md").read_text(encoding="utf-8")
-            self.assertIn("## 页码坐标系未验证", review)
-            self.assertIn("constant_offset", review)
-            self.assertIn("source_system", review)
-            self.assertIn("检测证据", review)
+            _write_toc_review_evidence(pkg, numbering, validate_path)
+            report = json.load(open(validate_path, encoding='utf-8'))
+            rd = report.get("toc_page_numbering_review", {})
+            self.assertEqual(rd["mapping_type"], "constant_offset")
+            self.assertEqual(rd["printed_to_physical_offset"], 8)
+            self.assertEqual(len(rd["fix_steps"]), 3)
+            self.assertIn("检测到偏移", rd["message"])
 
     def test_review_evidence_not_written_when_verified(self):
-        """verified 状态不写入 review 证据。"""
+        """verified 状态不写 validate report。"""
         with tempfile.TemporaryDirectory() as d:
             pkg = Path(d)
+            validate_path = str(pkg / "validate.json")
+            json.dump({"segments": []}, open(validate_path, 'w', encoding='utf-8'))
             numbering = {
                 "mapping_type": "constant_offset",
                 "status": "verified",
             }
-            _write_toc_review_evidence(pkg, numbering)
-            self.assertFalse((pkg / "review.md").exists())
+            _write_toc_review_evidence(pkg, numbering, validate_path)
+            report = json.load(open(validate_path, encoding='utf-8'))
+            self.assertNotIn("toc_page_numbering_review", report)
 
-    def test_review_evidence_idempotent(self):
-        """第二次调用不重复追加段落。"""
+    def test_review_evidence_no_validate_file(self):
+        """无 validate_tmp 时安全返回。"""
         with tempfile.TemporaryDirectory() as d:
             pkg = Path(d)
             numbering = {
                 "mapping_type": "unknown",
                 "status": "needs_review",
-                "evidence": [{"reason": "test"}],
             }
-            _write_toc_review_evidence(pkg, numbering)
-            first = (pkg / "review.md").read_text(encoding="utf-8")
-            _write_toc_review_evidence(pkg, numbering)
-            second = (pkg / "review.md").read_text(encoding="utf-8")
-            self.assertEqual(first, second)
+            # 不应该抛出异常
+            _write_toc_review_evidence(pkg, numbering, None)
+            _write_toc_review_evidence(pkg, numbering, "/nonexistent/path.json")
 
 
 if __name__ == "__main__":
