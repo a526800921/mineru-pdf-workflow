@@ -663,7 +663,8 @@ def generate_verification(pkg: Path, manifest: dict, cl_data: list,
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore",
+                          lineterminator='\n')
         w.writeheader()
         w.writerows(rows)
 

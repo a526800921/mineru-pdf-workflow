@@ -424,6 +424,141 @@ review_status=$(grep "$record_id" "$t/data/ingest_ready.csv" | cut -d',' -f12)
 [[ "$ingest_status" == "not_ready" ]] && _pass "F5: 修正后强制 not_ready" || _fail "F5: ingest_status 未被修正强制 (got=$ingest_status)"
 _grep "$(grep "$record_id" "$t/data/ingest_ready.csv")" "data_corrected" "F5: notes 包含 data_corrected"
 
+# ── F6: rekey 端到端（旧行 superseded，新行 supersedes_record_id） ──
+echo ""
+echo "--- F6: rekey 端到端 ---"
+t=$(_mk)
+mkdir -p "$t/data"
+cat > "$t/data/quick_lookup_draft.csv" <<'EOFCSV'
+source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes,source_block_id,table_id,row_index,parent_key,key_role
+demo20.pdf,demo20,引擎,旧参数名,100,kg,14,14,test,medium,draft,html_table,html_table:1,1,1,,business_key
+EOFCSV
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+touch "$t/test.md"
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+old_rid=$(head -2 "$t/data/ingest_ready.csv" | tail -1 | cut -d',' -f1)
+# 创建 rekey 修正
+cat > "$t/data/manual_fixes.jsonl" <<EOFJSONL
+{"fix_id":"fix-rekey-001","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[14],"before":"旧参数名","after":"新参数名","evidence":"PDF p14 显示正确参数名","target_record_id":"$old_rid","target_field":"key","field_action":"rekey","old_value":"旧参数名","new_value":"新参数名"}
+EOFJSONL
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+# 验证旧行（定位：以 record_id 开头的行）
+old_line=$(grep "^$old_rid," "$t/data/ingest_ready.csv")
+old_status=$(echo "$old_line" | cut -d',' -f13)
+old_sup_by=$(echo "$old_line" | cut -d',' -f24)
+[[ "$old_status" == "superseded" ]] && _pass "F6: 旧行 ingest_status=superseded" || _fail "F6: 旧行状态错误 (got=$old_status)"
+[[ -n "$old_sup_by" ]] && _pass "F6: 旧行 superseded_by 非空" || _fail "F6: 旧行 superseded_by 为空"
+# 验证新行（定位：以新 record_id 开头的行）
+new_rid="$old_sup_by"
+new_line=$(grep "^$new_rid," "$t/data/ingest_ready.csv")
+new_status=$(echo "$new_line" | cut -d',' -f13)
+new_supersedes=$(echo "$new_line" | cut -d',' -f23)
+new_key=$(echo "$new_line" | cut -d',' -f5)
+[[ "$new_key" == "新参数名" ]] && _pass "F6: 新行 key=新参数名" || _fail "F6: 新行 key 错误 (got=$new_key)"
+[[ "$new_status" == "not_ready" ]] && _pass "F6: 新行 ingest_status=not_ready" || _fail "F6: 新行状态错误 (got=$new_status)"
+[[ "$new_supersedes" == "$old_rid" ]] && _pass "F6: 新行 supersedes_record_id 指向旧行" || _fail "F6: supersedes_record_id 不匹配 (got=$new_supersedes, expect=$old_rid)"
+
+# ── F7: suppress 端到端（目标行保持 suppressed） ──
+echo ""
+echo "--- F7: suppress 端到端 ---"
+t=$(_mk)
+mkdir -p "$t/data"
+cat > "$t/data/quick_lookup_draft.csv" <<'EOFCSV'
+source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes,source_block_id,table_id,row_index,parent_key,key_role
+demo20.pdf,demo20,概述,废弃字段,删除,kg,1,1,test,medium,draft,html_table,html_table:1,1,1,,business_key
+EOFCSV
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+touch "$t/test.md"
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+sup_rid=$(head -2 "$t/data/ingest_ready.csv" | tail -1 | cut -d',' -f1)
+cat > "$t/data/manual_fixes.jsonl" <<EOFJSONL
+{"fix_id":"fix-suppress-001","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[1],"before":"废弃字段","after":"","evidence":"PDF 中不存在该字段","target_record_id":"$sup_rid","target_field":"value","field_action":"suppress","old_value":"删除","new_value":""}
+EOFJSONL
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+sup_line=$(grep "$sup_rid" "$t/data/ingest_ready.csv")
+sup_status=$(echo "$sup_line" | cut -d',' -f13)
+sup_notes=$(echo "$sup_line" | cut -d',' -f21)
+[[ "$sup_status" == "suppressed" ]] && _pass "F7: suppress 后 ingest_status=suppressed" || _fail "F7: suppress 后状态错误 (got=$sup_status)"
+echo "$sup_notes" | grep -q "suppressed_by: fix-suppress-001" && _pass "F7: notes 包含 suppressed_by" || _fail "F7: notes 缺少 suppressed_by"
+
+# ── F8: 修正后冲突重算 ──
+echo ""
+echo "--- F8: amend 修正后冲突重算 ---"
+t=$(_mk)
+mkdir -p "$t/data"
+cat > "$t/data/quick_lookup_draft.csv" <<'EOFCSV'
+source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes,source_block_id,table_id,row_index,parent_key,key_role
+demo20.pdf,demo20,规格,发动机型号,A,cc,14,14,testA,medium,draft,html_table,html_table:1,html_table:1,1,,business_key
+demo20.pdf,demo20,规格,发动机型号,B,cc,14,14,testB,medium,draft,html_table,html_table:1,html_table:1,2,,business_key
+EOFCSV
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+touch "$t/test.md"
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+# 首次应产生冲突（两行同 key 不同 value）
+conflict_count=$(wc -l < "$t/data/conflicts.csv" | tr -d ' ')
+[[ "$conflict_count" -ge 2 ]] && _pass "F8: 修正前存在冲突 (${conflict_count} 行含表头)" || _fail "F8: 修正前无冲突 (${conflict_count} 行)"
+# 获取两行的 record_id
+rid_a=$(head -2 "$t/data/ingest_ready.csv" | tail -1 | cut -d',' -f1)
+rid_b=$(tail -1 "$t/data/ingest_ready.csv" | cut -d',' -f1)
+# amend 将 rid_a 的 value 从 A 改为 B（一致）
+cat > "$t/data/manual_fixes.jsonl" <<EOFJSONL
+{"fix_id":"fix-conflict-resolve","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[14],"before":"A","after":"B","evidence":"PDF p14 p15 实际均为 B","target_record_id":"$rid_a","target_field":"value","field_action":"amend","old_value":"A","new_value":"B"}
+EOFJSONL
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+# 修正后冲突应消除
+new_conflict_count=$(wc -l < "$t/data/conflicts.csv" | tr -d ' ')
+[[ "$new_conflict_count" -eq 1 ]] && _pass "F8: 修正后冲突消除 (仅表头)" || _fail "F8: 修正后仍有冲突 ($new_conflict_count 行)"
+# 验证 rid_a 的 value 已变为 B
+amended_val=$(grep "$rid_a" "$t/data/ingest_ready.csv" | cut -d',' -f6)
+[[ "$amended_val" == "B" ]] && _pass "F8: amend 后 value=B" || _fail "F8: value 未更新 (got=$amended_val)"
+
+# ── F9: export 门禁验证（superseded/not_ready 不导出） ──
+echo ""
+echo "--- F9: export 门禁 ---"
+t=$(_mk)
+mkdir -p "$t/data"
+cat > "$t/data/quick_lookup_draft.csv" <<'EOFCSV'
+source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes,source_block_id,table_id,row_index,parent_key,key_role
+demo20.pdf,demo20,规格,额定功率,10,kW,14,14,evidence ok,medium,draft,html_table,html_table:1,1,1,,business_key
+EOFCSV
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+touch "$t/test.md"
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+exp_rid=$(head -2 "$t/data/ingest_ready.csv" | tail -1 | cut -d',' -f1)
+# 先加 review_overrides 使记录 approved
+cat > "$t/data/review_overrides.csv" <<EOFCSV
+record_id,review_status,notes
+$exp_rid,approved,F9 审核通过
+EOFCSV
+# approve 后应 ready
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+ready_status=$(grep "$exp_rid" "$t/data/ingest_ready.csv" | cut -d',' -f13)
+[[ "$ready_status" == "ready" ]] && _pass "F9: approved 后 ingest_status=ready" || _fail "F9: ready 状态错误 (got=$ready_status)"
+# 运行 export — 应导出 1 条
+"$_scripts"/pdf-export-ingest "$t" > /dev/null 2>&1
+batch_count=$(wc -l < "$t/data/ingest_batch.jsonl" | tr -d ' ')
+[[ "$batch_count" -eq 1 ]] && _pass "F9: ready 记录已导出 (1 条)" || _fail "F9: 导出数量错误 (got=$batch_count)"
+# 再创建 amend 修正 → not_ready
+cat > "$t/data/manual_fixes.jsonl" <<EOFJSONL
+{"fix_id":"fix-export-gate","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[14],"before":"10","after":"10.5","evidence":"PDF p14 精确值","target_record_id":"$exp_rid","target_field":"value","field_action":"amend","old_value":"10","new_value":"10.5"}
+EOFJSONL
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+# 修正后 → not_ready
+corr_status=$(grep "$exp_rid" "$t/data/ingest_ready.csv" | cut -d',' -f13)
+[[ "$corr_status" == "not_ready" ]] && _pass "F9: 修正后 ingest_status=not_ready" || _fail "F9: 修正后状态错误 (got=$corr_status)"
+# 重新 export → 应导出 0 条
+"$_scripts"/pdf-export-ingest "$t" > /dev/null 2>&1
+new_batch_count=$(wc -l < "$t/data/ingest_batch.jsonl" | tr -d ' ')
+[[ "$new_batch_count" -eq 0 ]] && _pass "F9: 修正后 ready=0，export 为 0 条" || _fail "F9: 修正后仍有导出 (got=$new_batch_count)"
+
 # ── 汇总 ──
 echo ""
 echo "=== 测试完成 ==="

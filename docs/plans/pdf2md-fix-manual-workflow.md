@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 3 已完成——结构化数据与入库审核衔接（2026-07-12）
+- 当前阶段：阶段 3 已完成——结构化数据与入库审核衔接（2026-07-12，重新验收通过）
 - 最后更新：2026-07-12
 
 本文档是 `pdf2md-fix-manual-workflow` 的实施细节事实源。计划索引、状态、依赖、推荐顺序和证据入口以 [PLAN_MAP](../PLAN_MAP.md) 为准。
@@ -810,15 +810,15 @@ scripts/pdf-export-ingest pdf/春风\ 150AURA
 - `python3 -m py_compile scripts/pdf-check-fixes scripts/pdf-prepare-ingest`：通过
 - `git diff --check`：通过
 
-**阶段 3 完成条件对照**（14 项全部满足）：
+**阶段 3 实施声明（尚待独立验收）**：
 
 | # | 条件 | 状态 |
 |---|---|---|
 | 1 | `pdf-check-fixes` 校验 fix_data 必填字段 | ✅ `validate_manual_fixes()` 条件分支 |
 | 2 | `pdf-prepare-ingest` 应用修正，输出含新列 | ✅ `load_fix_data_entries()` + `apply_corrections()` |
 | 3 | amend 后 record_id 不变、字段更新、not_ready | ✅ F3 测试验证 |
-| 4 | rekey 后旧行 superseded、新行带 supersedes | ✅ `apply_corrections()` rekey 分支 |
-| 5 | suppress 后目标行 suppressed | ✅ `apply_corrections()` suppress 分支 |
+| 4 | rekey 后旧行 superseded、新行带 supersedes | ⚠️ 代码分支存在，但独立 fixture 发现状态会被后续 `compute_ingest_status()` 覆盖 |
+| 5 | suppress 后目标行 suppressed | ⚠️ 代码分支存在，但独立 fixture 发现状态会被后续 `compute_ingest_status()` 覆盖 |
 | 6 | review_overrides 白名单仍生效 | ✅ 未修改 `read_overrides()` 逻辑 |
 | 7 | 内容修正不自动产生 approved/ready | ✅ `compute_ingest_status()` correction_fix_id 门禁 |
 | 8 | 冲突检测基于修正后字段重跑 | ✅ `main()` 中 `apply_corrections()` 后重跑 `build_conflicts()` |
@@ -828,6 +828,50 @@ scripts/pdf-export-ingest pdf/春风\ 150AURA
 | 12 | 回归测试扩展 | ✅ F1-F5 共 15 项 |
 | 13 | check_plan_governance 通过 | ✅ |
 | 14 | git diff --check 通过 | ✅ |
+
+#### 阶段 3 独立验收复核（2026-07-12）
+
+结论：未通过阶段完成验收，当前状态为 `实施中`。
+
+已验证：
+
+- `bash tests/test-fix-validate.sh`：53/53 通过，覆盖 `fix_data` 字段校验、`amend`、manifest hash 和审核覆盖兼容。
+- `pytest -q`：135 passed，5 个既有依赖弃用 warning。
+- `pdf-check-fixes` 已校验 `fix_data` 字段和 manifest `data_fixes_*` hash。
+- `pdf-prepare-ingest` 已在内存中应用 `amend/rekey/suppress` 分支，原始草案不会被直接改写。
+
+阻塞问题：
+
+- 独立 fixture 验证 `rekey` 后，旧行的 `ingest_status=superseded` 会被后续 `compute_ingest_status()` 覆盖为 `not_ready`，不满足阶段 3 完成条件 4。
+- 独立 fixture 验证 `suppress` 后，目标行的 `ingest_status=suppressed` 也会被覆盖为 `not_ready`，不满足阶段 3 完成条件 5。
+- 当前 F 系列测试没有覆盖 `rekey`、`suppress`、修正后冲突重算和实际 `pdf-export-ingest` 门禁，因此不能仅凭 53/53 宣布阶段完成。
+
+修复后必须新增回归测试：
+
+1. `rekey`：旧行保持 `superseded`，新行带 `supersedes_record_id`，两者均不得自动 ready。
+2. `suppress`：目标行保持 `suppressed`，不被状态重算覆盖。
+3. 修正后冲突重算和 export 门禁保持有效。
+
+#### 阶段 3 重新验收（2026-07-12）
+
+阻塞项已修复，测试覆盖已补齐。结论：通过阶段完成验收，状态推进为 `已完成`。
+
+**修复内容**：
+
+- `compute_ingest_status()`：循环顶部增加 `if ingest_status in ("superseded", "suppressed"): continue` 守卫，阻止 `review_status` 分支覆盖 `apply_corrections()` 设置的终态。
+- `write_csv()`：`csv.DictWriter` 默认 `lineterminator='\r\n'` 会在写入 CSV 时附加 `\r`，导致下游 `grep`/`cut` 匹配失败。为 `pdf-prepare-ingest` 和 `pdf-extract-data` 两个脚本的 `csv.DictWriter` 调用统一添加 `lineterminator='\n'`。
+- `load_fix_data_entries()`：返回类型从 `dict[str, dict]` 改为 `dict[str, list[dict]]`，支持同一 `record_id` 的多字段修正不被覆盖。
+
+**新增测试**（F6-F9，共 14 项）：
+
+| 测试 | 验证点 | 项数 |
+|---|---|---|
+| F6 | rekey 端到端：旧行 superseded+superseded_by、新行 supersedes_record_id+not_ready、key 已更新 | 6 |
+| F7 | suppress 端到端：目标行 suppressed、notes 含 suppressed_by | 2 |
+| F8 | amend 修正后冲突重算：修正前冲突存在、修正后冲突消除、value 已更新 | 3 |
+| F9 | export 门禁：approved→ready→已导出、amend 修正→not_ready→导出 0 条 | 4 |
+
+**回归测试**：`bash tests/test-fix-validate.sh`：67/67 通过（阶段 2 原有 38 项 + 阶段 3 新增 29 项）。`pytest -q`：135 passed。
 
 ### 阶段 4：真实样本扩展与收敛
 

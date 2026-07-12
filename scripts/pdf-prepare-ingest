@@ -330,6 +330,9 @@ def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
             review_context_ids.update(rids)
 
     for r in rows:
+        # 保留 apply_corrections() 设置的终态（rekey/suppress）
+        if r.get("ingest_status") in ("superseded", "suppressed"):
+            continue
         rs = r["review_status"]
         # rejected → skipped
         if rs == "rejected":
@@ -487,7 +490,8 @@ def apply_corrections(rows: list[dict],
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore",
+                          lineterminator='\n')
         w.writeheader()
         w.writerows(rows)
 
