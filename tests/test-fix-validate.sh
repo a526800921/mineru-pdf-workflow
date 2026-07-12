@@ -274,6 +274,29 @@ out="$("$_scripts"/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
 _ck1 $rc "A7: 页锚点不存在时返回非零"
 _grep "$out" "未找到页锚点" "A7: 包含页锚点未找到信息"
 
+# ── A8: 第一条成功第二条失败 → 全部回滚（原子性） ──
+echo ""
+echo "--- A8: 部分成功后失败 → 原子回滚 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+mkdir -p "$t/data"
+md_orig_hash=$(shasum -a 256 "$t/demo20.md" | awk '{print $1}')
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"valid-fix","fix_type":"rebuild_table","review_action":"fix_md","status":"applied","pages":[14],"before":"11.8 Kw / 8500 rpm","after":"11.8 kW / 8500 rpm","evidence":"有效修复"}
+{"fix_id":"bad-fix","fix_type":"fill_content","review_action":"fix_md","status":"applied","pages":[14],"before":"THIS_STRING_NEVER_EXISTS_ZZZ_12345","after":"REPLACED","evidence":"无效修复"}
+EOF
+_inject "$t" "$t/data/manual_fixes.jsonl" "applied" "verified" > /dev/null
+manifest_before_hash=$(shasum -a 256 "$t/manifest.json" | awk '{print $1}')
+out="$("$_scripts"/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "A8: 有错误修复时返回非零"
+_grep "$out" "未修改任何文件" "A8: 提示未修改任何文件"
+# 验证 MD 未变
+md_after_hash=$(shasum -a 256 "$t/demo20.md" | awk '{print $1}')
+[[ "$md_orig_hash" == "$md_after_hash" ]] && _pass "A8: Markdown hash 不变（已回滚）" || _fail "A8: Markdown 擅自修改（hash=$md_after_hash）"
+# 验证 manifest 未变
+mf_after_hash=$(shasum -a 256 "$t/manifest.json" | awk '{print $1}')
+[[ "$manifest_before_hash" == "$mf_after_hash" ]] && _pass "A8: manifest hash 不变（未写入）" || _fail "A8: manifest 擅自修改"
+
 # ── 汇总 ──
 echo ""
 echo "=== 测试完成 ==="

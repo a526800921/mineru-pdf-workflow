@@ -255,38 +255,42 @@ def main() -> None:
         backup_path.write_text(md_before, encoding="utf-8")
         print(f"备份：创建 {backup_path.relative_to(pkg_dir)}", file=sys.stderr)
 
-    # 逐个应用修复
+    # ── 阶段 1：所有修复先在内存副本中试行 ──
+    # 全部成功才落盘；任一失败则完全回滚（不写入任何文件）。
     all_errors: list[str] = []
-    any_change = False
+    skipped_count = 0
     md_current = md_before
 
     for fix in fixes:
         new_md, errors, has_changed = apply_single_fix(md_current, fix)
-        all_errors.extend(errors)
-        if has_changed:
+        if errors:
+            all_errors.extend(errors)
+        elif has_changed:
             md_current = new_md
-            any_change = True
+        else:
+            skipped_count += 1  # 幂等跳过
 
+    # ── 阶段 2：按错误数决定是否落盘 ──
     if all_errors:
         for e in all_errors:
             print(f"ERROR: {e}", file=sys.stderr)
+        print(
+            f"失败：{len(all_errors)} 个修复错误 —— "
+            "未修改任何文件（已回滚所有内存变更）",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    if not any_change:
-        if not all_errors:
-            print("信息：所有修复已在之前应用过（幂等跳过）", file=sys.stderr)
-        else:
-            print("失败：修复全部失败，未修改任何文件", file=sys.stderr)
-        sys.exit(1 if all_errors else 0)
+    if md_current == md_before:
+        print("信息：所有修复已在之前应用过（幂等跳过）", file=sys.stderr)
+        sys.exit(0)
 
-    # 写入 Markdown
-    new_md_hash = file_sha256(md_path) if not dry_run else \
-        hashlib.sha256(md_current.encode()).hexdigest()
-
+    # ── 阶段 3：全部成功 → 原子落盘 ──
     if dry_run:
         print(f"DRY RUN: 将应用 {len(fixes)} 个修复到 {md_rel}", file=sys.stderr)
         print(json.dumps({"status": "dry_run", "fix_count": len(fixes),
-                          "errors": len(all_errors)}))
-        sys.exit(0 if not all_errors else 1)
+                          "skipped": skipped_count}))
+        sys.exit(0)
 
     md_path.write_text(md_current, encoding="utf-8")
     actual_new_hash = file_sha256(md_path)
@@ -302,22 +306,21 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    total = len(fixes)
-    applied = sum(1 for f in fixes if True)  # 所有 input 都是 applied
+    applied = len(fixes) - skipped_count
     print(
-        f"成功：已应用 {applied}/{total} 个修复到 {md_rel}"
-        f"（{len(all_errors)} 个跳过/错误）",
+        f"成功：已应用 {applied}/{len(fixes)} 个修复到 {md_rel}"
+        f"（{skipped_count} 个幂等跳过）",
         file=sys.stderr,
     )
     print(json.dumps({
         "status": "completed",
         "applied": applied,
-        "skipped": total - applied,
-        "errors": len(all_errors),
+        "skipped": skipped_count,
+        "errors": 0,
         "markdown": str(md_path),
         "markdown_sha256": actual_new_hash,
     }))
-    sys.exit(1 if all_errors else 0)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
