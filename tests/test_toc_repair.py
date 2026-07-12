@@ -19,6 +19,9 @@ from lib.toc_repair import (
     _assign_to_toc_pages,
     _compute_depths,
     _write_toc_tree,
+    _detect_page_numbering,
+    _normalize_entries,
+    _sync_manifest_page_numbering,
 )
 
 
@@ -565,6 +568,175 @@ class TestMergedAndCompatPaths(unittest.TestCase):
                 os.unlink(vpath)
         finally:
             os.unlink(pdf)
+
+
+class TestPageNumbering(unittest.TestCase):
+    """页码坐标系检测与标准化。"""
+
+    def test_detect_identity_single_label(self):
+        """单 page label → identity。"""
+        doc = fitz.open()
+        doc.new_page()
+        doc.new_page()
+        # 显式设置单标签范围
+        doc.set_page_labels([
+            {"startpage": 0, "prefix": "", "firstpagenum": 1, "style": "D"},
+        ])
+        entries = [{"title": "T", "page": 1, "depth": 0}]
+        numbering = _detect_page_numbering(doc, entries)
+        doc.close()
+        self.assertEqual(numbering["mapping_type"], "identity")
+
+    def test_detect_unknown_no_labels(self):
+        """无 page labels → unknown。"""
+        doc = fitz.open()
+        doc.new_page()
+        entries = [{"title": "T", "page": 1, "depth": 0}]
+        numbering = _detect_page_numbering(doc, entries)
+        doc.close()
+        self.assertEqual(numbering["mapping_type"], "unknown")
+        self.assertEqual(numbering["status"], "needs_review")
+
+    def test_detect_constant_offset_two_ranges(self):
+        """两段标签、第二段 firstpagenum=1 → constant_offset。"""
+        doc = fitz.open()
+        for _ in range(10):
+            doc.new_page()
+        # 模拟前件页(phys 1) + 正文(phys 2+, printed 1+): offset=1
+        doc.set_page_labels([
+            {"startpage": 0, "prefix": "", "firstpagenum": 1, "style": "D"},
+            {"startpage": 1, "prefix": "", "firstpagenum": 1, "style": "D"},
+        ])
+        entries = [{"title": "前言", "page": 2, "depth": 0}]
+        numbering = _detect_page_numbering(doc, entries)
+        doc.close()
+        self.assertEqual(numbering["mapping_type"], "constant_offset")
+        self.assertEqual(numbering["printed_to_physical_offset"], 1)
+        self.assertEqual(numbering["source_system"], "physical")
+
+    def test_detect_printed_source_when_small_pages(self):
+        """条目页码低于正文起始物理页 → source_system=printed。"""
+        doc = fitz.open()
+        for _ in range(10):
+            doc.new_page()
+        doc.set_page_labels([
+            {"startpage": 0, "prefix": "", "firstpagenum": 1, "style": "D"},
+            {"startpage": 5, "prefix": "", "firstpagenum": 1, "style": "D"},
+        ])
+        # 条目页码=1 小于 body_start=6 → 印刷页
+        entries = [{"title": "前言", "page": 1, "depth": 0}]
+        numbering = _detect_page_numbering(doc, entries)
+        doc.close()
+        self.assertEqual(numbering["source_system"], "printed")
+        self.assertEqual(numbering["printed_to_physical_offset"], 5)
+
+    def test_normalize_identity_no_changes(self):
+        """identity 映射 → 条目不变。"""
+        entries = [{"title": "T", "page": 5, "depth": 0}]
+        numbering = {"mapping_type": "identity"}
+        _normalize_entries(entries, numbering)
+        self.assertEqual(entries[0]["page"], 5)
+        self.assertNotIn("printed_page", entries[0])
+
+    def test_normalize_unknown_no_changes(self):
+        """unknown 映射 → 条目不变。"""
+        entries = [{"title": "T", "page": 5, "depth": 0}]
+        numbering = {"mapping_type": "unknown", "status": "needs_review"}
+        _normalize_entries(entries, numbering)
+        self.assertEqual(entries[0]["page"], 5)
+        self.assertNotIn("printed_page", entries[0])
+
+    def test_normalize_printed_to_physical(self):
+        """印刷页条目 → 转为物理页，保留 printed_page。"""
+        entries = [{"title": "参数", "page": 5, "depth": 0}]
+        numbering = {
+            "mapping_type": "constant_offset",
+            "printed_to_physical_offset": 8,
+            "source_system": "printed",
+            "offset_applies_from_physical_page": 9,
+        }
+        _normalize_entries(entries, numbering)
+        self.assertEqual(entries[0]["page"], 13)
+        self.assertEqual(entries[0]["printed_page"], 5)
+
+    def test_normalize_physical_records_printed(self):
+        """物理页条目 → 保持 page，记录 printed_page。"""
+        entries = [{"title": "参数", "page": 13, "depth": 0}]
+        numbering = {
+            "mapping_type": "constant_offset",
+            "printed_to_physical_offset": 8,
+            "source_system": "physical",
+            "offset_applies_from_physical_page": 9,
+        }
+        _normalize_entries(entries, numbering)
+        self.assertEqual(entries[0]["page"], 13)
+        self.assertEqual(entries[0]["printed_page"], 5)
+
+    def test_normalize_front_matter_no_printed_page(self):
+        """前件页区域条目（物理页 < 正文起始）不添加 printed_page。"""
+        entries = [{"title": "封面", "page": 1, "depth": 0}]
+        numbering = {
+            "mapping_type": "constant_offset",
+            "printed_to_physical_offset": 8,
+            "source_system": "physical",
+            "offset_applies_from_physical_page": 9,
+        }
+        _normalize_entries(entries, numbering)
+        self.assertEqual(entries[0]["page"], 1)
+        self.assertNotIn("printed_page", entries[0])
+
+    def test_write_toc_tree_with_printed_page(self):
+        """含 printed_page 的条目写入 toc_tree.json。"""
+        entries = [
+            {"title": "参数", "page": 13, "toc_page": 2, "depth": 0,
+             "printed_page": 5},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            _write_toc_tree(Path(d), entries)
+            tree = json.load(open(Path(d) / "toc_tree.json", encoding="utf-8"))
+        self.assertEqual(tree[0]["target_page"], 13)
+        self.assertEqual(tree[0]["printed_page"], 5)
+        self.assertEqual(tree[0]["toc_page"], 2)
+
+    def test_sync_manifest_no_existing(self):
+        """manifest 不存在时 _sync_manifest 安全返回。"""
+        with tempfile.TemporaryDirectory() as d:
+            numbering = {"mapping_type": "identity", "status": "proposed"}
+            # 不应抛出异常
+            _sync_manifest_page_numbering(Path(d), numbering)
+            self.assertFalse((Path(d) / "manifest.json").exists())
+
+    def test_sync_manifest_preserves_existing_fields(self):
+        """同步时不丢失现有 manifest 字段。"""
+        with tempfile.TemporaryDirectory() as d:
+            pkg = Path(d)
+            pkg.mkdir(parents=True, exist_ok=True)
+            # 写现有 manifest
+            original = {"model": "test", "parse_status": "ok", "hash": {"sha256": "abc"}}
+            (pkg / "manifest.json").write_text(
+                json.dumps(original, ensure_ascii=False), encoding="utf-8"
+            )
+            # 写 toc 文件
+            (pkg / "toc.md").write_text("# TOC\n- item 1", encoding="utf-8")
+            (pkg / "toc_tree.json").write_text('[{"title":"T","target_page":1}]', encoding="utf-8")
+
+            numbering = {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "printed_to_physical_offset": 8,
+                "status": "verified",
+                "evidence": [{"physical_start": 1, "printed_start": 1}],
+            }
+            _sync_manifest_page_numbering(pkg, numbering)
+
+            m = json.load(open(pkg / "manifest.json", encoding="utf-8"))
+            self.assertEqual(m["model"], "test")
+            self.assertEqual(m["parse_status"], "ok")
+            self.assertEqual(m["hash"]["sha256"], "abc")
+            self.assertEqual(m["page_numbering"]["mapping_type"], "constant_offset")
+            self.assertEqual(m["page_numbering"]["printed_to_physical_offset"], 8)
+            self.assertIn("toc_md_sha256", m["hash"])
+            self.assertIn("toc_tree_json_sha256", m["hash"])
 
 
 if __name__ == "__main__":

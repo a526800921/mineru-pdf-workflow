@@ -269,6 +269,12 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     # 已归属有序条目：toc.md/toc_tree 与合并 md 目录块同源，排除未归属条目
     assigned = _ordered_assigned_entries(by_page, toc_page_nums)
 
+    # ── 页码坐标系检测与标准化 ──
+    numbering = _detect_page_numbering(doc, assigned)
+    _normalize_entries(assigned, numbering)
+    # 同步更新 by_page 中对应条目的 page 值（_normalize_entries 原地修改 assigned，
+    # 但 by_page 中的条目对象与 assigned 是同一引用，所以已同步）
+
     # 构造替换用 TOC 块
     toc_block = _build_merged_toc_block(first_toc, last_toc, by_page)
 
@@ -309,6 +315,7 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     # 均基于已归属有序条目，与合并 md 目录块严格一致
     _write_toc_tree(merged_md_path.parent, assigned)
     _write_toc_md(merged_md_path.parent, assigned)
+    _sync_manifest_page_numbering(merged_md_path.parent, numbering)
 
     # 无法唯一归属的条目已从三种目录产物排除，持久化到 validate 报告供 review.md
     # 展示（可见性）：让用户知道有条目未能归属，而非静默丢弃
@@ -394,18 +401,213 @@ def _write_toc_tree(pkg_root: Path, entries: list[dict]):
     区分 target_page（条目指向正文页）与 toc_page（条目所在物理目录页）；
     未能唯一归属物理页的条目 toc_page 为 null。
     """
-    tree_data = [
-        {
+    tree_data = []
+    for e in entries:
+        item = {
             "title": e["title"],
             "target_page": e["page"],
             "toc_page": e.get("toc_page"),
             "depth": e["depth"],
         }
-        for e in entries
-    ]
+        # 页码标准化后保留印刷页来源
+        if "printed_page" in e:
+            item["printed_page"] = e["printed_page"]
+        tree_data.append(item)
     tree_path = pkg_root / "toc_tree.json"
     tree_path.write_text(
         json.dumps(tree_data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+# ── 页码坐标系检测与标准化 ─────────────────────────────────────────
+
+def _detect_page_numbering(doc, entries: list[dict]) -> dict:
+    """检测印刷页与 PDF 物理页的映射关系。
+
+    优先级：
+    1. PDF page labels（PyMuPDF）→ 直接推导映射
+    2. 启发式比较 → 比较最低 target_page 与正文起始物理页
+
+    返回 page_numbering 块，可直接写入 manifest。
+    """
+    labels = doc.get_page_labels()
+
+    if not labels:
+        # 无 page labels → 无法自动检测，进入 review
+        return {
+            "physical_page_basis": "pdf_1_based",
+            "mapping_type": "unknown",
+            "status": "needs_review",
+            "evidence": [{"reason": "PDF 无 page labels，无法自动检测印刷页/物理页偏移"}],
+        }
+
+    # 单标签范围 → identity
+    if len(labels) == 1:
+        lb = labels[0]
+        return {
+            "physical_page_basis": "pdf_1_based",
+            "mapping_type": "identity",
+            "status": "proposed",
+            "evidence": [
+                {
+                    "physical_start": lb["startpage"] + 1,
+                    "printed_start": lb["firstpagenum"],
+                    "style": lb.get("style", ""),
+                    "prefix": lb.get("prefix", ""),
+                }
+            ],
+        }
+
+    # 多标签范围 → 分析偏移
+    ranges = []
+    for lb in labels:
+        ranges.append({
+            "physical_start": lb["startpage"] + 1,
+            "printed_start": lb["firstpagenum"],
+            "style": lb.get("style", ""),
+            "prefix": lb.get("prefix", ""),
+        })
+
+    # 检测：第二个范围 firstpagenum 重置为 1 的模式
+    # 这是最常见的印刷页偏移模式（前件页→正文）
+    if len(ranges) >= 2 and ranges[1]["printed_start"] == 1:
+        offset = ranges[1]["physical_start"] - ranges[1]["printed_start"]
+
+        if offset == 0:
+            return {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "identity",
+                "status": "proposed",
+                "evidence": ranges,
+            }
+
+        # 判断 TOC 条目当前使用的是物理页还是印刷页
+        # 启发式：比较最低条目 page 与正文起始物理页。
+        # - 最低 page >= body_start → 条目已使用物理页（PyMuPDF get_toc 的行为）
+        # - 最低 page < body_start → 条目使用印刷页（文本层提取时可能发生）
+        if entries:
+            pages = sorted({e["page"] for e in entries})
+            min_page = pages[0]
+            body_start = ranges[1]["physical_start"]
+
+            if min_page >= body_start:
+                source_system = "physical"
+            else:
+                # TOC 页码低于正文起始物理页 → 条目使用印刷页
+                source_system = "printed"
+        else:
+            source_system = "physical"
+
+        return {
+            "physical_page_basis": "pdf_1_based",
+            "printed_page_basis": "content_start_at_1",
+            "mapping_type": "constant_offset",
+            "printed_to_physical_offset": offset,
+            "offset_applies_from_physical_page": ranges[1]["physical_start"],
+            "source_system": source_system,
+            "status": "verified" if offset > 0 else "proposed",
+            "evidence": ranges,
+        }
+
+    # 无法识别的多标签模式 → needs_review
+    return {
+        "physical_page_basis": "pdf_1_based",
+        "mapping_type": "unknown",
+        "status": "needs_review",
+        "evidence": ranges + [{"reason": "无法识别的多标签模式，需人工确认"}],
+    }
+
+
+def _normalize_entries(entries: list[dict], numbering: dict) -> list[dict]:
+    """按检测到的页码映射标准化条目。
+
+    - identity：target_page 不变
+    - constant_offset 且 source_system=printed：target_page += offset，
+      原 page 保留为 printed_page
+    - constant_offset 且 source_system=physical：target_page 不变，
+      记录 printed_page = page - offset 作为来源
+    - unknown：target_page 不变，不添加 printed_page
+    """
+    mapping_type = numbering.get("mapping_type", "identity")
+
+    if mapping_type == "identity" or mapping_type == "unknown":
+        return entries
+
+    if mapping_type == "constant_offset":
+        offset = numbering.get("printed_to_physical_offset", 0)
+        source_system = numbering.get("source_system", "physical")
+        body_start = numbering.get("offset_applies_from_physical_page", 1)
+
+        if offset == 0:
+            return entries
+
+        for e in entries:
+            raw_page = e["page"]
+            if source_system == "printed":
+                # 条目使用印刷页 → 转为物理页
+                if raw_page >= 1:
+                    e["printed_page"] = raw_page
+                    e["page"] = raw_page + offset
+            else:
+                # 条目已使用物理页 → 记录印刷页作为来源
+                if raw_page >= body_start:
+                    e["printed_page"] = raw_page - offset
+                # 前件页区域：物理页 = 印刷页（identity），不添加 printed_page
+
+    return entries
+
+
+def _sync_manifest_page_numbering(pkg_root: Path, numbering: dict):
+    """将 page_numbering 块和 toc 文件 hash 写入 manifest.json。
+
+    保留现有 manifest 内容，更新/添加 page_numbering 和 hash.toc_* 字段。
+    manifest 不存在时不创建（由上游负责创建）。
+    """
+    import hashlib
+
+    manifest_path = pkg_root / "manifest.json"
+    if not manifest_path.exists():
+        return
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+
+    manifest["page_numbering"] = {
+        "physical_page_basis": numbering.get("physical_page_basis", "pdf_1_based"),
+        "mapping_type": numbering.get("mapping_type", "unknown"),
+        "status": numbering.get("status", "needs_review"),
+        "evidence": numbering.get("evidence", []),
+    }
+
+    if "printed_page_basis" in numbering:
+        manifest["page_numbering"]["printed_page_basis"] = numbering["printed_page_basis"]
+    if "printed_to_physical_offset" in numbering:
+        manifest["page_numbering"]["printed_to_physical_offset"] = (
+            numbering["printed_to_physical_offset"]
+        )
+    if "offset_applies_from_physical_page" in numbering:
+        manifest["page_numbering"]["offset_applies_from_physical_page"] = (
+            numbering["offset_applies_from_physical_page"]
+        )
+
+    # 计算并同步 toc 文件 hash
+    hash_block = manifest.setdefault("hash", {})
+    toc_md_path = pkg_root / "toc.md"
+    toc_tree_path = pkg_root / "toc_tree.json"
+    if toc_md_path.exists():
+        hash_block["toc_md_sha256"] = hashlib.sha256(
+            toc_md_path.read_bytes()
+        ).hexdigest()
+    if toc_tree_path.exists():
+        hash_block["toc_tree_json_sha256"] = hashlib.sha256(
+            toc_tree_path.read_bytes()
+        ).hexdigest()
+
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -461,6 +663,10 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
     else:
         tree_entries = entries
 
+    # ── 页码坐标系检测与标准化 ──
+    numbering = _detect_page_numbering(doc, tree_entries)
+    _normalize_entries(tree_entries, numbering)
+
     # 写回纯 TOC 段的 Markdown（每段只写归属该段物理页的条目，避免整本目录重复；
     # 跳过混合段：有非目录页，避免覆盖丢失内容）
     for seg in toc_segs:
@@ -491,6 +697,7 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
 
     # 写入 toc_tree.json（已归属有序条目，与段级/合并级目录一致）
     _write_toc_tree(segments_dir.parent, tree_entries)
+    _sync_manifest_page_numbering(segments_dir.parent, numbering)
 
     print(f"  {fixed} 个 TOC 段: {len(tree_entries)} 条目（{_depth_distribution(tree_entries)}），来源: {source}", file=sys.stderr)
     doc.close()
