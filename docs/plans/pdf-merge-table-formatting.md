@@ -8,7 +8,7 @@
 
 本文档是“表格 pretty-print 真正落地”专项计划的实施细节事实源。它承接已完成的 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，只解决“设计声明存在、实际 `pdf-merge` 未执行格式化”的实现漂移，不重新打开人工修复、VLM 或目录语义范围。
 
-## 背景与 Step 0 证据
+## Step 0 证据
 
 此前计划规定：表格格式化应在 merge-time 发生，格式化后的 canonical `<stem>.md` 直接作为人工校对输入，并由 manifest 记录格式化状态。但 2026-07-12 的真实复核发现该行为尚未实现：
 
@@ -366,6 +366,34 @@ $ python3 -m pytest tests/test_markdown_table_formatter.py -v
 
 **G. manifest 契约**
 - 三个包 `status=verified`、`schema_version=1`、`mode=merge_time`、hash 一致 ✅
+
+#### 阶段 4 再次独立验收复核（2026-07-12）
+
+结论：再次复核通过，阶段 4 的“已完成”结论有效。
+
+本次独立复核证据：
+
+- 全量 `pytest -q`：181 passed，5 warnings。
+- `bash scripts/test-phase2.sh`：38/38 通过，覆盖 `pdf-auto` merge/needs_review、`pdf-rerun` 成功和合并失败传播。
+- `bash tests/test-fix-validate.sh`：67/67 通过。
+- 三个真实包直接运行 `scripts/pdf-check-fixes` 均返回 0。
+- 三个真实包的 canonical Markdown 分别包含 87、11、29 个多行 HTML 表格；春风250Sr 和 demo60 的图片单元格、demo20 的 p14–p16 跨页记录、demo60 的 8192 候选均可复核。
+- 临时 malformed HTML 验证：`pdf-merge` 返回非零，原 canonical Markdown 与 manifest hash 保持不变；临时正向合并二次执行的 Markdown/manifest hash 保持不变。
+- `python3 scripts/check_plan_governance.py .`、`--drift` 和 `git diff --check` 均通过。
+
+## 验证方式
+
+```bash
+pytest -q
+bash scripts/test-phase2.sh
+bash tests/test-fix-validate.sh
+scripts/pdf-check-fixes 'pdf/春风250Sr'
+scripts/pdf-check-fixes pdf/demo20
+scripts/pdf-check-fixes pdf/demo60
+python3 scripts/check_plan_governance.py .
+python3 scripts/check_plan_governance.py . --drift
+git diff --check
+```
 
 ## 风险与回滚
 
