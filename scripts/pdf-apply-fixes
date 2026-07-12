@@ -297,6 +297,7 @@ def main() -> None:
 
     # 更新 manifest
     manifest.setdefault("fixes", {})
+    manifest["fixes"]["schema_version"] = 1
     manifest["fixes"]["markdown_sha256"] = actual_new_hash
     manifest["fixes"]["manual_fixes_sha256"] = file_sha256(fixes_path)
     manifest["fixes"]["status"] = "applied"

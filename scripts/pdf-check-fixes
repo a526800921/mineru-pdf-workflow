@@ -621,10 +621,14 @@ def check_idempotent(manifest: dict, pkg_dir: Path) -> list[str]:
                                 f"但 after 文本不存在——修复未被应用"
                             )
                         elif before_count > 0 and after_count > 0:
-                            errors.append(
-                                f"幂等性：修复 {fix_id} page {page} 的 before 和 after"
-                                f"文本同时存在于页块中——可能重复应用或部分覆盖"
-                            )
+                            # 注释追加型修复：before 是 after 的子串时，共存是预期行为
+                            if before in after:
+                                pass  # 已正确应用
+                            else:
+                                errors.append(
+                                    f"幂等性：修复 {fix_id} page {page} 的 before 和 after"
+                                    f"文本同时存在于页块中——可能重复应用或部分覆盖"
+                                )
                         # before_count == 0 and after_count > 0 → 正确已应用
 
                         found = True
