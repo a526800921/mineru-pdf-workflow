@@ -1,0 +1,540 @@
+#!/usr/bin/env python3
+"""pdf2md-fix 修复记录与 manifest 校验工具。
+
+验证 manual_fixes.jsonl、manifest.json.fixes、manifest.json.formatting 的
+格式完整性和一致性。在应用修复前后运行，确保修复产物符合契约。
+
+用法:
+  scripts/pdf-check-fixes [--verbose] <package_dir>
+
+退出码:
+  0 = 全部校验通过
+  1 = 校验失败（stderr 输出具体错误）
+"""
+
+import hashlib
+import json
+import re
+import sys
+from html.parser import HTMLParser
+from pathlib import Path
+
+# ── 枚举常量 ───────────────────────────────────────────────
+FIX_TYPES = frozenset({
+    "rebuild_table", "fix_header", "fill_content", "cross_page_table",
+    "table_layout", "missing_text", "section_attribution",
+    "field_correction", "image_ocr",
+})
+REVIEW_ACTIONS = frozenset({"pass", "fix_md", "rerun", "fix_data"})
+FIX_STATUSES = frozenset({"proposed", "applied", "verified", "rejected"})
+MANIFEST_FIX_STATUSES = frozenset({"none", "pending", "applied", "verified"})
+FORMATTING_STATUSES = frozenset({"none", "applied", "verified"})
+FIX_SCHEMA_VERSION = 1
+FORMATTING_SCHEMA_VERSION = 1
+
+# ── HTML 表格解析器（复用 table_eval.py 的 _TableStructParser） ──
+
+
+class _TableStructParser(HTMLParser):
+    """收集表格为 rows=[[cell, ...], ...]，每个 cell 记录 colspan/rowspan/text。
+
+    直接从 scripts/lib/table_eval.py 复制，避免运行时依赖 scripts/lib 路径。
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows = []
+        self._cur_row = None
+        self._cur_cell = None
+        self._cur_text = []
+
+    @staticmethod
+    def _span(attrs, name):
+        d = dict(attrs)
+        try:
+            v = int(d.get(name, 1) or 1)
+        except (TypeError, ValueError):
+            v = 1
+        return max(v, 1)
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self._cur_row = []
+        elif tag in ("td", "th") and self._cur_row is not None:
+            self._cur_cell = {
+                "colspan": self._span(attrs, "colspan"),
+                "rowspan": self._span(attrs, "rowspan"),
+            }
+            self._cur_text = []
+
+    def handle_data(self, data):
+        if self._cur_cell is not None:
+            self._cur_text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._cur_cell is not None:
+            self._cur_cell["text"] = "".join(self._cur_text).strip()
+            self._cur_row.append(self._cur_cell)
+            self._cur_cell = None
+            self._cur_text = []
+        elif tag == "tr" and self._cur_row is not None:
+            self.rows.append(self._cur_row)
+            self._cur_row = None
+
+    def close(self):
+        super().close()
+        if self._cur_cell is not None and self._cur_row is not None:
+            self._cur_cell["text"] = "".join(self._cur_text).strip()
+            self._cur_row.append(self._cur_cell)
+        if self._cur_row is not None:
+            self.rows.append(self._cur_row)
+
+
+def parse_html_tables(md_text: str) -> list[list[list[dict]]]:
+    """从 Markdown 文本中提取所有 HTML 表格，返回 tables = [rows = [cell, ...], ...]。
+
+    每个 cell: {"colspan": int, "rowspan": int, "text": str}
+    """
+    tables = []
+    parser = _TableStructParser()
+    in_table = False
+    for line in md_text.split("\n"):
+        if "<table" in line.lower():
+            in_table = True
+            parser = _TableStructParser()
+        if in_table:
+            parser.feed(line + "\n")
+        if in_table and "</table>" in line.lower():
+            parser.close()
+            tables.append(parser.rows)
+            in_table = False
+    return tables
+
+
+def cell_texts_equal(a: str, b: str) -> bool:
+    """比较两个单元格文本是否相等，忽略空白差异。"""
+    return re.sub(r"\s+", "", a) == re.sub(r"\s+", "", b)
+
+
+# ── 工具函数 ───────────────────────────────────────────────
+
+
+def file_sha256(path: Path) -> str:
+    """计算文件内容 SHA-256。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _log(msg: str, kind: str = "ERROR"):
+    print(f"{kind}: {msg}", file=sys.stderr)
+
+
+# ── 校验函数（各返回 str 列表，每项一条错误） ──────────────────
+
+
+def validate_manual_fixes(path: Path) -> list[str]:
+    """校验 manual_fixes.jsonl 格式。文件不存在时返回一条错误。"""
+    errors = []
+    if not path.exists():
+        errors.append(f"manual_fixes.jsonl 不存在：{path}")
+        return errors
+    if path.stat().st_size == 0:
+        errors.append(f"manual_fixes.jsonl 为空文件：{path}")
+        return errors
+
+    with path.open(encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                errors.append(f"第 {lineno} 行 JSON 解析失败：{e}")
+                continue
+
+            if not isinstance(obj, dict):
+                errors.append(f"第 {lineno} 行不是 JSON 对象")
+                continue
+
+            # 必含字段
+            for field in ("fix_id", "fix_type", "review_action", "status", "pages"):
+                if field not in obj:
+                    errors.append(f"第 {lineno} 行缺少必含字段：{field}")
+
+            # 枚举校验
+            if "fix_type" in obj and obj["fix_type"] not in FIX_TYPES:
+                errors.append(
+                    f"第 {lineno} 行 fix_type 不合法：{obj['fix_type']}"
+                    f"（允许：{', '.join(sorted(FIX_TYPES))}）"
+                )
+            if "review_action" in obj and obj["review_action"] not in REVIEW_ACTIONS:
+                errors.append(
+                    f"第 {lineno} 行 review_action 不合法：{obj['review_action']}"
+                    f"（允许：{', '.join(sorted(REVIEW_ACTIONS))}）"
+                )
+            if "status" in obj and obj["status"] not in FIX_STATUSES:
+                errors.append(
+                    f"第 {lineno} 行 status 不合法：{obj['status']}"
+                    f"（允许：{', '.join(sorted(FIX_STATUSES))}）"
+                )
+
+            # pages 校验
+            pages = obj.get("pages")
+            if pages is not None:
+                if not isinstance(pages, list) or not pages:
+                    errors.append(f"第 {lineno} 行 pages 必须是非空列表")
+                else:
+                    for i, p in enumerate(pages):
+                        if not isinstance(p, int) or p < 1:
+                            errors.append(
+                                f"第 {lineno} 行 pages[{i}] 不是正整数：{p}"
+                            )
+
+            # before / after / evidence 非空
+            for field in ("before", "after", "evidence"):
+                val = obj.get(field)
+                if not val or not isinstance(val, str) or not val.strip():
+                    errors.append(f"第 {lineno} 行 {field} 不能为空")
+
+    return errors
+
+
+def validate_vlm_evidence(path: Path) -> list[str]:
+    """校验 manual_fixes.jsonl 中的 VLM 证据引用。"""
+    errors = []
+    if not path.exists():
+        return errors  # 文件不存在由 validate_manual_fixes 报错
+
+    with path.open(encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+
+            vlm = obj.get("vlm_evidence")
+            if not vlm:
+                continue
+            if not isinstance(vlm, dict):
+                errors.append(f"第 {lineno} 行 vlm_evidence 必须是对象")
+                continue
+            for field in ("model", "input_pages", "human_conclusion"):
+                if field not in vlm:
+                    errors.append(
+                        f"第 {lineno} 行 vlm_evidence 缺少字段：{field}"
+                    )
+
+    return errors
+
+
+def validate_manifest_fixes(manifest: dict, pkg_dir: Path) -> list[str]:
+    """校验 manifest.json 中的 fixes 块。"""
+    errors = []
+    fixes = manifest.get("fixes")
+    if fixes is None:
+        errors.append("manifest.json 缺少 fixes 块")
+        return errors
+
+    if not isinstance(fixes, dict):
+        errors.append("manifest.json.fixes 必须是对象")
+        return errors
+
+    # schema_version
+    sv = fixes.get("schema_version")
+    if sv != FIX_SCHEMA_VERSION:
+        errors.append(
+            f"fixes.schema_version 应为 {FIX_SCHEMA_VERSION}，实际：{sv}"
+        )
+
+    # status
+    status = fixes.get("status")
+    if status not in MANIFEST_FIX_STATUSES:
+        errors.append(
+            f"fixes.status 不合法：{status}"
+            f"（允许：{', '.join(sorted(MANIFEST_FIX_STATUSES))}）"
+        )
+
+    # source_manifest_sha256 — 审计字段，记录修复时的 manifest hash，不比较当前值
+
+    # manual_fixes_sha256 — 如果 manual_fixes.jsonl 存在
+    fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    if fixes_path.exists():
+        expected_mf_hash = file_sha256(fixes_path)
+        actual_mf_hash = fixes.get("manual_fixes_sha256")
+        if actual_mf_hash != expected_mf_hash:
+            errors.append(
+                f"fixes.manual_fixes_sha256 不匹配"
+                f"（期望：{expected_mf_hash}，实际：{actual_mf_hash}）"
+            )
+
+    # markdown_sha256 — 校验当前 canonical Markdown
+    md_rel = manifest.get("files", {}).get("markdown")
+    if md_rel:
+        md_path = pkg_dir / md_rel
+        if md_path.exists():
+            expected_md_hash = file_sha256(md_path)
+            actual_md_hash = fixes.get("markdown_sha256")
+            if actual_md_hash != expected_md_hash:
+                errors.append(
+                    f"fixes.markdown_sha256 不匹配"
+                    f"（期望：{expected_md_hash}，实际：{actual_md_hash}）"
+                )
+
+    return errors
+
+
+def validate_formatting(manifest: dict, pkg_dir: Path) -> list[str]:
+    """校验 manifest.json 中的 formatting 块。"""
+    errors = []
+    fmt = manifest.get("formatting")
+    if fmt is None:
+        errors.append("manifest.json 缺少 formatting 块")
+        return errors
+
+    if not isinstance(fmt, dict):
+        errors.append("manifest.json.formatting 必须是对象")
+        return errors
+
+    # schema_version
+    sv = fmt.get("schema_version")
+    if sv != FORMATTING_SCHEMA_VERSION:
+        errors.append(
+            f"formatting.schema_version 应为 {FORMATTING_SCHEMA_VERSION}，实际：{sv}"
+        )
+
+    # mode
+    mode = fmt.get("mode")
+    if mode != "merge_time":
+        errors.append(f"formatting.mode 应为 merge_time，实际：{mode}")
+
+    # status
+    status = fmt.get("status")
+    if status not in FORMATTING_STATUSES:
+        errors.append(
+            f"formatting.status 不合法：{status}"
+            f"（允许：{', '.join(sorted(FORMATTING_STATUSES))}）"
+        )
+
+    # source_markdown_sha256 非空
+    if not fmt.get("source_markdown_sha256"):
+        errors.append("formatting.source_markdown_sha256 不能为空")
+
+    return errors
+
+
+def validate_manifest_files(manifest: dict, pkg_dir: Path) -> list[str]:
+    """校验 manifest.files 引用文件的路径存在性。"""
+    errors = []
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        return errors  # 没有 files 块时跳过
+
+    # 始终校验 files.markdown
+    md_rel = files.get("markdown")
+    if md_rel:
+        md_path = pkg_dir / md_rel
+        if not md_path.exists():
+            errors.append(f"files.markdown 指向的文件不存在：{md_path}")
+
+    # 校验 files.manual_fixes（如果配置了）
+    mf_rel = files.get("manual_fixes")
+    if mf_rel:
+        mf_path = pkg_dir / mf_rel
+        if not mf_path.exists():
+            errors.append(f"files.manual_fixes 指向的文件不存在：{mf_path}")
+
+    # 校验其他 files.* 路径（不校验 data/ 目录本身、images/ 等目录类型条目）
+    for key, rel in files.items():
+        if key in ("markdown", "manual_fixes", "pdf", "segments") or not isinstance(rel, str):
+            continue
+        fpath = pkg_dir / rel
+        # 只有明确文件路径（不含目录分隔符末尾或无扩展名）才校验
+        if not rel.endswith("/"):
+            # 只校验带扩展名的文件条目
+            if "." in rel and not fpath.exists():
+                errors.append(f"files.{key} 指向的文件不存在：{fpath}")
+
+    return errors
+
+
+def check_table_consistency(manifest: dict, pkg_dir: Path) -> list[str]:
+    """校验表格格式化前后一致性（warning 级别）。
+
+    仅当 formatting.source_markdown_sha256 对应的原始 Markdown 副本存在时执行。
+    """
+    warnings = []
+    fmt = manifest.get("formatting")
+    if not isinstance(fmt, dict):
+        return warnings
+
+    # 获取当前 canonical Markdown
+    md_rel = manifest.get("files", {}).get("markdown")
+    if not md_rel:
+        return warnings
+    current_md_path = pkg_dir / md_rel
+    if not current_md_path.exists():
+        return warnings
+
+    # 获取格式化前 Markdown 的 source hash
+    source_hash = fmt.get("source_markdown_sha256")
+    if not source_hash:
+        return warnings
+
+    # 尝试找备份：<stem>-pre-format.md 或 <data>/pre_format_md_<hash>.md
+    stem = current_md_path.stem
+    backup_candidates = [
+        current_md_path.parent / f"{stem}-pre-format.md",
+        pkg_dir / "data" / f"pre_format_md_{source_hash[:16]}.md",
+    ]
+    source_md_path = None
+    for bc in backup_candidates:
+        if bc.exists() and file_sha256(bc) == source_hash:
+            source_md_path = bc
+            break
+
+    if source_md_path is None:
+        return warnings  # 备份不存在，跳过
+
+    # 解析格式化前后的表格
+    source_text = source_md_path.read_text(encoding="utf-8")
+    current_text = current_md_path.read_text(encoding="utf-8")
+
+    source_tables = parse_html_tables(source_text)
+    current_tables = parse_html_tables(current_text)
+
+    # 比较表格数量
+    if len(source_tables) != len(current_tables):
+        warnings.append(
+            f"格式化前后表格数量不一致：{len(source_tables)} → {len(current_tables)}"
+        )
+        return warnings
+
+    # 逐表比较行数和单元格文本
+    for i, (st, ct) in enumerate(zip(source_tables, current_tables)):
+        if len(st) != len(ct):
+            warnings.append(f"表格 {i+1} 行数不一致：{len(st)} → {len(ct)}")
+            continue
+        for ri, (sr, cr) in enumerate(zip(st, ct)):
+            if len(sr) != len(cr):
+                warnings.append(
+                    f"表格 {i+1} 第 {ri+1} 行列数不一致："
+                    f"{len(sr)} → {len(cr)}"
+                )
+                continue
+            for ci, (sc, cc) in enumerate(zip(sr, cr)):
+                if not cell_texts_equal(sc["text"], cc["text"]):
+                    warnings.append(
+                        f"表格 {i+1} 第 {ri+1} 行第 {ci+1} 列文本不一致："
+                        f"'{sc['text']}' → '{cc['text']}'"
+                    )
+
+    return warnings
+
+
+# ── 幂等性校验 ──────────────────────────────────────────────
+
+
+def check_idempotent(manifest: dict, pkg_dir: Path) -> list[str]:
+    """检查对 fixes.status=applied 的包，重复校验结果不变。
+
+    幂等性通过校验器自身的纯函数性质保证：同一输入文件产生相同校验结果。
+    此处留空作为扩展点，当前不做额外跨次比较。
+    """
+    return []
+
+
+# ── 主入口 ──────────────────────────────────────────────────
+
+
+def main() -> None:
+    verbose = False
+    args = []
+    for a in sys.argv[1:]:
+        if a == "--verbose":
+            verbose = True
+        else:
+            args.append(a)
+
+    if not args:
+        print("用法: pdf-check-fixes [--verbose] <package_dir>", file=sys.stderr)
+        sys.exit(1)
+
+    pkg_dir = Path(args[0])
+    if not pkg_dir.is_dir():
+        _log(f"输出包目录不存在：{pkg_dir}")
+        sys.exit(1)
+
+    manifest_path = pkg_dir / "manifest.json"
+    if not manifest_path.exists():
+        _log(f"manifest.json 不存在：{manifest_path}")
+        sys.exit(1)
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        _log(f"manifest.json 解析失败：{e}")
+        sys.exit(1)
+
+    all_errors: list[str] = []
+    all_warnings: list[str] = []
+
+    # -- 文件存在性 --
+    fe = validate_manifest_files(manifest, pkg_dir)
+    all_errors.extend(fe)
+
+    # -- manual_fixes.jsonl --
+    fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    mf_errors = validate_manual_fixes(fixes_path)
+    all_errors.extend(mf_errors)
+
+    # -- VLM 引用 --
+    vlm_errors = validate_vlm_evidence(fixes_path)
+    all_errors.extend(vlm_errors)
+
+    # -- manifest.fixes --
+    fix_errors = validate_manifest_fixes(manifest, pkg_dir)
+    all_errors.extend(fix_errors)
+
+    # -- manifest.formatting --
+    fmt_errors = validate_formatting(manifest, pkg_dir)
+    all_errors.extend(fmt_errors)
+
+    # -- 幂等性 --
+    idem_errors = check_idempotent(manifest, pkg_dir)
+    all_errors.extend(idem_errors)
+
+    # -- 表格一致性（warning 级别） --
+    tbl_warnings = check_table_consistency(manifest, pkg_dir)
+    all_warnings.extend(tbl_warnings)
+
+    # -- 输出 --
+    if all_errors:
+        for e in all_errors:
+            _log(e, "ERROR")
+        if verbose:
+            print(f"\n校验失败：{len(all_errors)} 个错误", file=sys.stderr)
+        sys.exit(1)
+
+    if all_warnings:
+        for w in all_warnings:
+            _log(w, "WARNING")
+
+    if verbose:
+        md_rel = manifest.get("files", {}).get("markdown", "?")
+        print(
+            f"校验通过：{pkg_dir.name}/{md_rel}"
+            f"（{len(all_warnings)} 个 warning）" if all_warnings
+            else f"校验通过：{pkg_dir.name}/{md_rel}",
+            file=sys.stderr,
+        )
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

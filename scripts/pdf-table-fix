@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""pdf2md-fix 8192 空列候选扫描工具。
+
+从 manifest.json.page_fallback 筛选 excessive_empty_td / excessive_columns 页，
+用 PyMuPDF 提取页级原生文本，输出候选摘要到 data/table_candidates.jsonl。
+
+不自动修复，所有候选标记 needs_human。
+
+用法:
+  scripts/pdf-table-fix <package_dir>
+
+输出:
+  data/table_candidates.jsonl   ← 候选记录，每行一个 JSON 对象
+"""
+
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    import fitz
+except ImportError:
+    print("错误：需要 PyMuPDF (fitz)，请 pip install PyMuPDF", file=sys.stderr)
+    sys.exit(1)
+
+# ── 信号阈值（与 page_quality.py 保持一致） ──
+EMPTY_TD_THRESHOLD = 100
+MAX_TD_PER_ROW_THRESHOLD = 20
+
+
+def _get_pdf_path(pkg_dir: Path, manifest: dict) -> Path | None:
+    """从 manifest 获取 PDF 路径。
+
+    优先 files.pdf（相对路径），回退 source_pdf（绝对路径）。
+    """
+    pdf_rel = manifest.get("files", {}).get("pdf")
+    if pdf_rel:
+        pdf_path = pkg_dir / pdf_rel
+        if pdf_path.exists():
+            return pdf_path.resolve()
+
+    source_pdf = manifest.get("source_pdf")
+    if source_pdf:
+        pdf_path = Path(source_pdf)
+        if pdf_path.exists():
+            return pdf_path.resolve()
+
+    return None
+
+
+def _find_fallback_html(pkg_dir: Path, page_num: int,
+                        fb_entry: dict) -> str | None:
+    """从 fallback 段目录读取 HTML 表格内容。
+
+    优先 fallback_path，回退 original_path（仅 selected=review 时）。
+    """
+    for path_key in ("fallback_path", "original_path"):
+        seg_rel = fb_entry.get(path_key)
+        if not seg_rel:
+            continue
+        seg_dir = pkg_dir / "segments" / seg_rel
+        if not seg_dir.is_dir():
+            continue
+        # 读取段内 content_list.json 或直接找 md
+        md_files = sorted(seg_dir.rglob("*.md"))
+        if md_files:
+            text = md_files[0].read_text(encoding="utf-8")
+            # 提取第一个 HTML 表格
+            m = re.search(r"(<table[^>]*>.*?</table>)", text,
+                          re.IGNORECASE | re.DOTALL)
+            if m:
+                return m.group(1)
+        # 也尝试 content_list.json
+        cl_path = seg_dir / "content_list.json"
+        if cl_path.exists():
+            try:
+                cl = json.loads(cl_path.read_text(encoding="utf-8"))
+                tables = [e for e in cl if e.get("type") == "table"]
+                if tables:
+                    return tables[0].get("html", "")
+            except (ValueError, OSError):
+                pass
+    return None
+
+
+def _extract_page_native_text(pdf_path: Path, page_num: int) -> str:
+    """用 PyMuPDF 提取单页原生文本。
+
+    page_num 是 1-based PDF 页码。
+    """
+    try:
+        doc = fitz.open(str(pdf_path))
+        if page_num < 1 or page_num > len(doc):
+            doc.close()
+            return ""
+        page = doc[page_num - 1]
+        text = page.get_text("text").strip()
+        doc.close()
+        return text
+    except Exception as e:
+        return f"【PyMuPDF 错误】{e}"
+
+
+def scan_candidates(pkg_dir: Path) -> list[dict]:
+    """扫描 package，返回候选页列表。"""
+    manifest_path = pkg_dir / "manifest.json"
+    if not manifest_path.exists():
+        print(f"错误：manifest.json 不存在：{manifest_path}", file=sys.stderr)
+        return []
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    page_fallback = manifest.get("page_fallback", {})
+    if not page_fallback:
+        print("信息：manifest 中没有 page_fallback 记录", file=sys.stderr)
+        return []
+
+    pdf_path = _get_pdf_path(pkg_dir, manifest)
+    if pdf_path is None:
+        print("错误：无法从 manifest 定位 PDF 文件", file=sys.stderr)
+        return []
+
+    candidates = []
+
+    for page_str, fb_entry in sorted(page_fallback.items(),
+                                     key=lambda x: int(x[0])):
+        signals = fb_entry.get("quality_signals", [])
+        if not signals:
+            continue
+
+        # 筛选 excessive_empty_td 或 excessive_columns
+        has_empty_td = "excessive_empty_td" in signals
+        has_excess_cols = "excessive_columns" in signals
+
+        if not has_empty_td and not has_excess_cols:
+            continue
+
+        page_num = int(page_str)
+
+        # 获取 metrics 中的具体数值
+        metrics = fb_entry.get("original_metrics", {})
+        empty_td = metrics.get("empty_td", 0)
+        max_td = metrics.get("max_td_per_row", 0)
+
+        # 读 HTML 候选
+        original_html = _find_fallback_html(pkg_dir, page_num, fb_entry)
+
+        # 如果 selected=fallback，也尝试读 fallback HTML
+        fallback_html = None
+        if fb_entry.get("selected") == "fallback":
+            fallback_html = original_html
+            original_html = _find_fallback_html(
+                pkg_dir, page_num,
+                {**fb_entry, "fallback_path": fb_entry.get("original_path")}
+            )
+
+        # PyMuPDF 提取原生文本
+        native_text = _extract_page_native_text(pdf_path, page_num)
+
+        candidate = {
+            "page": page_num,
+            "signals": signals,
+            "has_fallback": fb_entry.get("fb_status") == "completed",
+            "fallback_selected": fb_entry.get("selected", "unknown"),
+            "empty_td": empty_td,
+            "max_td_per_row": max_td,
+            "original_html": original_html or "",
+            "fallback_html": fallback_html or "",
+            "pdf_text": native_text,
+            "needs_human": True,
+        }
+        candidates.append(candidate)
+
+    return candidates
+
+
+def write_candidates_jsonl(candidates: list[dict], output_path: Path) -> None:
+    """写入候选记录到 JSONL。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        for c in candidates:
+            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print("用法: pdf-table-fix <package_dir>", file=sys.stderr)
+        sys.exit(1)
+
+    pkg_dir = Path(sys.argv[1])
+    if not pkg_dir.is_dir():
+        print(f"错误：目录不存在：{pkg_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    candidates = scan_candidates(pkg_dir)
+
+    if not candidates:
+        print("信息：未发现需扫描的候选页（无 excessive_empty_td/excessive_columns 信号）",
+              file=sys.stderr)
+        sys.exit(0)
+
+    # 输出到 data/table_candidates.jsonl
+    output_path = pkg_dir / "data" / "table_candidates.jsonl"
+    write_candidates_jsonl(candidates, output_path)
+
+    # 同时输出摘要到 stdout
+    print(f"候选扫描完成：{len(candidates)} 页", file=sys.stderr)
+    for c in candidates:
+        sigs = ", ".join(c["signals"])
+        text_preview = c["pdf_text"][:80].replace("\n", " ").strip()
+        print(f"  page {c['page']}: {sigs} | empty_td={c['empty_td']} "
+              f"| 文本: {text_preview}...", file=sys.stderr)
+
+    # JSON 模式下输出候选计数到 stdout
+    print(json.dumps({"status": "completed", "candidate_count": len(candidates),
+                       "output": str(output_path)}))
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：待实施
-- 当前阶段：阶段 1：创建 `pdf2md-fix` skill 与人工操作规范
+- 当前阶段：阶段 2：修复记录与派生产物应用
 - 最后更新：2026-07-12
 
 本文档是 `pdf2md-fix-manual-workflow` 的实施细节事实源。计划索引、状态、依赖、推荐顺序和证据入口以 [PLAN_MAP](../PLAN_MAP.md) 为准。
@@ -321,25 +321,22 @@ excessive_columns
 ```text
 <package>/
   <stem>.md                 canonical Markdown（格式化后仍保持同一路径）
-  <stem>-fixed.md           可选的人工修复阅读视图
-  fix_manifest.json         修复输入 hash、修复记录 hash、状态和验证摘要
   manifest.json             必须同步登记 Markdown 角色、修复状态和派生文件 hash
   data/
     manual_fixes.jsonl      内容/结构修复记录
-    logical_tables.jsonl    下游使用的逻辑表格关系
+    logical_tables.jsonl    可选，由 manual_fixes.jsonl 派生的逻辑表格关系
     review_overrides.csv    现有审核状态覆盖，职责不变
 ```
 
-`logical_tables.jsonl` 是否独立于 `manual_fixes.jsonl`，在阶段 1 通过 demo20 和至少一个非表格样本确认；如果没有独立消费方，可以由 `manual_fixes.jsonl` 生成，不重复维护事实。
+`logical_tables.jsonl` 不是第二个事实源；没有独立消费者时不生成。
 
 ## manifest 同步契约
 
 Markdown 修复不得只修改正文文件。每次生成、替换或发布 Markdown 时，必须在同一变更中更新 `manifest.json`：
 
 - `files.markdown` 始终指向 canonical Markdown；格式化采用原地模式时路径不变，但内容 hash 和 `formatting` 元数据必须更新。
-- 如果另有人工修复版，增加 `files.fixed_markdown`，不得用路径约定让下游猜测；是否切换 canonical 文件必须通过 manifest 明确登记。
 - 增加或维护 `files.manual_fixes`、`files.logical_tables` 等实际存在的派生文件路径。
-- 增加 `fixes` 元数据，至少记录 `schema_version`、`status`、`source_manifest_sha256`、`manual_fixes_sha256` 和修复版 Markdown 的 `sha256`。
+- 增加 `fixes` 元数据，至少记录 `schema_version`、`status`、`source_manifest_sha256`、`manual_fixes_sha256` 和当前 canonical Markdown 的 `sha256`。
 - `fixes.status` 使用 `none`、`pending`、`applied`、`verified`；未完成人工复核不得标记为 `verified`。
 - `formatting.status` 使用 `none`、`applied`、`verified`；格式化校验失败时不得进入 `pdf2md-fix` 内容修复阶段。
 - `formatting.mode` 固定记录为 `merge_time`；必须保留合并前的 `source_markdown_sha256`，并更新 `files.markdown` 对应的当前内容 hash。
@@ -353,7 +350,6 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
   "files": {
     "markdown": "demo20.md",
     "markdown_sha256": "...",
-    "fixed_markdown": "demo20-fixed.md",
     "manual_fixes": "data/manual_fixes.jsonl",
     "logical_tables": "data/logical_tables.jsonl"
   },
@@ -362,7 +358,7 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
     "status": "verified",
     "source_manifest_sha256": "...",
     "manual_fixes_sha256": "...",
-    "fixed_markdown_sha256": "..."
+    "markdown_sha256": "..."
   },
   "formatting": {
     "schema_version": 1,
@@ -388,7 +384,7 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
 - 固定自动化、人工确认和入库审核三层边界。
 - 固定 VLM 只在人工复核阶段按需运行，输出作为证据而不是最终事实。
 - 用 demo20 p14–p16 作为跨页表格基线。
-- 明确 `manual_fixes.jsonl`、`fix_manifest.json` 和逻辑表格关系的字段。
+- 明确 `manual_fixes.jsonl`、`manifest.json.fixes` 和可选逻辑表格关系的字段。
 - 固定 Markdown 与 `manifest.json` 的同步规则、原始/修复版文件角色和内容 hash 口径。
 - 检查与 `review.md`、`review_overrides.csv`、`quick_lookup_draft.csv` 的重复字段，避免多个事实源。
 
@@ -396,7 +392,7 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
 
 ### 阶段 1：创建 `pdf2md-fix` skill 与人工操作规范
 
-阶段 0 已满足进入条件：字段契约、状态语义、canonical Markdown 原地更新与回滚规则、manifest 同步规则和 demo20 p14–p16 验收标准均已写入本计划；8192 空列问题和 p37/p47/p48 全局 `replace()` 漂移已有实际样本证据。阶段 1 可以开始，但阶段 2 的代码实现和自动应用仍需等待阶段 1 的协议冻结。
+阶段 0 已满足进入条件：字段契约、状态语义、canonical Markdown 原地更新与回滚规则、manifest 同步规则和 demo20 p14–p16 验收标准均已写入本计划；8192 空列问题和 p37/p47/p48 全局 `replace()` 漂移已有实际样本证据。阶段 1 已完成验收，阶段 2 的代码实现和自动应用现已具备进入条件。
 
 - 新增项目级 `skills/pdf2md-fix/SKILL.md`。
 - 写明触发条件：`pdf-auto` 已完成且存在 `review.md`、需要人工修复 PDF 转换结果、跨页表格或结构化字段。
@@ -408,9 +404,38 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
 - 明确默认只读检查；只有用户明确要求应用修复时才写入派生产物。
 - 同步到 `/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md`，并用 skill 校验工具验证 frontmatter 和命名。
 
+### 阶段 1 验收记录（2026-07-12）
+
+- 项目级 `skills/pdf2md-fix/SKILL.md` 存在，frontmatter 和命名校验通过。
+- 用户级 `/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md` 与项目级文件 `cmp` 一致。
+- 已核对并通过：触发条件、VLM 证据边界、人工检查顺序、8192 空列候选恢复、页锚点安全应用、manifest 同步门禁、`manual_fixes.jsonl`、HTML pretty-print、默认只读门禁和 p37/p47/p48 漂移禁止规则。
+- 验证命令通过：
+
+  ```bash
+  python3 /Users/jafish/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/pdf2md-fix
+  cmp skills/pdf2md-fix/SKILL.md /Users/jafish/.claude/skills/pdf2md-fix/SKILL.md
+  python3 scripts/check_plan_governance.py .
+  git diff --check
+  ```
+
+阶段 1 验收结论：`已完成`。阶段 2 仍只登记为 `待实施`，尚未实现候选扫描器、修复应用器或自动 manifest 写入。
+
 ### 阶段 2：修复记录与派生产物应用
 
-- 冻结 `manual_fixes.jsonl` 和 `fix_manifest.json` 的机器校验规则。
+#### 阶段 2 准入审计（2026-07-12）
+
+结论：通过“待实施”门禁。阶段 1 的人工操作 skill 已验收，以下公共契约按用户确认的方向冻结：
+
+- `manual_fixes.jsonl` 是人工修复事实源；`logical_tables.jsonl` 只有在存在独立下游消费者时才生成，且只能由 `manual_fixes.jsonl` 派生，不能形成第二个事实源。
+- 阶段 2 只处理 canonical Markdown、表格逻辑关系和人工修复记录；`key/value/unit/evidence_text` 等结构化字段修正放到阶段 3，不在阶段 2 生成结构化数据补丁。
+- 不新增 `fix_manifest.json`；修复状态、来源 hash、修复记录 hash 和派生文件引用统一登记在现有 `manifest.json` 的 `fixes` 与 `files` 字段中。
+- 不生成 `<stem>-fixed.md` 或 `files.fixed_markdown`；canonical `<stem>.md` 继续原地更新，原始 PDF、segments 和格式化前 Markdown hash 保留用于回滚。
+- `review_action` 沿用 `pass`、`fix_md`、`rerun`、`fix_data`；其中 `fix_data` 仅作为阶段 3 的预留动作，阶段 2 不执行它。
+- 人工修复结果纳入 `manifest.json` 的 `fixes` hash；是否扩展 `PDF_AUTO_JSON=1` 的返回内容属于阶段 3，不阻塞阶段 2。
+
+上述决策已消除输出包结构、下游消费和回滚边界的歧义。VLM 边界、页锚点安全规则、8192 候选恢复方向、manifest 必须同步等事项已有 Step 0 证据；阶段 2 可以开始，但首先必须实现机器校验和失败门禁，再实现候选扫描或修复应用。
+
+- 冻结 `manual_fixes.jsonl` 和 `manifest.json.fixes` 的机器校验规则。
 - 新增并验证 8192 空列候选扫描和 PyMuPDF 页级原文提取 helper。
 - 固化页锚点安全替换，禁止全局文本替换，并为单页、多页和误命中场景建立回归 fixture。
 - 将 VLM 证据引用纳入修复记录校验，确保模型输出不会脱离 PDF 页码和人工结论单独流入下游。
@@ -458,7 +483,7 @@ cmp skills/pdf2md-fix/SKILL.md /Users/jafish/.claude/skills/pdf2md-fix/SKILL.md
 - 如使用 VLM，修复记录包含模型、输入页/区域、输出引用和人工采纳或拒绝结论。
 - 8192 空列页的修复记录包含原始页文本候选、目标页锚点、人工选定的结构模板和最终状态。
 - `demo20.md` 保持 canonical 路径；格式化前后 hash、格式化状态和修复状态均已同步写入 `manifest.json`，原始 `segments/` 未被覆盖。
-- 如果生成 `demo20-fixed.md` 或修改 `demo20.md`，`manifest.json` 会同步登记文件角色、修复状态和内容 hash。
+- 修改 `demo20.md` 时，`manifest.json` 必须同步登记 canonical 文件 hash、修复状态和 `manual_fixes.jsonl` hash；不生成 `demo20-fixed.md`。
 - 删除、改名或篡改 manifest 引用文件时，流程会失败而不会生成部分成功结果。
 - 修复后的下游记录能保留原始页码、行号/块号和修复 ID。
 - 重复应用相同修复不会重复生成表格行或重复注释。
@@ -493,27 +518,27 @@ git diff --check
 | `table_id` 与现有 `html_table:N` 混淆 | 明确逻辑表 ID 与来源块 ID 分离 | 下游回退到原始来源块读取 |
 | 人工修正改变 record_id 导致审核覆盖失效 | 在阶段 3 固定修正后的 ID/映射策略 | 保留旧记录映射和未放行状态 |
 | 新 skill 与项目级 `pdf2md` 事实源漂移 | 涉及公共输出契约时先更新项目 skill，再同步用户级 skill | 在风险清单记录未同步项，不宣称完成 |
-| 派生 Markdown 被旧消费者误当原始 Markdown | 在 manifest 中区分原始和 fixed 文件，默认不替换 `files.markdown` | 删除 fixed 产物，恢复原始入口 |
+| 修复后的 canonical Markdown 被旧消费者误认为未修复内容 | 通过 `manifest.fixes.status` 和 hash 明确修复状态，原始 segments 与格式化前 hash 保持可回溯 | 将 `fixes.status` 回退为 `pending`，从原始 hash 重新生成 canonical Markdown |
 | Markdown 与 manifest 不同步 | 将文件路径、hash 和修复状态作为一个原子发布单元校验 | 回滚整组派生文件，不接受只有正文或只有 manifest 的部分更新 |
 
-## 未决问题
+## 已冻结决策与后续边界
 
-- `manual_fixes.jsonl` 与 `logical_tables.jsonl` 是否需要拆成两个事实文件。
-- 人工内容修正是否需要支持修改 `key/value/unit/evidence_text`，还是只生成新的派生草案。
-- `fix_md`、`fix_data`、`rerun` 是否沿用现有 `review.md` 的人工动作枚举，还是单独建立修复状态枚举。
-- `fixed.md` 是否由下游消费，还是仅保留结构化 JSONL 和原始 Markdown。
-- 是否需要把人工修复结果纳入 `manifest.json` 的 hash 和 `PDF_AUTO_JSON=1` 输出。
-- 用户级 `/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md` 是否作为同步副本，还是只保留项目级 skill。
+- `manual_fixes.jsonl` 是人工修复事实源；`logical_tables.jsonl` 仅在有独立消费者时作为派生视图生成。
+- 阶段 2 不生成结构化字段补丁；`key/value/unit/evidence_text` 修正进入阶段 3。
+- `fix_md`、`fix_data`、`rerun` 沿用现有动作枚举；阶段 2 不执行 `fix_data`。
+- 不生成 `fixed.md`；canonical `<stem>.md` 原地更新，修复状态与 hash 写入 `manifest.json`。
+- `PDF_AUTO_JSON=1` 是否返回人工修复摘要留到阶段 3；阶段 2 只保证输出包中的 `manifest.json` 一致。
+- 项目级 `pdf2md-fix` skill 是事实源，并同步到 `/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md`。
 
 ## 当前完成条件
 
 阶段 0 完成前不得实施代码或自动应用修复。阶段 0 的完成条件：
 
-- 本计划已登记到 `docs/PLAN_MAP.md`，状态已推进为 `待实施`，当前阶段已切换到阶段 1。
+- 本计划已登记到 `docs/PLAN_MAP.md`，阶段 2 准入审计通过，状态为 `待实施`。
 - Step 0 证据、范围、非目标、人工边界、修复记录候选契约和验证方式已写入本计划。
 - 8192 空列候选恢复、页锚点安全修复和 VLM 文字证据边界已写入本计划。
 - 与 `minimal-automation-runbook`、`table-text-omission-detection`、`structured-data-extraction`、`data-ingestion-pipeline` 的职责边界已明确。
 - 无新的公共 CLI、MCP 或数据库契约被未审议地引入。
 - `python3 scripts/check_plan_governance.py .` 通过。
 
-阶段 0 完成证据：2026-07-12 已读取 `demo20`、`demo60`、`demo5` 的现有 manifest，确认 8192/16311 空单元格异常页；核对 demo20 p14–p16 和 demo60 p37/p47/p48/p50 的页锚点唯一性；根据人工复盘确认 p37/p47/p48 全局 `replace()` 的三处误命中机制。上述证据已记录在“Step 0 实测补充”中。阶段 1 的未决问题属于协议设计项，不阻塞创建 skill，但在阶段 2 实施前必须收敛。
+阶段 0 完成证据：2026-07-12 已读取 `demo20`、`demo60`、`demo5` 的现有 manifest，确认 8192/16311 空单元格异常页；核对 demo20 p14–p16 和 demo60 p37/p47/p48/p50 的页锚点唯一性；根据人工复盘确认 p37/p47/p48 全局 `replace()` 的三处误命中机制。上述证据已记录在“Step 0 实测补充”中。阶段 1 已完成验收，阶段 2 准入契约已按“已冻结决策与后续边界”收敛。

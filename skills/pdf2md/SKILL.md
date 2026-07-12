@@ -76,6 +76,8 @@ MODELPAD_PDF_START_TIMEOUT=120
     ingest_manifest.json
     table_accuracy.csv       ← 表格结构自检评测（P4b，只读）
     vlm_eval.jsonl           ← VLM 图表理解描述（P4c，每页一行 JSON）
+    manual_fixes.jsonl       ← pdf2md-fix 阶段的人工修复事实源（可选）
+    logical_tables.jsonl     ← manual_fixes.jsonl 的可选逻辑表格派生视图
 ```
 
 也可以按主题组织到子目录，例如 `~/manuals/honda-cbr/pdf/xxx.pdf`——产物会出现在 `~/manuals/honda-cbr/pdf/` 下。
@@ -98,6 +100,8 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
 - `scripts/pdf-eval-vlm /path/to` **可选**写入 `<pdf_dir>/data/vlm_eval.jsonl`（对 `image_or_sparse` 页做本地 VLM 视觉补充；默认自动启停 `qwen3-vl-8b`，设 `VLM_API_BASE` 可直连远程端口）。
 - `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 的合并 md。回填旧包时直接重跑此命令。
+- `pdf2md-fix` 位于 `pdf-auto` 完成之后、`pdf-extract-data` 之前；人工修复原地更新 canonical Markdown，并将修复状态、来源 hash、`manual_fixes.jsonl` hash 和当前 Markdown hash 同步写入 `manifest.json`。不生成 `*-fixed.md`。
+- `logical_tables.jsonl` 只有存在独立下游消费者时才生成，且必须由 `manual_fixes.jsonl` 派生，不能作为第二个事实源。
 - 目录页由 `toc_repair` 按**物理目录页**归属：条目只归属于其 PDF 原生文本实际出现的物理目录页（完整行/词边界匹配，短标题不命中更长词，如“制动”不命中“前制动手柄”）；无法唯一归属时进入 `review`，不静默猜测。目录输出分三个用途，禁止下游混用：
   - `doc.md`：主文档，保留段级锚点 `<!-- pages N-M -->`，供按页读取、结构化抽取和 section 映射；
   - `toc.md`：无锚点连续目录列表，供人工阅读和前端渲染；不含任何页级锚点，不重新解析或猜测页码；
