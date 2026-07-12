@@ -200,10 +200,16 @@ def validate_manual_fixes(path: Path) -> list[str]:
 
             # fix_data 专属字段校验（仅 review_action=fix_data 时触发）
             if obj.get("review_action") == "fix_data":
-                for field in ("target_record_id", "target_field", "field_action",
-                              "old_value", "new_value"):
+                for field in ("target_record_id", "target_field", "field_action"):
                     val = obj.get(field)
                     if not val or not isinstance(val, str) or not val.strip():
+                        errors.append(
+                            f"第 {lineno} 行 review_action=fix_data 缺少字段：{field}"
+                        )
+                # old_value / new_value 允许空字符串（suppress、清除字段等场景）
+                for field in ("old_value", "new_value"):
+                    val = obj.get(field)
+                    if val is None or not isinstance(val, str):
                         errors.append(
                             f"第 {lineno} 行 review_action=fix_data 缺少字段：{field}"
                         )
