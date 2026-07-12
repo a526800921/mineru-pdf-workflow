@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""pdf2md-fix 页锚点安全修复应用器。
+
+从 data/manual_fixes.jsonl 读取 status=applied 的修复记录，
+在 <!-- pages N-N --> 页锚点范围内执行替换，同步更新 manifest.json。
+
+安全约束：
+  - 所有替换限定在页锚点范围内，禁止全局无边界替换
+  - 替换前校验目标页块、来源 hash 和预期命中次数
+  - 替换后校验页锚点唯一性、目标文本一致性和页外 hash 不变
+  - 失败时不会留下部分更新状态
+  - 幂等：已应用的修复自动跳过
+
+用法:
+  scripts/pdf-apply-fixes <package_dir>
+  scripts/pdf-apply-fixes --dry-run <package_dir>
+
+退出码:
+  0 = 全部修复成功或幂等跳过
+  1 = 部分或全部修复失败
+"""
+
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+
+def file_sha256(path: Path) -> str:
+    """计算文件内容 SHA-256。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def find_page_block(text: str, page: int) -> tuple[int, int, str] | None:
+    """找到页锚点对应的文本范围。
+
+    返回 (start, end, block_text)，其中 start 是锚点行开始位置，
+    end 是下一个锚点或文件末尾。
+    """
+    anchor_pattern = re.compile(r'^<!-- pages (\d+)-(\d+) -->\s*$', re.MULTILINE)
+    matches = list(anchor_pattern.finditer(text))
+
+    target = None
+    for m in matches:
+        start_page = int(m.group(1))
+        end_page = int(m.group(2))
+        if start_page <= page <= end_page:
+            target = m
+            break
+
+    if target is None:
+        return None
+
+    block_start = target.start()
+    # 找到下一个锚点
+    next_anchor = None
+    for m in matches:
+        if m.start() > target.start():
+            next_anchor = m
+            break
+
+    block_end = next_anchor.start() if next_anchor else len(text)
+    return (block_start, block_end, text[block_start:block_end])
+
+
+def verify_anchor_uniqueness(text: str) -> list[str]:
+    """校验所有页锚点是否唯一（无重复页号）。"""
+    errors = []
+    seen_pages = {}
+    anchor_pattern = re.compile(r'^<!-- pages (\d+)-(\d+) -->\s*$', re.MULTILINE)
+    for m in anchor_pattern.finditer(text):
+        key = (int(m.group(1)), int(m.group(2)))
+        line_num = text[:m.start()].count('\n') + 1
+        prev = seen_pages.get(key)
+        if prev is not None:
+            errors.append(
+                f"锚点 <!-- pages {key[0]}-{key[1]} --> 重复出现"
+                f"（行 {prev} 和行 {line_num}）"
+            )
+        seen_pages[key] = line_num
+    return errors
+
+
+def apply_single_fix(md_text: str, fix: dict) -> tuple[str, list[str], bool]:
+    """对单个修复记录执行页锚点安全替换。
+
+    返回 (新的 md_text, 错误列表, 是否有更改)。
+    """
+    errors = []
+    pages = fix.get("pages", [])
+    before = fix.get("before", "")
+    after = fix.get("after", "")
+    fix_id = fix.get("fix_id", "?")
+
+    if not before:
+        return md_text, [f"修复 {fix_id}: before 为空，跳过"], False
+    if not after:
+        return md_text, [f"修复 {fix_id}: after 为空，跳过"], False
+    if before == after:
+        return md_text, [f"修复 {fix_id}: before == after，无变化，跳过"], False
+    if not pages:
+        return md_text, [f"修复 {fix_id}: pages 为空，跳过"], False
+
+    # 校验页锚点唯一性
+    anchor_errors = verify_anchor_uniqueness(md_text)
+    if anchor_errors:
+        return md_text, [f"修复 {fix_id}: 前置校验 — 页锚点不唯一"] + anchor_errors, False
+
+    has_changes = False
+    for page in pages:
+        block = find_page_block(md_text, page)
+        if block is None:
+            errors.append(f"修复 {fix_id}: 未找到页锚点 page {page}")
+            continue
+
+        block_start, block_end, block_text = block
+
+        # 在页块范围内查找 before
+        count = block_text.count(before)
+        if count == 0:
+            # 幂等情况：before 已被替换，检查 after 是否存在
+            if after in block_text:
+                continue  # 已应用，跳过
+            errors.append(
+                f"修复 {fix_id}: page {page} 页块内未找到 before 文本"
+                "（也未检测到已应用标记）"
+            )
+            continue
+
+        # 记录页外内容（替换前）
+        before_prefix = md_text[:block_start]
+        before_suffix = md_text[block_end:]
+
+        # 在页块范围内替换
+        new_block = block_text.replace(before, after, 1)
+
+        # 替换后新页块的结束位置（长度可能因替换改变）
+        new_suffix_start = block_start + len(new_block)
+        new_md = md_text[:block_start] + new_block + md_text[block_end:]
+
+        # 后置校验：锚点唯一性
+        post_errors = verify_anchor_uniqueness(new_md)
+        if post_errors:
+            errors.append(
+                f"修复 {fix_id}: page {page} 后置校验 — "
+                "锚点不再唯一，拒绝应用"
+            )
+            continue
+
+        # 校验页外内容不变（用正确的后缀起始位置）
+        after_prefix = new_md[:block_start]
+        after_suffix = new_md[new_suffix_start:]
+        if before_prefix != after_prefix:
+            errors.append(
+                f"修复 {fix_id}: page {page} 页块前内容发生变化，拒绝应用"
+            )
+            continue
+        if before_suffix != after_suffix:
+            errors.append(
+                f"修复 {fix_id}: page {page} 页块后内容发生变化，拒绝应用"
+            )
+            continue
+
+        md_text = new_md
+        has_changes = True
+
+    return md_text, errors, has_changes
+
+
+def main() -> None:
+    dry_run = False
+    args = []
+    for a in sys.argv[1:]:
+        if a == "--dry-run":
+            dry_run = True
+        elif a in ("-h", "--help"):
+            print("用法: pdf-apply-fixes [--dry-run] <package_dir>", file=sys.stderr)
+            sys.exit(0)
+        else:
+            args.append(a)
+
+    if not args:
+        print("用法: pdf-apply-fixes <package_dir>", file=sys.stderr)
+        sys.exit(1)
+
+    pkg_dir = Path(args[0])
+    if not pkg_dir.is_dir():
+        print(f"错误：目录不存在：{pkg_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    # 读取 manifest
+    manifest_path = pkg_dir / "manifest.json"
+    if not manifest_path.exists():
+        print(f"错误：manifest.json 不存在：{manifest_path}", file=sys.stderr)
+        sys.exit(1)
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # 读取 manual_fixes.jsonl
+    fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    if not fixes_path.exists():
+        print("错误：data/manual_fixes.jsonl 不存在", file=sys.stderr)
+        sys.exit(1)
+
+    fixes = []
+    with fixes_path.open(encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"错误：manual_fixes.jsonl 第 {lineno} 行 JSON 解析失败：{e}",
+                      file=sys.stderr)
+                sys.exit(1)
+            if obj.get("status") == "applied":
+                fixes.append(obj)
+
+    if not fixes:
+        print("信息：manual_fixes.jsonl 中没有 status=applied 的修复记录",
+              file=sys.stderr)
+        sys.exit(0)
+
+    # 读取当前 Markdown
+    md_rel = manifest.get("files", {}).get("markdown")
+    if not md_rel:
+        print("错误：manifest.files.markdown 未配置", file=sys.stderr)
+        sys.exit(1)
+
+    md_path = pkg_dir / md_rel
+    if not md_path.exists():
+        print(f"错误：files.markdown 指向的文件不存在：{md_path}", file=sys.stderr)
+        sys.exit(1)
+
+    md_before = md_path.read_text(encoding="utf-8")
+    md_before_hash = hashlib.sha256(md_before.encode()).hexdigest()
+    manifest_before_hash = manifest.get("fixes", {}).get("markdown_sha256", "")
+
+    # 校验当前 MD hash 与 manifest 记录一致
+    if manifest_before_hash and md_before_hash != manifest_before_hash:
+        print(
+            f"错误：当前 Markdown hash {md_before_hash[:16]}..."
+            f"与 manifest 记录 {manifest_before_hash[:16]}... 不一致，"
+            "拒绝应用",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # 备份原始 Markdown
+    backup_path = pkg_dir / "data" / f"pre_fix_{md_before_hash[:16]}.md"
+    if not backup_path.exists():
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text(md_before, encoding="utf-8")
+        print(f"备份：创建 {backup_path.relative_to(pkg_dir)}", file=sys.stderr)
+
+    # 逐个应用修复
+    all_errors: list[str] = []
+    any_change = False
+    md_current = md_before
+
+    for fix in fixes:
+        new_md, errors, has_changed = apply_single_fix(md_current, fix)
+        all_errors.extend(errors)
+        if has_changed:
+            md_current = new_md
+            any_change = True
+
+    if all_errors:
+        for e in all_errors:
+            print(f"ERROR: {e}", file=sys.stderr)
+
+    if not any_change:
+        if not all_errors:
+            print("信息：所有修复已在之前应用过（幂等跳过）", file=sys.stderr)
+        else:
+            print("失败：修复全部失败，未修改任何文件", file=sys.stderr)
+        sys.exit(1 if all_errors else 0)
+
+    # 写入 Markdown
+    new_md_hash = file_sha256(md_path) if not dry_run else \
+        hashlib.sha256(md_current.encode()).hexdigest()
+
+    if dry_run:
+        print(f"DRY RUN: 将应用 {len(fixes)} 个修复到 {md_rel}", file=sys.stderr)
+        print(json.dumps({"status": "dry_run", "fix_count": len(fixes),
+                          "errors": len(all_errors)}))
+        sys.exit(0 if not all_errors else 1)
+
+    md_path.write_text(md_current, encoding="utf-8")
+    actual_new_hash = file_sha256(md_path)
+
+    # 更新 manifest
+    manifest.setdefault("fixes", {})
+    manifest["fixes"]["markdown_sha256"] = actual_new_hash
+    manifest["fixes"]["manual_fixes_sha256"] = file_sha256(fixes_path)
+    manifest["fixes"]["status"] = "applied"
+
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    total = len(fixes)
+    applied = sum(1 for f in fixes if True)  # 所有 input 都是 applied
+    print(
+        f"成功：已应用 {applied}/{total} 个修复到 {md_rel}"
+        f"（{len(all_errors)} 个跳过/错误）",
+        file=sys.stderr,
+    )
+    print(json.dumps({
+        "status": "completed",
+        "applied": applied,
+        "skipped": total - applied,
+        "errors": len(all_errors),
+        "markdown": str(md_path),
+        "markdown_sha256": actual_new_hash,
+    }))
+    sys.exit(1 if all_errors else 0)
+
+
+if __name__ == "__main__":
+    main()

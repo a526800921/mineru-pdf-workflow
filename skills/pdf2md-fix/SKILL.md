@@ -258,6 +258,9 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 - [ ] 修复前后内容 hash 已记入 manifest。
 - [ ] 无 `approved`/`ready` 记录在 `review_overrides.csv` 未设置时自动产生。
 - [ ] `scripts/pdf-check-fixes <package>` 校验通过（exit 0）。
+- [ ] 应用修复时使用 `scripts/pdf-apply-fixes <package>`（含 `--dry-run` 预览）。
+- [ ] `scripts/pdf-apply-fixes` 不会因页块替换后长度变化产生页外内容误报。
+- [ ] 重复运行 `pdf-apply-fixes` 幂等跳过，不重复修改内容。
 - [ ] `data/table_candidates.jsonl`（如存在）中的候选标记为 `needs_human`。
 
 ## 排障
@@ -267,6 +270,7 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 | `formatting.status` 不是 `verified` | 先执行或要求执行 HTML 表格 pretty-print |
 | `pdf-check-fixes` 返回非零 | 查看 stderr 的具体错误：`manual_fixes.jsonl` 格式、manifest 块 hash 或不匹配的派生路径 |
 | `pdf-table-fix` 无输出 | 确认 `manifest.json.page_fallback` 中 `quality_signals` 包含 `excessive_empty_td`/`excessive_columns` |
+| `pdf-apply-fixes` 返回 1 | 查看 stderr：before 未找到（检查 `pages` 和目标页块）、页块外内容变化（检查 `before` 是否越界）、当前 MD hash 与 manifest 不一致（先运行 `pdf-check-fixes`） |
 | 页面锚点不唯一 | 修复必须失败，保留原始 Markdown |
 | 修复后页块 hash 不匹配 | 修复应用未命中目标；检查页锚点范围 |
 | `manifest.json` 引用路径不存在 | 修复后手动校验所有派生文件存在性 |

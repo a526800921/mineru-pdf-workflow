@@ -158,6 +158,122 @@ out="$("$_scripts"/pdf-table-fix "$_d5" 2>&1)" && rc=0 || rc=$?
 _ck0 $rc "T2: 无候选时正常退出"
 _grep "$out" "未发现需扫描的候选页" "T2: 输出无候选信息"
 
+# ── A1: pdf-apply-fixes 简单修复应用 ──
+echo ""
+echo "--- A1: pdf-apply-fixes 简单修复应用 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+mkdir -p "$t/data"
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"d20-p14-kw","fix_type":"rebuild_table","review_action":"fix_md","status":"applied","pages":[14],"before":"11.8 Kw / 8500 rpm","after":"11.8 kW / 8500 rpm","evidence":"功率单位归一化测试"}
+EOF
+_inject "$t" "$t/data/manual_fixes.jsonl" "applied" "verified" > /dev/null
+out="$("$_scripts"/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "A1: 修复应用成功"
+_grep "$out" "成功" "A1: 显示成功信息"
+# 验证 MD 已更新
+grep -q "11.8 kW / 8500 rpm" "$t/demo20.md" && _pass "A1: after 文本存在于 MD" || _fail "A1: MD 未更新 after 文本"
+! grep -q "11.8 Kw / 8500 rpm" "$t/demo20.md" && _pass "A1: before 文本已被替换" || _fail "A1: before 文本仍存在"
+
+# ── A2: 幂等跳过（重复应用） ──
+echo ""
+echo "--- A2: 幂等跳过 ---"
+out="$("$_scripts"/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "A2: 重复应用返回 0"
+_grep "$out" "幂等跳过" "A2: 显示幂等跳过信息"
+
+# ── A3: before 不存在 → 失败 ──
+echo ""
+echo "--- A3: before 不存在 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+mkdir -p "$t/data"
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"d20-nonexist","fix_type":"fill_content","review_action":"fix_md","status":"applied","pages":[14],"before":"THIS_TEXT_DOES_NOT_EXIST_ANYWHERE_ZZZ","after":"REPLACEMENT","evidence":"测试"}
+EOF
+_inject "$t" "$t/data/manual_fixes.jsonl" "applied" "verified" > /dev/null
+out="$("$_scripts"/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "A3: before 不存在时返回非零"
+# 注意：第一个页块找不到 before 时报错，因此 exit 1
+_grep "$out" "未找到 before" "A3: 包含 before 未找到信息"
+
+# ── A4: p47/p48 同字符串误命中回归 ──
+echo ""
+echo "--- A4: p47/p48 同字符串误命中保护 ---"
+t=$(_mk)
+# 创建测试用 manifest 和 markdown
+python3 -c "
+import json
+m = {'model':'p48test','files':{'markdown':'test.md','pdf':'test.pdf','data':'data'},'segmentation':{'total_pages':48}}
+open('$t/manifest.json','w',encoding='utf-8').write(json.dumps(m,ensure_ascii=False,indent=2)+'\n')
+"
+cat > "$t/test.md" <<'EOF'
+<!-- pages 47-47 -->
+<p>Page 47 unique</p>
+<table><tr><td>SAME_TEXT</td></tr></table>
+
+<!-- pages 48-48 -->
+<p>Page 48 unique</p>
+<table><tr><td>SAME_TEXT</td></tr></table>
+EOF
+mkdir -p "$t/data"
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"p47-fix","fix_type":"rebuild_table","review_action":"fix_md","status":"applied","pages":[47],"before":"SAME_TEXT","after":"REPLACED","evidence":"回归测试"}
+EOF
+# 注入 manifest.fixes 和 formatting 块
+python3 -c "
+import json, hashlib
+m = json.loads(open('$t/manifest.json', encoding='utf-8').read())
+md_hash = hashlib.sha256(open('$t/test.md','rb').read()).hexdigest()
+mf_hash = hashlib.sha256(open('$t/data/manual_fixes.jsonl','rb').read()).hexdigest()
+m['fixes'] = {'schema_version':1,'status':'applied','source_manifest_sha256':'0'*64,'manual_fixes_sha256':mf_hash,'markdown_sha256':md_hash}
+m['formatting'] = {'schema_version':1,'mode':'merge_time','status':'none','source_markdown_sha256':'0'*64}
+open('$t/manifest.json','w',encoding='utf-8').write(json.dumps(m,ensure_ascii=False,indent=2)+'\n')
+"
+out="$("$_scripts"/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "A4: p47 修复应用成功"
+# 验证：p47 的 SAME_TEXT 被替换，p48 的 SAME_TEXT 保留
+grep -q "REPLACED" "$t/test.md" && _pass "A4: p47 内容已更新" || _fail "A4: p47 未更新"
+s=$(grep -c "SAME_TEXT" "$t/test.md" || true)
+[[ "$s" -eq 1 ]] && _pass "A4: p48 的 SAME_TEXT 仍保留（计数=1）" || _fail "A4: p48 也被替换或计数异常（count=$s）"
+
+# ── A5: check_idempotent 幂等性校验（对已应用包） ──
+echo ""
+echo "--- A5: check_idempotent 幂等性校验 ---"
+# 沿用 A4 的包（fixes.status=applied，修复已应用）
+out="$("$_scripts"/pdf-check-fixes --verbose "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "A5: 已应用包的校验通过（含幂等性检查）"
+_grep "$out" "校验通过" "A5: 输出校验通过信息"
+
+# ── A6: check_idempotent 未正确应用的修复 ──
+echo ""
+echo "--- A6: check_idempotent 检测未应用的修复 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+mkdir -p "$t/data"
+# 创建一条 status=applied 的修复，但 MD 中 before 仍在、after 不在
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"fake-applied","fix_type":"rebuild_table","review_action":"fix_md","status":"applied","pages":[14],"before":"11.8 Kw / 8500 rpm","after":"11.8 XX / 8500 rpm","evidence":"假应用"}
+EOF
+_inject "$t" "$t/data/manual_fixes.jsonl" "applied" "verified" > /dev/null
+out="$("$_scripts"/pdf-check-fixes --verbose "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "A6: 检测到未应用的修复返回非零"
+_grep "$out" "幂等性" "A6: 包含幂等性错误信息"
+
+# ── A7: pdf-apply-fixes 页锚点不存在 → 失败 ──
+echo ""
+echo "--- A7: 页锚点不存在 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+mkdir -p "$t/data"
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"invalid-page","fix_type":"rebuild_table","review_action":"fix_md","status":"applied","pages":[999],"before":"x","after":"y","evidence":"不存在页测试"}
+EOF
+_inject "$t" "$t/data/manual_fixes.jsonl" "applied" "verified" > /dev/null
+out="$("$_scripts"/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "A7: 页锚点不存在时返回非零"
+_grep "$out" "未找到页锚点" "A7: 包含页锚点未找到信息"
+
 # ── 汇总 ──
 echo ""
 echo "=== 测试完成 ==="

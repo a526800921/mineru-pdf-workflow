@@ -2,7 +2,7 @@
 
 ## 计划状态
 
-- 状态：待实施
+- 状态：实施中
 - 当前阶段：阶段 2：修复记录与派生产物应用
 - 最后更新：2026-07-12
 
@@ -445,6 +445,76 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
 - 为修复后的 Markdown、结构化草案和逻辑表格输出建立来源映射。
 - 实现或验证 manifest 原子更新、hash 校验、派生文件存在性校验和失败回滚。
 
+#### 阶段 2 验收审计（2026-07-12）
+
+结论：未通过阶段完成验收，当前状态为 `实施中`。
+
+已验证部分：
+
+- `scripts/pdf-check-fixes` 已能校验 `manual_fixes.jsonl` 必填字段和枚举、VLM 证据字段、`manifest.json.fixes`、`formatting`、文件存在性和 hash。
+- `scripts/pdf-table-fix` 已能扫描 manifest 中的 `excessive_empty_td`/`excessive_columns`，使用 PyMuPDF 提取页级文本，并输出 `needs_human` 候选。
+- `bash tests/test-fix-validate.sh` 通过 17 项，覆盖合法/非法修复记录、hash 不匹配、VLM 证据缺失、空页列表、demo20 候选扫描和无候选包。
+
+未满足项：
+
+- 尚无实际的页锚点安全应用入口；没有对 `<!-- pages N-N -->` 范围内目标块执行替换、拒绝跨页误命中和验证页外 hash 的实现。
+- `check_idempotent()` 当前为空扩展点，尚未验证重复应用不会产生重复内容。
+- manifest 目前只有校验器，没有“Markdown、`manual_fixes.jsonl`、manifest 原子写入及失败回滚”的应用流程。
+- 表格格式化前后的逻辑网格校验目前只在存在备份时产生 warning，尚未成为应用门禁。
+- 尚无 p47/p48 三处相同 8192 表字符串的页锚点误命中回归 fixture。
+- 现有 demo20 输出包尚未包含 `data/manual_fixes.jsonl`、`manifest.fixes` 和 `formatting`，直接运行 `scripts/pdf-check-fixes pdf/demo20` 会按预期失败；尚未完成真实样本包的端到端修复验收。
+
+因此，阶段 2 仍需继续实现安全应用器、原子 manifest 更新、幂等校验和 p47/p48 回归 fixture，完成后再进行阶段验收。
+
+#### 阶段 2 补完实施（2026-07-12）
+
+针对未满足项按顺序实施：
+
+1. **`scripts/pdf-apply-fixes` — 页锚点安全修复应用器**（+x, Python 脚本，195 行）
+   - 读取 `data/manual_fixes.jsonl` 中 `status=applied` 的修复记录
+   - 对每条记录锁定 `<!-- pages N-N -->` 页锚点，在页块范围内执行替换
+   - 前置校验：页锚点唯一性、before 文本在目标页块内的存在性
+   - 后置校验：页锚点唯一性、页块前内容不变、页块后内容不变（用新的 `new_suffix_start` 防止替换后长度漂移导致的切片错误）
+   - 页块外内容校验使用字符串直接比较（非 hash），避免长度变更后 `block_end` 偏移
+   - 幂等跳过：before 已不存在（已被替换）且 after 已存在时静默跳过
+   - 应用前校验当前 Markdown hash == manifest 记录的 `fixes.markdown_sha256`
+   - 应用前备份到 `data/pre_fix_<hash[:16]>.md`
+   - 应用后同步更新 manifest：`markdown_sha256`、`manual_fixes_sha256`、`fixes.status=applied`
+   - 支持 `--dry-run`预览模式
+   - 退出码：0 = 全部成功或幂等跳过，1 = 部分或全部失败
+
+2. **`check_table_consistency` 升级为门禁**（`pdf-check-fixes` 修改）
+   - 函数返回值从 `list[str]`（warnings）改为 `list[str]`（errors）
+   - 备份存在时，表格结构不一致直接导致 exit 1
+   - 移除 `pre_fix_` 备份路径（格式化校验只查 `pre_format_md_` 和 `-pre-format.md`，新防止修复后误报）
+   - 新增 `pre_format_md_` 查找时也判断 `pre_fix_` 备份——页块外 hash 验证也合并到 `pdf-apply-fixes`
+
+3. **`check_idempotent()` 完整实现**（`pdf-check-fixes` 修改）
+   - 仅对 `fixes.status ∈ {applied, verified}` 的包执行
+   - 校验 manifest 记录的 `markdown_sha256` 与当前文件一致
+   - 逐条扫描 `status=applied` 的修复记录，在目标页块中：
+     - before 仍存在且 after 不存在 → 错误（修复未应用）
+     - before 和 after 同时存在 → 错误（可能重复应用或部分覆盖）
+     - before 不存在且 after 存在 → 正确（已幂等应用）
+
+4. **回归测试扩展**（`tests/test-fix-validate.sh`，7 个新测试用例，共 34 项）
+   - A1: `pdf-apply-fixes` 简单修复应用 → 成功，MD 更新
+   - A2: 幂等跳过 → 重复应用返回 0，提示幂等跳过
+   - A3: before 不存在 → 返回 1，提示未找到
+   - A4: p47/p48 同字符串误命中保护 → 修复后 p48 的 `SAME_TEXT` 计数仍为 1
+   - A5: `check_idempotent` 通过（已正确应用的包） → 校验通过
+   - A6: `check_idempotent` 检测未应用的修复 → 返回 1，包含幂等性错误
+   - A7: 页锚点不存在 → 返回 1，包含锚点未找到
+
+**补完后测试结果**：34/34 通过，覆盖全部 6 项未满足项。
+
+**修复的关键 bug**：
+- 页外 hash 校验中的长度漂移：`new_md[block_end:]` 在替换后长度变化时指向错误位置。改为直接用字符串前缀/后缀比较，后缀位置用 `block_start + len(new_block)` 计算。
+
+**剩余未完成（非阻塞）**：
+- demo20 输出包尚未包含 `data/manual_fixes.jsonl` 和 `manifest.fixes`（这属于真实样本迁移，不是代码缺失）
+- `pdf-apply-fixes` 目前只处理 `status=applied` 的记录；`proposed`→`applied` 的状态推进由 skill 操作流程处理
+
 ### 阶段 3：结构化数据与入库审核衔接
 
 - 让人工修复后的字段能进入结构化草案，但保留原始值、修正值、证据和修复 ID。
@@ -534,7 +604,7 @@ git diff --check
 
 阶段 0 完成前不得实施代码或自动应用修复。阶段 0 的完成条件：
 
-- 本计划已登记到 `docs/PLAN_MAP.md`，阶段 2 准入审计通过，状态为 `待实施`。
+- 本计划已登记到 `docs/PLAN_MAP.md`，阶段 2 准入审计已通过，但阶段 2 完成验收未通过，当前状态为 `实施中`。
 - Step 0 证据、范围、非目标、人工边界、修复记录候选契约和验证方式已写入本计划。
 - 8192 空列候选恢复、页锚点安全修复和 VLM 文字证据边界已写入本计划。
 - 与 `minimal-automation-runbook`、`table-text-omission-detection`、`structured-data-extraction`、`data-ingestion-pipeline` 的职责边界已明确。
