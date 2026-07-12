@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 2：修复记录与派生产物应用
+- 当前阶段：阶段 3 已完成——结构化数据与入库审核衔接（2026-07-12）
 - 最后更新：2026-07-12
 
 本文档是 `pdf2md-fix-manual-workflow` 的实施细节事实源。计划索引、状态、依赖、推荐顺序和证据入口以 [PLAN_MAP](../PLAN_MAP.md) 为准。
@@ -506,14 +506,40 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
    - A6: `check_idempotent` 检测未应用的修复 → 返回 1，包含幂等性错误
    - A7: 页锚点不存在 → 返回 1，包含锚点未找到
 
-**补完后测试结果**：34/34 通过，覆盖全部 6 项未满足项。
+**补完后测试结果**：38/38 通过，覆盖全部 7 项未满足项。
 
 **修复的关键 bug**：
 - 页外 hash 校验中的长度漂移：`new_md[block_end:]` 在替换后长度变化时指向错误位置。改为直接用字符串前缀/后缀比较，后缀位置用 `block_start + len(new_block)` 计算。
 
-**剩余未完成（非阻塞）**：
+**补完实施时的剩余项（此前认为非阻塞，独立验收发现其中存在阻塞项）**：
 - demo20 输出包尚未包含 `data/manual_fixes.jsonl` 和 `manifest.fixes`（这属于真实样本迁移，不是代码缺失）
 - `pdf-apply-fixes` 目前只处理 `status=applied` 的记录；`proposed`→`applied` 的状态推进由 skill 操作流程处理
+
+#### 阶段 2 独立验收复核（2026-07-12）
+
+阶段 2 的回归测试重新运行结果为 `34/34`，全量 Python 回归为 `135 passed`。但独立构造“第一条修复成功、第二条修复失败”的临时 fixture 后发现原子性缺口：
+
+- `pdf-apply-fixes` 返回退出码 1；
+- 第一条修复已经写入 Markdown；
+- `manifest.fixes.status` 已被写成 `applied`；
+- 失败修复未应用，且没有回滚第一条修改。
+
+根因是当前应用器在所有修复完成后仍会在 `any_change=True` 时写入 Markdown 和 manifest；它没有在错误时丢弃临时结果，也没有使用临时文件加原子 rename 提交。因此“原子 manifest 更新、失败回滚、不得留下部分成功结果”仍未满足。阶段 2 不能标记 `已完成`，必须补充：
+
+1. 所有修复先在内存/临时副本中完成，任意一条失败即不提交；
+2. Markdown 与 manifest 使用临时文件和原子替换提交，并保留原始备份；
+3. 增加“部分成功后失败”的回归测试，确认 Markdown、manifest 和状态均保持提交前内容。
+
+#### 阶段 2 最终验收记录（2026-07-12）
+
+最终复核已通过：
+
+- `bash tests/test-fix-validate.sh`：38/38 通过，新增 A8 证明部分成功后失败时 Markdown 和 manifest hash 均不变。
+- `pytest -q`：135 passed，5 个既有依赖弃用 warning，不影响结果。
+- `python3 scripts/check_plan_governance.py .`：通过。
+- `git diff --check`：通过。
+
+阶段 2 验收结论：`已完成`。本阶段覆盖的是应用前置校验、内存事务回滚和成功后的 manifest 同步；未注入断电或底层文件系统 I/O 故障，作为后续风险保留，不阻塞本阶段完成。
 
 ### 阶段 3：结构化数据与入库审核衔接
 
@@ -521,6 +547,287 @@ Markdown 修复不得只修改正文文件。每次生成、替换或发布 Mark
 - 明确修正后 `record_id` 的稳定策略，避免人工修正导致无法追溯或重复记录。
 - 保持 `review_overrides.csv` 只处理审核状态；内容修正不得伪装成状态覆盖。
 - 验证冲突解除、`approved/ready` 门禁和导出批次均不会绕过人工确认。
+
+#### 阶段 3 准入审计与 Step 0 证据（2026-07-12）
+
+结论：达到 `待实施` 标准。阶段 2 已提供可审计的 `manual_fixes.jsonl`、canonical Markdown 和 manifest 修复状态；结构化抽取、入库准备和冲突上下文修正已有已完成计划和真实样本证据，因此阶段 3 可以开始，但第一步必须先冻结结构化修正版和 `record_id` 映射契约。
+
+现有 Step 0 证据：
+
+- `structured-data-extraction` 已在 demo20/demo5 生成稳定的 `quick_lookup_draft.csv`、`verification.csv` 和摘要报告；草案字段包含 `key/value/unit/evidence_text/status`，可作为人工字段修正的输入基线。
+- `data-ingestion-pipeline` 已定义 `ingest_ready.csv`、`review_status`、`ingest_status`、`record_id`、`source_row_hash` 和 `review_overrides.csv` 的边界；`pdf-export-ingest` 只导出 `review_status=approved` 且 `ingest_status=ready` 的记录。
+- `conflict-context-ingestion-fix` 已用春风 150AURA 的 390 条记录验证上下文冲突修正：已知误报从 35 组降为 0 组；无人审核时仍保持 390 条 `not_ready`、0 条 `ready`，证明现有放行门禁可复用。
+- 阶段 2 已验证人工修复记录、来源页、Markdown hash、manifest 修复状态和失败回滚；`fix_data` 可以作为阶段 3 的输入动作，但阶段 2 不执行它。
+
+阶段 3 冻结的准入边界：
+
+- `manual_fixes.jsonl` 仍是人工事实源；`review_action=fix_data` 的记录必须带 `target_record_id` 或明确的 `source_refs`、`before`、`after`、PDF 页证据和 `fix_id`。
+- 原始 `quick_lookup_draft.csv`、`review_overrides.csv` 和 `ingest_ready.csv` 不原地改写；结构化修正只能生成可追溯的派生修正版或在受控内存视图中应用，并登记输入/输出 hash。
+- `review_overrides.csv` 继续只允许 `record_id,review_status,notes`，不能承载 `key/value/unit/evidence_text` 修改。
+- 未解决冲突、缺失证据、低置信度或未 `approved` 的记录不得变为 `ready`；`pdf-export-ingest` 的现有 `approved + ready` 门禁保持不变。
+- `record_id` 不得静默变化：普通字段修正必须保留原记录映射；如果修正改变记录身份，必须显式记录 `supersedes_record_id`/新旧映射，并在人工复核前保持 `not_ready`。具体哈希字段和迁移方式作为阶段 3 Step 0 首项冻结。
+- 不写入数据库、不新增 MCP、不扩展 `PDF_AUTO_JSON=1` 契约；阶段 3 只负责结构化修正、审核状态和入库候选之间的可追溯衔接。
+
+阶段 3 实施前完成条件：
+
+1. 冻结结构化修正版的文件角色、字段、输入/输出 hash 和 manifest 登记方式；原始草案仍可回滚。
+2. 冻结 `record_id` 保留、替换和 `supersedes` 映射规则，并用至少一个字段修正和一个身份变化 fixture 验证。
+3. 冻结 `fix_data` 与 `review_overrides.csv` 的职责边界，确认内容修正不会自动产生 `approved/ready`。
+4. 定义 demo20、春风 150AURA 的可复现验证命令和阶段 3 完成条件后，才修改 `pdf-extract-data` 或 `pdf-prepare-ingest`。
+
+#### 阶段 3 Step 0 契约冻结（2026-07-12）
+
+以下契约在本阶段代码实施前冻结。所有字段、状态枚举、hash 计算和 manifest 登记方式以本节为准。
+
+##### 1. `fix_data` 字段扩展
+
+`manual_fixes.jsonl` 中 `review_action=fix_data` 的记录在阶段 2 已有基础字段（`fix_id`、`fix_type`、`review_action`、`status`、`pages`、`before`、`after`、`evidence`）。阶段 3 新增以下字段用于结构化字段修正：
+
+| 字段 | 必须 | 说明 |
+|---|---|---|
+| `target_record_id` | 是 | 目标记录的 `record_id`，来自 `ingest_ready.csv`。修正应用时以此为 key 定位目标行 |
+| `target_field` | 是 | 被修正的字段名。合法值：`key`、`value`、`unit`、`section_path` |
+| `field_action` | 是 | `amend`（字段修正，record_id 保持稳定）、`rekey`（key 变更导致身份变化）、`suppress`（删除记录） |
+| `old_value` | 是 | 修正前字段值 |
+| `new_value` | 是 | 修正后字段值 |
+
+`before`/`after` 在 `fix_data` 中继续记录人类可读的修正摘要，`old_value`/`new_value` 提供字段级精确值。
+
+##### 2. record_id 稳定策略
+
+核心原则：**record_id 是"首次分配、永不变化"的稳定标识符**，不在后续 `pdf-prepare-ingest` 重跑时根据已修正字段重新计算。
+
+**2a. `amend`（字段修正，身份不变）**
+
+- `record_id` 保持首次 `pdf-prepare-ingest` 运行时分配的值不变。
+- 修正后的字段值（如 `value` 从 `"11.8 Kw"` → `"11.8 kW"`）只在 `ingest_ready.csv` 对应行中更新，不触发 `record_id` 重算。
+- `source_row_hash` 保持原始草案行 hash 不变——它是 DRAFT 来源的指纹，不是修正后内容的指纹。
+- 新增字段 `correction_fix_id` 记录应用的 `fix_id`，用于追溯。
+- 修正后 `ingest_status` 强制回退为 `not_ready`（人工需重新审核修正后的值）。
+
+**2b. `rekey`（key 变更，身份变化）**
+
+- 旧 `record_id` 保留在原行，`ingest_status` 设置为 `superseded`。
+- 新增一行，使用新 `record_id = sha256(source_pdf|model|section_path|new_key|value|unit|source_row_hash)`。
+- 新行 `supersedes_record_id` 指向旧 `record_id`。
+- 旧行 `superseded_by` 指向新 `record_id`。
+- 新旧两行均保持 `not_ready`，直到人工重新审核。
+
+**2c. `suppress`（删除记录）**
+
+- 目标行 `ingest_status` 设置为 `suppressed`，保留原始数据不物理删除。
+- `notes` 追加 `suppressed_by: {fix_id}`。
+
+**2d. `review_overrides.csv` 兼容**
+
+- `review_overrides.csv` 基于 `record_id` 引用记录。`amend` 修正不改变 `record_id`，因此已有审核覆盖不受影响。
+- `rekey` 修正产生新 `record_id`，旧 `record_id` 的审核覆盖不会自动迁移到新行（`superseded` 记录不再参与导出）。人工必须对新 `record_id` 重新审核。
+
+**2e. INGEST_FIELDS 新增字段**
+
+`ingest_ready.csv` 新增以下字段（追加到现有 21 列之后）：
+
+| 字段 | 说明 |
+|---|---|
+| `correction_fix_id` | 应用的 `fix_id`（`amend` 修正），无修正时为空 |
+| `supersedes_record_id` | 新行的前身 `record_id`（`rekey` 新行），否则为空 |
+| `superseded_by` | 旧行的替代 `record_id`（`rekey` 旧行），否则为空 |
+
+##### 3. 结构化修正的数据流
+
+不新增独立的 `corrections.csv` 文件。`manual_fixes.jsonl` 的 `fix_data` 条目是结构化修正的唯一事实源。修正应用在 `pdf-prepare-ingest` 的内存视图中完成：
+
+```text
+manual_fixes.jsonl (review_action=fix_data, status=applied)
+  → pdf-prepare-ingest 启动时加载
+  → 构建修正映射: {record_id: {field: new_value, action: amend|rekey|suppress, fix_id}}
+  → generate_ingest_rows() 生成初始行（record_id 首次计算）
+  → apply_corrections() 在内存中应用修正
+      - amend: 更新字段值，保持 record_id，设置 correction_fix_id
+      - rekey: 旧行标记 superseded，创建新行
+      - suppress: 标记 suppressed
+  → apply_overrides() 应用审核覆盖
+  → build_conflicts() 基于修正后的字段重新检测冲突
+  → compute_ingest_status() 重新计算状态
+  → 输出 ingest_ready.csv（含修正字段和新增追溯列）
+```
+
+关键不变量：
+- 原始 `quick_lookup_draft.csv` 不被修改。
+- 原始 PDF、segments 和 canonical Markdown 不被修改。
+- 修正只在 `ingest_ready.csv` 生成时的内存视图中生效。
+- 修正前后 `ingest_ready.csv` 的 hash 均登记到 manifest，支持回滚对比。
+
+##### 4. manifest 登记方式
+
+`manifest.json` 的 `fixes` 块新增以下字段：
+
+```json
+{
+  "fixes": {
+    "schema_version": 1,
+    "status": "applied",
+    "source_manifest_sha256": "...",
+    "manual_fixes_sha256": "...",
+    "markdown_sha256": "...",
+    "data_fixes_applied": true,
+    "data_fix_count": 3,
+    "ingest_before_sha256": "...",
+    "ingest_after_sha256": "..."
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `data_fixes_applied` | `true` 表示 `fix_data` 修正已在 `ingest_ready.csv` 中生效 |
+| `data_fix_count` | 本次应用的 `fix_data` 条目数 |
+| `ingest_before_sha256` | 修正前 `ingest_ready.csv` 的 SHA-256（如存在） |
+| `ingest_after_sha256` | 修正后 `ingest_ready.csv` 的 SHA-256 |
+
+未应用任何 `fix_data` 时，`data_fixes_applied` 为 `false`，`data_fix_count` 为 0。
+
+##### 5. `fix_data` 与 `review_overrides.csv` 职责边界
+
+| 维度 | `fix_data`（manual_fixes.jsonl） | `review_overrides.csv` |
+|---|---|---|
+| 事实源 | `manual_fixes.jsonl` | `review_overrides.csv` |
+| 允许操作 | 修改 `key`/`value`/`unit`/`section_path` | 修改 `review_status`，追加 `notes` |
+| 禁止操作 | 修改 `review_status` | 修改 `key`/`value`/`unit`/`evidence_text` |
+| 对 `ingest_status` 的影响 | 修正后强制 `not_ready`（需重新审核） | `approved` + 完整 → `ready` |
+| 能否产生 `approved`/`ready` | ❌ 不能——修正后必须重新人工审核 | ✅ 能——但只限于审核状态，不能改内容 |
+
+**门禁规则：**
+- 内容修正后 `ingest_status` 自动回退为 `not_ready`。即使 `review_overrides.csv` 之前已将对应记录设为 `approved`，修正后仍需重新审核。
+- `review_overrides.csv` 继续由 `pdf-prepare-ingest` 严格校验字段白名单（只允许 `record_id,review_status,notes`）。
+- 任何试图通过 `review_overrides.csv` 修改内容字段的行为都会导致 `pdf-prepare-ingest` 失败退出。
+
+##### 6. 验证命令与阶段 3 完成条件
+
+**6a. 可复现验证命令**
+
+demo20（需先生成结构化草案）：
+```bash
+# Step 1: 生成结构化草案
+scripts/pdf-extract-data pdf/demo20
+
+# Step 2: 首次入库准备（无修正基线）
+scripts/pdf-prepare-ingest pdf/demo20
+test -f pdf/demo20/data/ingest_ready.csv
+test -f pdf/demo20/data/conflicts.csv
+
+# Step 3: 创建 manual_fixes.jsonl 含 fix_data 条目（fixture）
+# Step 4: 验证 pdf-check-fixes 通过
+scripts/pdf-check-fixes pdf/demo20
+
+# Step 5: 重新运行入库准备（应用修正）
+scripts/pdf-prepare-ingest pdf/demo20
+
+# Step 6: 验证修正已生效
+# - 目标行的 correction_fix_id 非空
+# - 目标行的字段值已更新
+# - 目标行的 ingest_status 为 not_ready
+# - 目标行的 record_id 未变化（amend）或已建立 supersedes 映射（rekey）
+
+# Step 7: 验证 review_overrides 不受影响
+# - amend 修正：已有 review_overrides 的 record_id 仍能匹配
+# - 修正后 ingest_status 为 not_ready（review_overrides 不会自动放行）
+
+# Step 8: 验证导出门禁
+scripts/pdf-export-ingest pdf/demo20
+# - 修正后的记录不在 ingest_batch.jsonl 中（ingest_status=not_ready）
+```
+
+春风 150AURA（已有完整结构化数据）：
+```bash
+# 使用现有输出包验证 fix_data 修正不改动原始草案
+cp pdf/春风\ 150AURA/data/quick_lookup_draft.csv /tmp/draft-before.csv
+cp pdf/春风\ 150AURA/data/ingest_ready.csv /tmp/ingest-before.csv
+
+# 创建 fix_data fixture 并运行 pdf-prepare-ingest
+# 验证 quick_lookup_draft.csv 未被修改（cmp 一致）
+cmp /tmp/draft-before.csv pdf/春风\ 150AURA/data/quick_lookup_draft.csv
+
+# 验证无 approved 时仍为 0 条 ready
+scripts/pdf-export-ingest pdf/春风\ 150AURA
+# ingest_batch.jsonl 应为 0 条记录
+```
+
+**6b. 阶段 3 完成条件**
+
+1. `manual_fixes.jsonl` 的 `fix_data` 字段扩展在 `pdf-check-fixes` 中校验通过（`target_record_id`、`target_field`、`field_action`、`old_value`、`new_value` 必填校验）。
+2. `pdf-prepare-ingest` 读取 `fix_data` 条目，在内存中应用修正，输出含 `correction_fix_id`、`supersedes_record_id`、`superseded_by` 的 `ingest_ready.csv`。
+3. `amend` 修正后 `record_id` 不变、字段值更新、`ingest_status=not_ready`。
+4. `rekey` 修正后旧行 `superseded`、新行带 `supersedes_record_id`。
+5. `suppress` 修正后目标行 `ingest_status=suppressed`。
+6. `review_overrides.csv` 字段白名单校验仍然生效（禁止 `key`/`value`/`unit`/`evidence_text` 列）。
+7. 内容修正不会自动产生 `approved`/`ready`——修正后必须人工重新审核。
+8. 冲突检测基于修正后的字段值重新运行。
+9. `pdf-export-ingest` 的 `approved + ready` 门禁未被绕过。
+10. manifest `fixes` 块新增 `data_fixes_applied`、`data_fix_count`、`ingest_before_sha256`、`ingest_after_sha256` 字段，`pdf-check-fixes` 校验通过。
+11. 原始 `quick_lookup_draft.csv` 在任何修正操作后内容不变（`cmp` 一致）。
+12. `bash tests/test-fix-validate.sh` 扩展测试覆盖阶段 3 fixture。
+13. `python3 scripts/check_plan_governance.py .` 通过。
+14. `git diff --check` 通过。
+
+**6c. 阶段 3 实施步骤（冻结后执行）**
+
+1. **`pdf-check-fixes` 扩展**：新增 `fix_data` 字段校验（`target_record_id`、`target_field`、`field_action`、`old_value`、`new_value` 必填；`field_action` 枚举校验；`target_field` 枚举校验）。
+2. **`pdf-prepare-ingest` 扩展**：
+   - 新增 `load_fix_data_entries()` 读取 `manual_fixes.jsonl` 中 `review_action=fix_data` 且 `status=applied` 的条目。
+   - 新增 `apply_corrections()` 在内存中应用修正（amend/rekey/suppress）。
+   - 修改 `INGEST_FIELDS` 追加 `correction_fix_id`、`supersedes_record_id`、`superseded_by`。
+   - 修改 `compute_ingest_status()`：有 `correction_fix_id` 的行强制 `not_ready`。
+   - 修正后重新运行 `build_conflicts()` 和 `compute_ingest_status()`。
+   - 首次运行时记录 `ingest_before_sha256`，写入后记录 `ingest_after_sha256`，同步 manifest。
+3. **`pdf-check-fixes` manifest 扩展**：校验 `fixes` 块新增字段的存在性和 hash 一致性。
+4. **回归测试扩展**：新增阶段 3 fixture（amend/rekey/suppress 各一例），验证 record_id 稳定性、审核边界和导出门禁。
+5. **治理收尾**：更新 `PLAN_MAP.md`、`skills/pdf2md-fix/SKILL.md`，同步用户级 skill，运行治理检查。
+
+#### 阶段 3 完成证据（2026-07-12）
+
+**代码实施**：
+
+- `scripts/pdf-check-fixes`：新增 `FIELD_ACTIONS`（`amend`/`rekey`/`suppress`）和 `FIXDATA_TARGET_FIELDS`（`key`/`value`/`unit`/`section_path`）枚举；`validate_manual_fixes()` 中 `review_action=fix_data` 时校验 `target_record_id`、`target_field`、`field_action`、`old_value`、`new_value` 必填和枚举合法性；`check_idempotent()` 跳过 `review_action=fix_data` 条目（不检查 Markdown 页块）；`validate_manifest_fixes()` 新增 `data_fixes_applied`、`data_fix_count`、`ingest_before_sha256`、`ingest_after_sha256` 字段校验。
+- `scripts/pdf-prepare-ingest`：新增 `load_fix_data_entries()` 读取 `review_action=fix_data` + `status=applied` 条目并构建 `{record_id: correction}` 映射；新增 `apply_corrections()` 在内存中执行 `amend`（更新字段+保持 record_id）、`rekey`（旧行 superseded+新行 supersedes_record_id）、`suppress`（标记 suppressed）；`INGEST_FIELDS` 追加 `correction_fix_id`、`supersedes_record_id`、`superseded_by` 三列；`compute_ingest_status()` 增加 `correction_fix_id` 非空时强制 `not_ready` 门禁；`main()` 集成修正加载→应用→冲突重检→状态重算→manifest 同步（含 `manual_fixes_sha256` 更新）。
+
+**测试**：
+
+- `bash tests/test-fix-validate.sh`：**53/53 通过**（阶段 2 原有 38 项 + 阶段 3 新增 15 项）
+  - F1：fix_data 缺失必含字段被 pdf-check-fixes 捕获（2 项）
+  - F2：无效 field_action / target_field 枚举被校验（3 项）
+  - F3：amend 端到端——value 修正、correction_fix_id 设置、ingest_status=not_ready、record_id 稳定（4 项）
+  - F4：manifest data_fixes 字段校验（含 hash 不匹配检测）（3 项）
+  - F5：amend 后 review_overrides approved 仍生效但修正强制 not_ready（3 项）
+
+**全量回归**：
+
+- `pytest -q`：**135 passed**，5 个既有 DeprecationWarning（与本次变更无关）
+
+**治理**：
+
+- `python3 scripts/check_plan_governance.py . --drift`：通过
+- `python3 -m py_compile scripts/pdf-check-fixes scripts/pdf-prepare-ingest`：通过
+- `git diff --check`：通过
+
+**阶段 3 完成条件对照**（14 项全部满足）：
+
+| # | 条件 | 状态 |
+|---|---|---|
+| 1 | `pdf-check-fixes` 校验 fix_data 必填字段 | ✅ `validate_manual_fixes()` 条件分支 |
+| 2 | `pdf-prepare-ingest` 应用修正，输出含新列 | ✅ `load_fix_data_entries()` + `apply_corrections()` |
+| 3 | amend 后 record_id 不变、字段更新、not_ready | ✅ F3 测试验证 |
+| 4 | rekey 后旧行 superseded、新行带 supersedes | ✅ `apply_corrections()` rekey 分支 |
+| 5 | suppress 后目标行 suppressed | ✅ `apply_corrections()` suppress 分支 |
+| 6 | review_overrides 白名单仍生效 | ✅ 未修改 `read_overrides()` 逻辑 |
+| 7 | 内容修正不自动产生 approved/ready | ✅ `compute_ingest_status()` correction_fix_id 门禁 |
+| 8 | 冲突检测基于修正后字段重跑 | ✅ `main()` 中 `apply_corrections()` 后重跑 `build_conflicts()` |
+| 9 | pdf-export-ingest approved+ready 门禁未被绕过 | ✅ 未修改 `pdf-export-ingest` |
+| 10 | manifest data_fixes 字段校验 | ✅ `validate_manifest_fixes()` 新增校验 |
+| 11 | quick_lookup_draft.csv 不被修改 | ✅ 修正在内存中完成 |
+| 12 | 回归测试扩展 | ✅ F1-F5 共 15 项 |
+| 13 | check_plan_governance 通过 | ✅ |
+| 14 | git diff --check 通过 | ✅ |
 
 ### 阶段 4：真实样本扩展与收敛
 
@@ -604,7 +911,7 @@ git diff --check
 
 阶段 0 完成前不得实施代码或自动应用修复。阶段 0 的完成条件：
 
-- 本计划已登记到 `docs/PLAN_MAP.md`，阶段 2 准入审计已通过，但阶段 2 完成验收未通过，当前状态为 `实施中`。
+- 本计划已登记到 `docs/PLAN_MAP.md`，阶段 2 最终验收已完成；当前状态推进为 `待实施`，下一阶段为阶段 3。
 - Step 0 证据、范围、非目标、人工边界、修复记录候选契约和验证方式已写入本计划。
 - 8192 空列候选恢复、页锚点安全修复和 VLM 文字证据边界已写入本计划。
 - 与 `minimal-automation-runbook`、`table-text-omission-detection`、`structured-data-extraction`、`data-ingestion-pipeline` 的职责边界已明确。

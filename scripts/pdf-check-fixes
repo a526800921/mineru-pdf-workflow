@@ -31,6 +31,8 @@ MANIFEST_FIX_STATUSES = frozenset({"none", "pending", "applied", "verified"})
 FORMATTING_STATUSES = frozenset({"none", "applied", "verified"})
 FIX_SCHEMA_VERSION = 1
 FORMATTING_SCHEMA_VERSION = 1
+FIELD_ACTIONS = frozenset({"amend", "rekey", "suppress"})
+FIXDATA_TARGET_FIELDS = frozenset({"key", "value", "unit", "section_path"})
 
 # ── HTML 表格解析器（复用 table_eval.py 的 _TableStructParser） ──
 
@@ -196,6 +198,28 @@ def validate_manual_fixes(path: Path) -> list[str]:
                 if not val or not isinstance(val, str) or not val.strip():
                     errors.append(f"第 {lineno} 行 {field} 不能为空")
 
+            # fix_data 专属字段校验（仅 review_action=fix_data 时触发）
+            if obj.get("review_action") == "fix_data":
+                for field in ("target_record_id", "target_field", "field_action",
+                              "old_value", "new_value"):
+                    val = obj.get(field)
+                    if not val or not isinstance(val, str) or not val.strip():
+                        errors.append(
+                            f"第 {lineno} 行 review_action=fix_data 缺少字段：{field}"
+                        )
+                fa = obj.get("field_action")
+                if fa and fa not in FIELD_ACTIONS:
+                    errors.append(
+                        f"第 {lineno} 行 field_action 不合法：{fa}"
+                        f"（允许：{', '.join(sorted(FIELD_ACTIONS))}）"
+                    )
+                tf = obj.get("target_field")
+                if tf and tf not in FIXDATA_TARGET_FIELDS:
+                    errors.append(
+                        f"第 {lineno} 行 target_field 不合法：{tf}"
+                        f"（允许：{', '.join(sorted(FIXDATA_TARGET_FIELDS))}）"
+                    )
+
     return errors
 
 
@@ -284,6 +308,41 @@ def validate_manifest_fixes(manifest: dict, pkg_dir: Path) -> list[str]:
                     f"fixes.markdown_sha256 不匹配"
                     f"（期望：{expected_md_hash}，实际：{actual_md_hash}）"
                 )
+
+    # 阶段 3：data_fixes 字段
+    df_applied = fixes.get("data_fixes_applied")
+    if df_applied is True:
+        df_count = fixes.get("data_fix_count")
+        if not isinstance(df_count, int) or df_count < 1:
+            errors.append(
+                "fixes.data_fixes_applied=true 但 data_fix_count 缺失或无效"
+            )
+        # ingest_after_sha256 必须匹配当前 ingest_ready.csv
+        ingest_path = pkg_dir / "data" / "ingest_ready.csv"
+        if ingest_path.exists():
+            expected_ingest_hash = file_sha256(ingest_path)
+            after_hash = fixes.get("ingest_after_sha256")
+            if after_hash and after_hash != expected_ingest_hash:
+                errors.append(
+                    f"fixes.ingest_after_sha256 不匹配"
+                    f"（期望：{expected_ingest_hash}，实际：{after_hash}）"
+                )
+            elif not after_hash:
+                errors.append(
+                    "fixes.data_fixes_applied=true 但 ingest_after_sha256 缺失"
+                )
+        # ingest_before_sha256 是审计字段，不验证当前值
+        ib_hash = fixes.get("ingest_before_sha256")
+        if not ib_hash:
+            errors.append(
+                "fixes.data_fixes_applied=true 但 ingest_before_sha256 缺失"
+            )
+    elif df_applied is False or df_applied is None:
+        # 无 fix_data 时不应有残留字段
+        if fixes.get("data_fix_count", 0) != 0:
+            errors.append(
+                "fixes.data_fixes_applied 未设置但 data_fix_count 非零"
+            )
 
     return errors
 
@@ -512,6 +571,9 @@ def check_idempotent(manifest: dict, pkg_dir: Path) -> list[str]:
             if not isinstance(obj, dict):
                 continue
             if obj.get("status") != "applied":
+                continue
+            # fix_data 条目修改结构化字段，不涉及 Markdown 页块
+            if obj.get("review_action") == "fix_data":
                 continue
 
             fix_id = obj.get("fix_id", f"第 {lineno} 行")

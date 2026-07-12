@@ -7,16 +7,18 @@
 输入:
   <package>/data/quick_lookup_draft.csv
   <package>/data/review_overrides.csv    (可选; 阶段 2 人工审核输入)
+  <package>/data/manual_fixes.jsonl      (可选; 阶段 3 fix_data 修正输入)
 
 输出:
   <package>/data/ingest_ready.csv
   <package>/data/conflicts.csv
 
-不写入数据库，不修改原草案文件。
+不写入数据库，不修改原草案文件。fix_data 修正仅在内存在成时生效。
 """
 
 import csv
 import hashlib
+import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -27,6 +29,7 @@ INGEST_FIELDS = [
     "page_start", "page_end", "evidence_text", "confidence", "review_status", "ingest_status",
     "source_block_id", "table_id", "row_index", "parent_key", "key_role",
     "source_row_hash", "created_at", "notes",
+    "correction_fix_id", "supersedes_record_id", "superseded_by",
 ]
 
 DRAFT_FIELDS = [
@@ -56,6 +59,11 @@ STATUS_MAP = {
 
 def sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    """计算文件内容的 SHA-256。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def compute_source_row_hash(row: dict) -> str:
@@ -336,6 +344,13 @@ def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
             r["ingest_status"] = "not_ready"
             continue
 
+        # 阶段 3：有 fix_data 修正的记录强制 not_ready（需重新审核）
+        if r.get("correction_fix_id"):
+            r["ingest_status"] = "not_ready"
+            existing = r["notes"]
+            r["notes"] = (existing + "; " if existing else "") + "data_corrected"
+            continue
+
         # approved: check if can go to ready
         issues = []
         if not r.get("evidence_text"):
@@ -355,6 +370,118 @@ def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
             r["notes"] = (existing + "; " if existing else "") + "; ".join(issues)
         else:
             r["ingest_status"] = "ready"
+
+
+# ── 阶段 3：fix_data 修正加载与应用 ──────────────────────────
+
+
+def load_fix_data_entries(pkg_dir: Path) -> dict[str, list[dict]]:
+    """从 manual_fixes.jsonl 读取 review_action=fix_data 且 status=applied 的条目。
+
+    返回 {record_id: [{field, new_value, action, fix_id}, ...]} 映射。
+    同一 record_id 可有多个修正（如同时修正 value 和 unit）。
+    manual_fixes.jsonl 不存在或无 fix_data 条目时返回空 dict。
+    """
+    fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    if not fixes_path.exists():
+        return {}
+
+    entries: dict[str, list[dict]] = {}
+    with fixes_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (obj.get("review_action") != "fix_data"
+                    or obj.get("status") != "applied"):
+                continue
+            rid = obj.get("target_record_id", "").strip()
+            fa = obj.get("field_action", "amend").strip()
+            tf = obj.get("target_field", "").strip()
+            nv = obj.get("new_value", "")
+            fix_id = obj.get("fix_id", "").strip()
+            if not rid or not tf or not fix_id:
+                continue
+            entries.setdefault(rid, []).append({
+                "field": tf,
+                "new_value": nv,
+                "action": fa,
+                "fix_id": fix_id,
+            })
+    return entries
+
+
+def apply_corrections(rows: list[dict],
+                      corrections: dict[str, list[dict]]) -> list[dict]:
+    """在内存中对 ingest 行应用 fix_data 修正。
+
+    - amend: 更新字段值，保持 record_id，设置 correction_fix_id
+    - rekey: 旧行标记 superseded，创建新行（新 record_id）
+    - suppress: 标记 suppressed
+    - 同一 record_id 的多条修正按加载顺序依次应用
+
+    返回修改后的行列表（rekey 会增加行数）。
+    """
+    if not corrections:
+        return rows
+
+    # 构建 record_id → row_index 快速查找
+    row_index: dict[str, int] = {}
+    for i, r in enumerate(rows):
+        row_index[r["record_id"]] = i
+
+    new_rows: list[dict] = []  # rekey 产生的新行，先收集后追加
+
+    for rid, corr_list in corrections.items():
+        if rid not in row_index:
+            continue  # record_id 不在当前 ingest 中，跳过
+        idx = row_index[rid]
+        r = rows[idx]
+
+        for corr in corr_list:
+            action = corr["action"]
+            field = corr["field"]
+            new_value = corr["new_value"]
+            fix_id = corr["fix_id"]
+
+            if action == "amend":
+                # 更新目标字段值，保持 record_id
+                r[field] = new_value
+                r["correction_fix_id"] = fix_id
+
+            elif action == "rekey":
+                # 先拷贝旧行，再标记旧行为 superseded
+                new_row = dict(r)
+                r["ingest_status"] = "superseded"
+                new_row[field] = new_value
+                new_row["ingest_status"] = "not_ready"
+                new_row["correction_fix_id"] = fix_id
+                new_row["supersedes_record_id"] = rid
+                new_row["superseded_by"] = ""
+                # 重新计算 record_id（基于新 key）
+                new_row["record_id"] = compute_record_id(
+                    new_row["source_pdf"], new_row["model"],
+                    new_row["section_path"], new_row["key"],
+                    new_row["value"], new_row["unit"],
+                    new_row["source_row_hash"],
+                )
+                # 旧行记录 superseded_by
+                r["superseded_by"] = new_row["record_id"]
+                new_rows.append(new_row)
+
+            elif action == "suppress":
+                r["ingest_status"] = "suppressed"
+                existing = r["notes"]
+                r["notes"] = (existing + "; " if existing else ""
+                             ) + f"suppressed_by: {fix_id}"
+
+    if new_rows:
+        rows.extend(new_rows)
+    return rows
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]):
@@ -379,6 +506,16 @@ def main():
 
     draft_rows = read_draft(draft_path)
     ingest_rows = generate_ingest_rows(draft_rows)
+
+    # 阶段 3：加载并应用 fix_data 修正
+    fix_entries = load_fix_data_entries(pkg)
+    has_fix_data = bool(fix_entries)
+    ingest_before_sha256 = ""
+    if has_fix_data and ingest_path.exists():
+        ingest_before_sha256 = file_sha256(ingest_path)
+
+    if has_fix_data:
+        ingest_rows = apply_corrections(ingest_rows, fix_entries)
 
     # Apply review overrides if present
     has_overrides = override_path.exists()
@@ -408,14 +545,42 @@ def main():
     write_csv(ingest_path, INGEST_FIELDS, ingest_rows)
     write_csv(conflict_path, CONFLICT_FIELDS, conflicts)
 
+    # 阶段 3：同步 manifest.json 的 fixes 块
+    if has_fix_data:
+        ingest_after_sha256 = file_sha256(ingest_path)
+        manifest_path = pkg / "manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+            fixes = manifest.setdefault("fixes", {})
+            fixes["data_fixes_applied"] = True
+            fixes["data_fix_count"] = sum(len(v) for v in fix_entries.values())
+            if ingest_before_sha256:
+                fixes["ingest_before_sha256"] = ingest_before_sha256
+            fixes["ingest_after_sha256"] = ingest_after_sha256
+            # 同步 manual_fixes.jsonl hash（如果存在）
+            fixes_path = pkg / "data" / "manual_fixes.jsonl"
+            if fixes_path.exists():
+                fixes["manual_fixes_sha256"] = file_sha256(fixes_path)
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+
     ready = sum(1 for r in ingest_rows if r["ingest_status"] == "ready")
     not_ready = sum(1 for r in ingest_rows if r["ingest_status"] == "not_ready")
     skipped = sum(1 for r in ingest_rows if r["ingest_status"] == "skipped")
+    suppressed = sum(1 for r in ingest_rows if r["ingest_status"] == "suppressed")
+    superseded = sum(1 for r in ingest_rows if r["ingest_status"] == "superseded")
     print(f"入库准备完成: {pkg}/data/")
-    print(f"  ingest_ready.csv: {len(ingest_rows)} 行 (ready: {ready}, not_ready: {not_ready}, skipped: {skipped})")
+    print(f"  ingest_ready.csv: {len(ingest_rows)} 行 (ready: {ready}, not_ready: {not_ready}, skipped: {skipped}"
+          f"{', suppressed: ' + str(suppressed) if suppressed else ''}"
+          f"{', superseded: ' + str(superseded) if superseded else ''})")
     print(f"  conflicts.csv: {len(conflicts)} 组冲突")
     if has_overrides:
         print(f"  review_overrides 已应用")
+    if has_fix_data:
+        total_corrections = sum(len(v) for v in fix_entries.values())
+        print(f"  fix_data 修正已应用: {total_corrections} 条")
 
 
 if __name__ == "__main__":

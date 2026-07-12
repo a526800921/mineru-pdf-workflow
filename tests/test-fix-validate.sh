@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pdf2md-fix 阶段2：修复记录与派生产物应用 —— 回归测试
+# pdf2md-fix 阶段2/3：修复记录、派生产物应用与结构化字段修正 —— 回归测试
 set -eo pipefail
 
 _scripts="$(cd "$(dirname "$0")/../scripts" && pwd)"
@@ -296,6 +296,133 @@ md_after_hash=$(shasum -a 256 "$t/demo20.md" | awk '{print $1}')
 # 验证 manifest 未变
 mf_after_hash=$(shasum -a 256 "$t/manifest.json" | awk '{print $1}')
 [[ "$manifest_before_hash" == "$mf_after_hash" ]] && _pass "A8: manifest hash 不变（未写入）" || _fail "A8: manifest 擅自修改"
+
+# ═══════════════════════════════════════════════
+# 阶段 3：结构化字段修正（fix_data）
+# ═══════════════════════════════════════════════
+
+echo ""
+echo "=== 阶段 3：fix_data 结构化字段修正 ==="
+
+# ── F1: fix_data 缺失字段应被 pdf-check-fixes 捕获 ──
+echo ""
+echo "--- F1: fix_data 缺少必含字段 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+mkdir -p "$t/data"
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"fix-bad-1","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[14],"before":"x","after":"y","evidence":"缺少 target_record_id 等 fix_data 字段"}
+EOF
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"demo20.md"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "F1: fix_data 缺失 target_record_id 返回非零"
+_grep "$out" "缺少字段" "F1: 包含 fix_data 字段缺失信息"
+
+# ── F2: fix_data 无效 field_action / target_field ──
+echo ""
+echo "--- F2: fix_data 无效枚举值 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+mkdir -p "$t/data"
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"fix-enum-1","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[14],"before":"x","after":"y","evidence":"z","target_record_id":"abc123","target_field":"color","field_action":"paint","old_value":"red","new_value":"blue"}
+EOF
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"demo20.md"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "F2: 无效 field_action 返回非零"
+_grep "$out" "field_action 不合法" "F2: 包含 field_action 错误"
+_grep "$out" "target_field 不合法" "F2: 包含 target_field 错误"
+
+# ── F3: fix_data amend 端到端 ──
+echo ""
+echo "--- F3: fix_data amend 修正 value 端到端 ---"
+t=$(_mk)
+mkdir -p "$t/data"
+# 创建最小 quick_lookup_draft.csv
+cat > "$t/data/quick_lookup_draft.csv" <<'EOFCSV'
+source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes,source_block_id,table_id,row_index,parent_key,key_role
+demo20.pdf,demo20,引擎 / 性能,最大净功率,11.8 Kw / 8500 rpm,kW,14,14,最大净功率: 11.8 Kw / 8500 rpm,medium,draft,html_table,html_table:1,1,1,,business_key
+EOFCSV
+# 创建 manifest.json（含 formatting 块）
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"fixes":{"schema_version":1,"status":"applied","source_manifest_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","manual_fixes_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+touch "$t/test.md"
+# 首次运行 pdf-prepare-ingest 生成 ingest_ready.csv（获得 record_id）
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+# 获取 record_id
+record_id=$(head -2 "$t/data/ingest_ready.csv" | tail -1 | cut -d',' -f1)
+# 创建 manual_fixes.jsonl，修正 value（Kw→kW 大小写）
+cat > "$t/data/manual_fixes.jsonl" <<EOFJSONL
+{"fix_id":"fix-amend-001","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[14],"before":"单位大小写修正: Kw→kW","after":"11.8 kW / 8500 rpm","evidence":"PDF p14 显示 kW","target_record_id":"$record_id","target_field":"value","field_action":"amend","old_value":"11.8 Kw / 8500 rpm","new_value":"11.8 kW / 8500 rpm"}
+EOFJSONL
+# 重新运行 pdf-prepare-ingest
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+# 验证修正后的 ingest_ready.csv
+corrected_val=$(grep "$record_id" "$t/data/ingest_ready.csv" | cut -d',' -f6)
+corr_fix_id=$(grep "$record_id" "$t/data/ingest_ready.csv" | cut -d',' -f22)
+ingest_status=$(grep "$record_id" "$t/data/ingest_ready.csv" | cut -d',' -f13)
+[[ "$corrected_val" == "11.8 kW / 8500 rpm" ]] && _pass "F3: value 已修正" || _fail "F3: value 未修正 (got=$corrected_val)"
+[[ "$corr_fix_id" == "fix-amend-001" ]] && _pass "F3: correction_fix_id 已设置" || _fail "F3: correction_fix_id 缺失 (got=$corr_fix_id)"
+[[ "$ingest_status" == "not_ready" ]] && _pass "F3: 修正后 ingest_status=not_ready" || _fail "F3: ingest_status 不是 not_ready (got=$ingest_status)"
+# record_id 应不变
+grep -q "$record_id" "$t/data/ingest_ready.csv" && _pass "F3: record_id 稳定不变" || _fail "F3: record_id 变化"
+
+# ── F4: manifest data_fixes 字段一致性 ──
+echo ""
+echo "--- F4: manifest data_fixes 字段校验 ---"
+# F3 的包已经有正确的 manifest.fixes
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "F4: 含 data_fixes 的 manifest 校验通过"
+
+# 破坏 ingest_after_sha256 验证不匹配
+python3 -c "
+import json
+m=json.load(open('$t/manifest.json','r'))
+m['fixes']['ingest_after_sha256']='deadbeef'
+open('$t/manifest.json','w').write(json.dumps(m,ensure_ascii=False,indent=2)+'\n')
+"
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "F4: ingest_after_sha256 不匹配返回非零"
+_grep "$out" "ingest_after_sha256 不匹配" "F4: 包含 hash 不匹配信息"
+
+# ── F5: review_overrides 仍然生效（amend 不改 record_id） ──
+echo ""
+echo "--- F5: amend 后 review_overrides 仍匹配 ---"
+t=$(_mk)
+mkdir -p "$t/data"
+cat > "$t/data/quick_lookup_draft.csv" <<'EOFCSV'
+source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes,source_block_id,table_id,row_index,parent_key,key_role
+demo20.pdf,demo20,引擎 / 性能,最大净功率,11.8 Kw,kg,14,14,test,medium,draft,html_table,html_table:1,1,1,,business_key
+EOFCSV
+cat > "$t/manifest.json" <<'EOFJSON'
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+EOFJSON
+touch "$t/test.md"
+# 首次生成 ingest（F5）
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+record_id=$(head -2 "$t/data/ingest_ready.csv" | tail -1 | cut -d',' -f1)
+# 创建 review_overrides.csv 将记录设为 approved
+cat > "$t/data/review_overrides.csv" <<EOFCSV
+record_id,review_status,notes
+$record_id,approved,F5 人工审核通过
+EOFCSV
+# 创建 fix_data amend 修正（F5）
+cat > "$t/data/manual_fixes.jsonl" <<EOFJSONL
+{"fix_id":"fix-amend-002","fix_type":"field_correction","review_action":"fix_data","status":"applied","pages":[14],"before":"x","after":"y","evidence":"z","target_record_id":"$record_id","target_field":"value","field_action":"amend","old_value":"11.8 Kw","new_value":"11.8 kW"}
+EOFJSONL
+# 重新运行（应用修正）
+"$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
+# 验证：修正后 ingest_status=not_ready（即使 review_overrides 已 approved）
+ingest_status=$(grep "$record_id" "$t/data/ingest_ready.csv" | cut -d',' -f13)
+review_status=$(grep "$record_id" "$t/data/ingest_ready.csv" | cut -d',' -f12)
+[[ "$review_status" == "approved" ]] && _pass "F5: review_overrides approved 仍然生效" || _fail "F5: review_status 被错误覆盖 (got=$review_status)"
+[[ "$ingest_status" == "not_ready" ]] && _pass "F5: 修正后强制 not_ready" || _fail "F5: ingest_status 未被修正强制 (got=$ingest_status)"
+_grep "$(grep "$record_id" "$t/data/ingest_ready.csv")" "data_corrected" "F5: notes 包含 data_corrected"
 
 # ── 汇总 ──
 echo ""

@@ -65,7 +65,7 @@ pdf-seg（必要时）
 - 原始 PDF、原始分段和格式化前 Markdown hash 已保留。
 - `pdf2md` 和 `pdf2md-fix` 技能均已可用。
 
-阶段边界：阶段 2 只修复 canonical Markdown、表格逻辑关系和人工修复记录；不生成 `key/value/unit/evidence_text` 等结构化字段补丁。结构化字段修正由阶段 3 处理，`fix_data` 在阶段 2 只作为预留动作，不执行。
+阶段边界：阶段 2 只修复 canonical Markdown、表格逻辑关系和人工修复记录；阶段 3 负责结构化字段修正（`key`/`value`/`unit`/`section_path`），通过 `fix_data` 条目在 `pdf-prepare-ingest` 内存视图中应用，不修改原始草案文件。详见 [plan: 阶段 3](docs/plans/pdf2md-fix-manual-workflow.md#阶段-3-结构化数据与入库审核衔接)。
 
 ## 核心工作流
 
@@ -216,7 +216,7 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 |---|---|
 | `fix_id` | 稳定修复 ID |
 | `fix_type` | `rebuild_table` / `fix_header` / `fill_content` / `cross_page_table` / `table_layout` / `missing_text` / `section_attribution` / `field_correction` / `image_ocr` |
-| `review_action` | `pass` / `fix_md` / `rerun` / `fix_data`（`fix_data` 阶段 3 预留） |
+| `review_action` | `pass` / `fix_md` / `rerun` / `fix_data`（`fix_data` 在阶段 3 应用，字段契约见 [plan: fix_data](docs/plans/pdf2md-fix-manual-workflow.md#1-fix_data-字段扩展)） |
 | `status` | `proposed` / `applied` / `verified` / `rejected` |
 | `pages` | 相关 PDF 页码列表 |
 | `source_refs` | segment、block_id、Markdown 行引用 |
