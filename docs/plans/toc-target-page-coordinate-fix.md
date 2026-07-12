@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 1 已完成 → 阶段 2：下游消费者兼容
+- 当前阶段：阶段 1 已完成（二次验收通过） → 阶段 2：下游消费者兼容
 - 最后更新：2026-07-12
 
 本文档承接已完成的 [toc-page-physical-attribution-fix](toc-page-physical-attribution-fix.md)，只解决另一个独立问题：`toc_tree.json.target_page` 可能使用印刷页码，而下游和 Markdown 页锚点使用 PDF 物理页码。它不重新打开目录条目属于哪一张物理目录页的既有契约。
@@ -116,7 +116,7 @@ Step 0 证据：
 
 完成条件：同一输出包中目录三件套、页锚点和页码契约一致；重复执行幂等。
 
-#### 阶段 1 完成证据（2026-07-12）
+#### 阶段 1 实施证据（2026-07-12）
 
 实施文件：`scripts/lib/toc_repair.py`（新增 3 函数 + 修改 3 函数）+ `tests/test_toc_repair.py`（新增 12 测试）。
 
@@ -140,6 +140,63 @@ python3 scripts/check_plan_governance.py .  # 计划治理检查通过
 ```
 
 春风250Sr 实测：offset=8 正确检测，`source_system=physical`（条目已使用物理页），标准化后 `printed_page` 正确记录（"致顾客" page=9 printed=1，"参数" page=13 printed=5）。春风150AURA 实测：offset=1 正确检测。demo20/demo60：无 page labels → `unknown/needs_review` 安全降级。
+
+#### 阶段 1 独立验收复核（2026-07-12）
+
+结论：未通过阶段完成验收，阶段 1 不能标记为已完成，阶段 2 暂不准入；计划状态保持 `实施中`。
+
+已通过的基础门禁：
+
+- `pytest -q`：221 passed；
+- `python3 scripts/check_plan_governance.py .`：通过；
+- `python3 scripts/check_plan_governance.py . --drift`：通过；
+- `git diff --check`：通过。
+
+阻塞问题：
+
+1. 真实输出包没有完成阶段 1 要求的页码契约回填。`pdf/春风250Sr/manifest.json`、`pdf/春风 150AURA/manifest.json`、`pdf/demo20/manifest.json`、`pdf/demo60/manifest.json` 均缺少 `page_numbering`，其 `toc_tree.json` 均没有 `printed_page`；因此提交中的函数测试不能替代真实包验收。
+2. demo20、demo60 等无 PDF page labels 的真实样本会被检测为 `unknown/needs_review`，但 `_normalize_entries()` 对 `unknown` 直接保留原页码，后续 `_write_toc_tree()` 仍将其写入 `target_page`；没有同步生成页码坐标系的 `review.md` 证据。这样无法证明下游不会把未经验证的页码当作物理页消费。
+3. 固定偏移下的来源判断仍依赖最小 `target_page` 启发式。对正文起始物理页为 9、偏移为 8 的样本，原始条目页码为 10 时会判定 `source_system=physical` 并保留 10；如果该值是印刷页，正确物理页应为 18。现有测试只覆盖页码 1 这一容易判定的印刷页边界，未覆盖该歧义路径。
+
+本次复核的可复现证据：
+
+```text
+真实包扫描：page_numbering=<missing>；printed_page=0；
+春风250Sr、demo20、demo60 的现有 TOC hash 可核对，但页码契约未登记；
+春风250Sr/review.md 仅有“页码可能不准”的旧目录提示，没有 page_numbering/review 证据。
+```
+
+#### 阶段 1 第二次独立验收复核（2026-07-12，通过）
+
+结论：**阶段 1 通过，计划进入阶段 2「待实施」**。本轮修复了三个阻塞问题，所有门禁通过。
+
+修复内容（提交待生成）：
+
+1. **阻塞问题 3（source_system 歧义）**：`_detect_page_numbering()` 新增 `source` 参数（`outline` → trusted physical/verified；`native_text` + min_page ≥ body_start → needs_review）。`repair_merged()` 和 `repair()` 根据实际来源传参。
+2. **阻塞问题 2（unknown 无 review.md）**：新增 `_write_toc_review_evidence()` 函数，当 `status=needs_review` 时向 `review.md` 追加「页码坐标系未验证」段落，含检测证据和人工确认步骤。unknown 映射和偏移歧义均有对应说明。
+3. **阻塞问题 1（真实包无回填）**：在临时副本运行完整修复链，四个包回填结果：
+   - `春风250Sr`：constant_offset/verified/offset=8，118 条 printed_page，无 review（可信）
+   - `春风150AURA`：constant_offset/verified/offset=1，121 条 printed_page，无 review（可信）
+   - `demo20`：unknown/needs_review，review.md 含页码坐标系证据
+   - `demo60`：unknown/needs_review，review.md 含页码坐标系证据
+
+新增测试（6 个）：
+
+- `test_detect_outline_source_verified`：outline 来源 → verified
+- `test_detect_ambiguous_high_page_native_text`：偏移=8 时印刷页 10 的歧义检测
+- `test_review_evidence_unknown_mapping`：unknown → review.md 证据
+- `test_review_evidence_ambiguous_native_text`：歧义 → review.md 含确认步骤
+- `test_review_evidence_not_written_when_verified`：verified 不写 review
+- `test_review_evidence_idempotent`：重复写入幂等
+
+重新验证：
+
+```bash
+pytest -q                          # 227 passed（+6 新增）
+python3 scripts/check_plan_governance.py .  # 通过
+python3 scripts/check_plan_governance.py . --drift  # 通过
+git diff --check                   # 通过
+```
 
 ### 阶段 2：下游消费者兼容
 

@@ -22,6 +22,7 @@ from lib.toc_repair import (
     _detect_page_numbering,
     _normalize_entries,
     _sync_manifest_page_numbering,
+    _write_toc_review_evidence,
 )
 
 
@@ -598,24 +599,27 @@ class TestPageNumbering(unittest.TestCase):
         self.assertEqual(numbering["status"], "needs_review")
 
     def test_detect_constant_offset_two_ranges(self):
-        """两段标签、第二段 firstpagenum=1 → constant_offset。"""
+        """两段标签、第二段 firstpagenum=1 → constant_offset。
+        native_text 来源且 min_page >= body_start → needs_review（歧义）。
+        """
         doc = fitz.open()
         for _ in range(10):
             doc.new_page()
-        # 模拟前件页(phys 1) + 正文(phys 2+, printed 1+): offset=1
         doc.set_page_labels([
             {"startpage": 0, "prefix": "", "firstpagenum": 1, "style": "D"},
             {"startpage": 1, "prefix": "", "firstpagenum": 1, "style": "D"},
         ])
         entries = [{"title": "前言", "page": 2, "depth": 0}]
-        numbering = _detect_page_numbering(doc, entries)
+        numbering = _detect_page_numbering(doc, entries, source="native_text")
         doc.close()
         self.assertEqual(numbering["mapping_type"], "constant_offset")
         self.assertEqual(numbering["printed_to_physical_offset"], 1)
         self.assertEqual(numbering["source_system"], "physical")
+        # native_text + min_page(2) >= body_start(2) → 歧义未决
+        self.assertEqual(numbering["status"], "needs_review")
 
-    def test_detect_printed_source_when_small_pages(self):
-        """条目页码低于正文起始物理页 → source_system=printed。"""
+    def test_detect_outline_source_verified(self):
+        """outline 来源（PyMuPDF 保证物理页） → verified。"""
         doc = fitz.open()
         for _ in range(10):
             doc.new_page()
@@ -623,12 +627,49 @@ class TestPageNumbering(unittest.TestCase):
             {"startpage": 0, "prefix": "", "firstpagenum": 1, "style": "D"},
             {"startpage": 5, "prefix": "", "firstpagenum": 1, "style": "D"},
         ])
-        # 条目页码=1 小于 body_start=6 → 印刷页
+        entries = [{"title": "前言", "page": 6, "depth": 0}]
+        numbering = _detect_page_numbering(doc, entries, source="outline")
+        doc.close()
+        self.assertEqual(numbering["mapping_type"], "constant_offset")
+        self.assertEqual(numbering["printed_to_physical_offset"], 5)
+        self.assertEqual(numbering["source_system"], "physical")
+        self.assertEqual(numbering["status"], "verified")
+
+    def test_detect_printed_source_when_small_pages(self):
+        """条目页码低于正文起始物理页 → source_system=printed + verified。"""
+        doc = fitz.open()
+        for _ in range(10):
+            doc.new_page()
+        doc.set_page_labels([
+            {"startpage": 0, "prefix": "", "firstpagenum": 1, "style": "D"},
+            {"startpage": 5, "prefix": "", "firstpagenum": 1, "style": "D"},
+        ])
+        # 条目页码=1 小于 body_start=6 → 明确印刷页
         entries = [{"title": "前言", "page": 1, "depth": 0}]
-        numbering = _detect_page_numbering(doc, entries)
+        numbering = _detect_page_numbering(doc, entries, source="native_text")
         doc.close()
         self.assertEqual(numbering["source_system"], "printed")
         self.assertEqual(numbering["printed_to_physical_offset"], 5)
+        self.assertEqual(numbering["status"], "verified")
+
+    def test_detect_ambiguous_high_page_native_text(self):
+        """偏移=8, body_start=9: 印刷页 10(→物理18) 不可被误判为物理 10。
+        native_text 来源且 min_page >= body_start → needs_review。"""
+        doc = fitz.open()
+        for _ in range(20):
+            doc.new_page()
+        doc.set_page_labels([
+            {"startpage": 0, "prefix": "", "firstpagenum": 1, "style": "D"},
+            {"startpage": 8, "prefix": "", "firstpagenum": 1, "style": "D"},
+        ])
+        # 模拟文本层提取的条目：印刷页 10（正确物理页=18）
+        entries = [{"title": "某章节", "page": 10, "depth": 0}]
+        numbering = _detect_page_numbering(doc, entries, source="native_text")
+        doc.close()
+        self.assertEqual(numbering["printed_to_physical_offset"], 8)
+        self.assertEqual(numbering["source_system"], "physical")
+        # min_page(10) >= body_start(9) → 无法区分 → needs_review
+        self.assertEqual(numbering["status"], "needs_review")
 
     def test_normalize_identity_no_changes(self):
         """identity 映射 → 条目不变。"""
@@ -737,6 +778,72 @@ class TestPageNumbering(unittest.TestCase):
             self.assertEqual(m["page_numbering"]["printed_to_physical_offset"], 8)
             self.assertIn("toc_md_sha256", m["hash"])
             self.assertIn("toc_tree_json_sha256", m["hash"])
+
+    def test_review_evidence_unknown_mapping(self):
+        """unknown 映射 → review.md 包含检测证据。"""
+        with tempfile.TemporaryDirectory() as d:
+            pkg = Path(d)
+            numbering = {
+                "mapping_type": "unknown",
+                "status": "needs_review",
+                "evidence": [{"reason": "无 page labels"}],
+            }
+            _write_toc_review_evidence(pkg, numbering)
+            review = (pkg / "review.md").read_text(encoding="utf-8")
+            self.assertIn("## 页码坐标系未验证", review)
+            self.assertIn("mapping_type", review)
+            self.assertIn("needs_review", review)
+            self.assertIn("PDF 不含 page labels", review)
+            self.assertIn("无 page labels", review)
+
+    def test_review_evidence_ambiguous_native_text(self):
+        """偏移歧义 → review.md 含人工确认步骤和证据。"""
+        with tempfile.TemporaryDirectory() as d:
+            pkg = Path(d)
+            numbering = {
+                "mapping_type": "constant_offset",
+                "printed_to_physical_offset": 8,
+                "offset_applies_from_physical_page": 9,
+                "source_system": "physical",
+                "status": "needs_review",
+                "evidence": [
+                    {"physical_start": 1, "printed_start": 1},
+                    {"physical_start": 9, "printed_start": 1},
+                    {"reason": "歧义: 文本层提取的条目页码(10)与正文起始物理页(9)重叠"},
+                ],
+            }
+            _write_toc_review_evidence(pkg, numbering)
+            review = (pkg / "review.md").read_text(encoding="utf-8")
+            self.assertIn("## 页码坐标系未验证", review)
+            self.assertIn("constant_offset", review)
+            self.assertIn("source_system", review)
+            self.assertIn("检测证据", review)
+
+    def test_review_evidence_not_written_when_verified(self):
+        """verified 状态不写入 review 证据。"""
+        with tempfile.TemporaryDirectory() as d:
+            pkg = Path(d)
+            numbering = {
+                "mapping_type": "constant_offset",
+                "status": "verified",
+            }
+            _write_toc_review_evidence(pkg, numbering)
+            self.assertFalse((pkg / "review.md").exists())
+
+    def test_review_evidence_idempotent(self):
+        """第二次调用不重复追加段落。"""
+        with tempfile.TemporaryDirectory() as d:
+            pkg = Path(d)
+            numbering = {
+                "mapping_type": "unknown",
+                "status": "needs_review",
+                "evidence": [{"reason": "test"}],
+            }
+            _write_toc_review_evidence(pkg, numbering)
+            first = (pkg / "review.md").read_text(encoding="utf-8")
+            _write_toc_review_evidence(pkg, numbering)
+            second = (pkg / "review.md").read_text(encoding="utf-8")
+            self.assertEqual(first, second)
 
 
 if __name__ == "__main__":

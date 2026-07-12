@@ -270,7 +270,8 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     assigned = _ordered_assigned_entries(by_page, toc_page_nums)
 
     # ── 页码坐标系检测与标准化 ──
-    numbering = _detect_page_numbering(doc, assigned)
+    detect_source = "outline" if source == "PDF 内置大纲" else "native_text"
+    numbering = _detect_page_numbering(doc, assigned, detect_source)
     _normalize_entries(assigned, numbering)
     # 同步更新 by_page 中对应条目的 page 值（_normalize_entries 原地修改 assigned，
     # 但 by_page 中的条目对象与 assigned 是同一引用，所以已同步）
@@ -316,6 +317,7 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     _write_toc_tree(merged_md_path.parent, assigned)
     _write_toc_md(merged_md_path.parent, assigned)
     _sync_manifest_page_numbering(merged_md_path.parent, numbering)
+    _write_toc_review_evidence(merged_md_path.parent, numbering)
 
     # 无法唯一归属的条目已从三种目录产物排除，持久化到 validate 报告供 review.md
     # 展示（可见性）：让用户知道有条目未能归属，而非静默丢弃
@@ -421,12 +423,16 @@ def _write_toc_tree(pkg_root: Path, entries: list[dict]):
 
 # ── 页码坐标系检测与标准化 ─────────────────────────────────────────
 
-def _detect_page_numbering(doc, entries: list[dict]) -> dict:
+def _detect_page_numbering(doc, entries: list[dict], source: str = "native_text") -> dict:
     """检测印刷页与 PDF 物理页的映射关系。
 
     优先级：
     1. PDF page labels（PyMuPDF）→ 直接推导映射
-    2. 启发式比较 → 比较最低 target_page 与正文起始物理页
+    2. 条目来源（outline 可靠 / native_text 需验证）→ 决定置信度
+
+    source 参数：
+    - "outline"：PyMuPDF get_toc() 保证返回物理页，可信任
+    - "native_text"：文本层提取，页码可能是印刷页或物理页
 
     返回 page_numbering 块，可直接写入 manifest。
     """
@@ -481,31 +487,47 @@ def _detect_page_numbering(doc, entries: list[dict]) -> dict:
                 "evidence": ranges,
             }
 
+        body_start = ranges[1]["physical_start"]
+
         # 判断 TOC 条目当前使用的是物理页还是印刷页
-        # 启发式：比较最低条目 page 与正文起始物理页。
-        # - 最低 page >= body_start → 条目已使用物理页（PyMuPDF get_toc 的行为）
-        # - 最低 page < body_start → 条目使用印刷页（文本层提取时可能发生）
-        if entries:
+        if source == "outline":
+            # PyMuPDF get_toc() 保证返回物理页码 → 可信任
+            source_system = "physical"
+            status = "verified"
+        elif entries:
             pages = sorted({e["page"] for e in entries})
             min_page = pages[0]
-            body_start = ranges[1]["physical_start"]
 
-            if min_page >= body_start:
-                source_system = "physical"
-            else:
-                # TOC 页码低于正文起始物理页 → 条目使用印刷页
+            if min_page < body_start:
+                # TOC 页码低于正文起始物理页 → 明确使用印刷页
                 source_system = "printed"
+                status = "verified"
+            else:
+                # min_page >= body_start：无法区分是物理页还是印刷页
+                # 例如 body_start=9, offset=8 时，page=10 可能是
+                #   物理页 10，也可能是印刷页 10(→物理 18)
+                # 文本层提取无外部信源 → 标记歧义，进入 review
+                source_system = "physical"
+                status = "needs_review"
+                ranges.append({
+                    "reason": (
+                        f"文本层提取的条目页码({min_page})与正文起始物理页"
+                        f"({body_start})重叠，无法自动判断是物理页还是印刷页"
+                        f"(偏移={offset})。需人工确认后选择 source_system。"
+                    )
+                })
         else:
             source_system = "physical"
+            status = "proposed"
 
         return {
             "physical_page_basis": "pdf_1_based",
             "printed_page_basis": "content_start_at_1",
             "mapping_type": "constant_offset",
             "printed_to_physical_offset": offset,
-            "offset_applies_from_physical_page": ranges[1]["physical_start"],
+            "offset_applies_from_physical_page": body_start,
             "source_system": source_system,
-            "status": "verified" if offset > 0 else "proposed",
+            "status": status,
             "evidence": ranges,
         }
 
@@ -611,6 +633,98 @@ def _sync_manifest_page_numbering(pkg_root: Path, numbering: dict):
     )
 
 
+def _write_toc_review_evidence(pkg_root: Path, numbering: dict):
+    """当页码映射 needs_review 时，向 review.md 追加页码坐标系证据。
+
+    不覆盖已有 review.md，只追加页码相关段落。
+    """
+    mapping_type = numbering.get("mapping_type", "unknown")
+    status = numbering.get("status", "needs_review")
+
+    if status != "needs_review":
+        return
+
+    review_path = pkg_root / "review.md"
+    existing = ""
+    if review_path.exists():
+        existing = review_path.read_text(encoding="utf-8")
+
+    # 构造页码坐标系 review 段落
+    lines = []
+    if "## 页码坐标系未验证" not in existing:
+        lines.append("")
+        lines.append("## 页码坐标系未验证")
+        lines.append("")
+    else:
+        # 该段落已存在则跳过
+        return
+
+    lines.append(
+        f"**mapping_type**: `{mapping_type}` | **status**: `{status}`"
+    )
+    lines.append("")
+
+    if mapping_type == "unknown":
+        lines.append(
+            "PDF 不含 page labels，无法自动检测印刷页与物理页的映射关系。"
+        )
+        lines.append(
+            "`toc_tree.json.target_page` 当前保留原始提取页码，"
+            "**未经验证的页码不得作为物理页消费**。"
+        )
+        lines.append("")
+        lines.append("**人工确认步骤**：")
+        lines.append("")
+        lines.append("1. 确认 PDF 正文第 1 页的印刷页码（通常为 1）和对应的 PDF 物理页码。")
+        lines.append("2. 计算偏移：`物理页 - 印刷页`。")
+        lines.append(
+            "3. 在 `manifest.json` 的 `page_numbering` 中设置正确的"
+            " `mapping_type`、`printed_to_physical_offset` 和 `status: verified`。"
+        )
+        lines.append(
+            "4. 重新运行 `repair_merged` 以标准化 `toc_tree.json` 的 `target_page`。"
+        )
+    else:
+        offset = numbering.get("printed_to_physical_offset", 0)
+        body_start = numbering.get("offset_applies_from_physical_page", 0)
+        lines.append(
+            f"检测到偏移 `printed_to_physical_offset={offset}`，"
+            f"正文起始物理页 `{body_start}`，"
+            f"但 TOC 条目来源为文本层提取，"
+            f"无法自动判断原始页码是物理页还是印刷页。"
+        )
+        lines.append("")
+        lines.append("**人工确认步骤**：")
+        lines.append("")
+        lines.append(
+            "1. 检查 `toc_tree.json` 中最低 `target_page` 对应的 PDF 页面内容，"
+            "确认该页码是物理页还是印刷页。"
+        )
+        lines.append(
+            "2. 在 `manifest.json` 的 `page_numbering` 中设置 `source_system`"
+            " 为 `physical` 或 `printed`，并将 `status` 改为 `verified`。"
+        )
+        lines.append(
+            "3. 如 `source_system=printed`，重新运行 `repair_merged`"
+            " 以将 `target_page` 转为物理页。"
+        )
+
+    lines.append("")
+    evidence = numbering.get("evidence", [])
+    if evidence:
+        lines.append("<details>")
+        lines.append("<summary>检测证据</summary>")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(evidence, ensure_ascii=False, indent=2))
+        lines.append("```")
+        lines.append("</details>")
+        lines.append("")
+
+    new_content = existing.rstrip() + "\n" + "\n".join(lines) + "\n"
+    review_path.write_text(new_content, encoding="utf-8")
+
+
 # ── 主入口 ─────────────────────────────────────────────────────────
 
 def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
@@ -664,7 +778,8 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
         tree_entries = entries
 
     # ── 页码坐标系检测与标准化 ──
-    numbering = _detect_page_numbering(doc, tree_entries)
+    detect_source = "outline" if source == "PDF 内置大纲" else "native_text"
+    numbering = _detect_page_numbering(doc, tree_entries, detect_source)
     _normalize_entries(tree_entries, numbering)
 
     # 写回纯 TOC 段的 Markdown（每段只写归属该段物理页的条目，避免整本目录重复；
@@ -698,6 +813,7 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
     # 写入 toc_tree.json（已归属有序条目，与段级/合并级目录一致）
     _write_toc_tree(segments_dir.parent, tree_entries)
     _sync_manifest_page_numbering(segments_dir.parent, numbering)
+    _write_toc_review_evidence(segments_dir.parent, numbering)
 
     print(f"  {fixed} 个 TOC 段: {len(tree_entries)} 条目（{_depth_distribution(tree_entries)}），来源: {source}", file=sys.stderr)
     doc.close()
