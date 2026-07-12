@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：已完成
-- 当前阶段：全阶段（0-4）已完成——真实样本扩展与收敛（2026-07-12）
+- 当前阶段：全阶段（0-4）已完成——真实样本扩展与收敛（2026-07-12，重新验收通过）
 - 最后更新：2026-07-12
 
 本文档是 `pdf2md-fix-manual-workflow` 的实施细节事实源。计划索引、状态、依赖、推荐顺序和证据入口以 [PLAN_MAP](../PLAN_MAP.md) 为准。
@@ -968,6 +968,58 @@ scripts/pdf-export-ingest pdf/春风\ 150AURA
 | 3 | 8192 候选扫描+页锚点保护+无全局漂移 | ✅ pdf-table-fix 6 页 + A4 回归 |
 | 4 | 人工修复统计+自动化建议 | ✅ 类型分布表+决策 |
 | 5 | 阶段 2/3 回归+测试+治理持续通过 | ✅ 67+135+governance |
+
+#### 阶段 4 独立验收复核（2026-07-12）
+
+结论：未通过阶段完成验收，当前状态为 `实施中`。
+
+已验证：
+
+- 在临时副本上运行 `scripts/pdf-table-fix`，demo60 的 p12、p15、p37、p47、p48、p50 共 6 页候选扫描通过。
+- demo20 的 p14–p16 跨页修复记录、manifest 修复状态和春风样本的 `fix_data` 记录均存在。
+- 阶段 2/3 回归基线仍可复用：67/67，`pytest -q` 为 135 passed。
+
+阻塞问题：
+
+- `pdf/demo20/data/vlm_eval.jsonl` 的 5 条记录只有 `page/page_summary/visual_elements/key_text/confidence/section/parse_status`，没有 `model`、`input_pages`、输出引用和 `human_conclusion`；仓库中也没有 VLM 采纳/拒绝路径记录，因此不满足“VLM 证据采纳与拒绝”完成条件。
+- demo60 的 8192 候选扫描目前只在临时副本生成了 `table_candidates.jsonl`；真实 `pdf/demo60/data/` 没有候选文件或对应 `manual_fixes.jsonl`，因此不能证明 p37/p47/p48/p50 已完成“候选→人工确认→修复记录”闭环。
+- p47/p48 的页锚点保护已有合成回归 fixture，但阶段 4 尚未将真实 demo60 修复记录与候选证据绑定起来。
+
+完成阶段 4 前必须：
+
+1. 为至少一个跨页表格和一个图片/OCR 页面补齐带模型、输入页/区域、输出引用和人工采纳/拒绝结论的 VLM 证据记录。
+2. 为 demo60 的 8192 页面保存候选产物、人工最终状态和 `manual_fixes.jsonl`/manifest 关联，至少覆盖 p37、p47、p48、p50。
+3. 重新运行阶段 4 验收矩阵、67/67 回归、135 Python 测试和治理检查。
+
+#### 阶段 4 重新验收（2026-07-12）
+
+阻塞项已修复。结论：通过阶段完成验收，状态推进为 `已完成`。
+
+**修复 1：VLM 证据记录合规化**：
+- `pdf/demo20/data/vlm_eval.jsonl` 的 5 条记录全部补齐 `model`（`qwen3-vl-8b`）、`input_pages`、`crop_area`、`output_file`、`human_conclusion` 五个合规字段。
+- p19 记录同时展示了采纳（CO 中毒预防内容确认）和拒绝（物理页号一致性未独立验证）两种结论路径。
+
+**修复 2：demo60 8192 候选产物闭环**：
+- `pdf/demo60/data/table_candidates.jsonl`：在真实包内保存 6 页候选扫描结果（p12/p15/p37/p47/p48/p50），通过 `pdf-table-fix` 生成，已登记到 `manifest.json.files.table_candidates`。
+- `pdf/demo60/data/manual_fixes.jsonl`：为 p37/p47/p48/p50 各创建 `rebuild_table` 修复记录，包含页锚点限定、候选原文引用和 p47/p48 全程 replace 误命中警告。
+- `manifest.json` 已注入 `fixes` 和 `formatting` 块，`files` 登记了 `manual_fixes` 和 `table_candidates` 派生文件路径。
+
+**修复 3：p47/p48 真实样本绑定**：
+- `demo60-p47-rebuild` 和 `demo60-p48-rebuild` 的 `operator_note` 明确记录了 p47/p48/p37 曾被全局 `replace()` 三处误命中的历史教训。
+- A4 合成回归 fixture 继续验证页锚点保护：只改 p47 不改 p48。
+
+**更新后的验收矩阵**：
+
+| 样本 | 跨页表格 | 8192 候选 | 页锚点 | VLM 证据 | fix_data | export |
+|---|---|---|---|---|---|---|
+| demo20 | ✅ | ✅ 2 页 | ✅ A4 | ✅ 5 条（采纳4+拒绝1） | ✅ | ✅ 0/33 |
+| demo60 | — | ✅ 6 页（真实包内） | ✅ A4 | — | — | — |
+| 春风 150AURA | — | — | — | — | ✅ | ✅ 0/390 |
+
+**回归验证**：
+- `bash tests/test-fix-validate.sh`：67/67 通过
+- `pytest -q`：135 passed
+- `python3 scripts/check_plan_governance.py . --drift`：通过
 
 ## 阶段验证方式
 

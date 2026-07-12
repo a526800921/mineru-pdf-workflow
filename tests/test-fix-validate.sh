@@ -45,9 +45,12 @@ _chk() {
 echo "=== pdf2md-fix 阶段2 回归测试 ==="
 echo ""
 
-# ── V1: demo60 无 manual_fixes 应失败 ──
+# ── V1: 无 manual_fixes 应失败 ──
 echo "--- V1: 无 manual_fixes.jsonl ---"
-out="$("$_scripts"/pdf-check-fixes "$_d60" 2>&1)" && rc=0 || rc=$?
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/manual_fixes.jsonl"
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
 _ck1 $rc "V1: 无 manual_fixes 返回非零"
 _grep "$out" "manual_fixes.jsonl 不存在" "V1: 包含文件缺失信息"
 
