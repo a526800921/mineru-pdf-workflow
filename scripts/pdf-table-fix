@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""pdf2md-fix 8192 空列候选扫描工具。
+"""pdf2md-fix 表格异常候选扫描工具。
 
-从 manifest.json.page_fallback 筛选 excessive_empty_td / excessive_columns 页，
-用 PyMuPDF 提取页级原生文本，输出候选摘要到 data/table_candidates.jsonl。
+从 manifest.json.page_fallback 筛选 excessive_empty_td / excessive_columns /
+native_table_text_missing / volume_inflation / text_coverage_low 页，
+用 PyMuPDF 提取页级原生文本，输出候选摘要到 data/table_candidates.jsonl，
+并原子同步 manifest 的路径与 hash。
 
 不自动修复，所有候选标记 needs_human。
 
@@ -10,9 +12,10 @@
   scripts/pdf-table-fix <package_dir>
 
 输出:
-  data/table_candidates.jsonl   ← 候选记录，每行一个 JSON 对象
+  data/table_candidates.jsonl   ← 候选记录，每行一个 JSON 对象（schema v2）
 """
 
+import hashlib
 import json
 import re
 import sys
@@ -24,9 +27,24 @@ except ImportError:
     print("错误：需要 PyMuPDF (fitz)，请 pip install PyMuPDF", file=sys.stderr)
     sys.exit(1)
 
-# ── 信号阈值（与 page_quality.py 保持一致） ──
-EMPTY_TD_THRESHOLD = 100
-MAX_TD_PER_ROW_THRESHOLD = 20
+# 导入 table_eval（与 pdf-check-fixes 同模式）
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+try:
+    from table_eval import parse_table_html
+except ImportError:
+    parse_table_html = None  # 降级：不阻断扫描，table_stats 为 None
+
+# ── 常量 ──
+SCHEMA_VERSION = 2
+
+# 扫描的信号类型（与 page_quality.py 的 assess_page_quality 一致）
+_INTERESTING_SIGNALS = frozenset({
+    "excessive_empty_td",
+    "excessive_columns",
+    "native_table_text_missing",
+    "volume_inflation",
+    "text_coverage_low",
+})
 
 
 def _get_pdf_path(pkg_dir: Path, manifest: dict) -> Path | None:
@@ -102,6 +120,110 @@ def _extract_page_native_text(pdf_path: Path, page_num: int) -> str:
         return f"【PyMuPDF 错误】{e}"
 
 
+# ── 新辅助函数（阶段 1） ─────────────────────────────────
+
+
+def _compute_page_anchor(page_num: int) -> str:
+    """返回页锚点字符串，匹配 canonical Markdown 格式。"""
+    return f"<!-- pages {page_num}-{page_num} -->"
+
+
+def _build_candidate_id(package_name: str, page_num: int) -> str:
+    """生成稳定的候选 ID。"""
+    return f"{package_name}_p{page_num:04d}"
+
+
+def _compute_table_stats(html: str) -> dict | None:
+    """对 HTML 表格字符串运行 parse_html_table，返回结构指标或 None。"""
+    if not html or parse_table_html is None:
+        return None
+    try:
+        return parse_table_html(html)
+    except Exception:
+        return None
+
+
+def _determine_candidate_type(signals: list[str]) -> tuple[str, bool]:
+    """根据信号列表返回 (candidate_type, layout_or_visual_needs_review)。
+
+    分类规则：
+    - native_table_text_missing 优先 → "native_missing"
+    - 仅有 excessive_empty_td/excessive_columns → "structural"
+    - 仅有 text_coverage_low/volume_inflation → "text_omission"
+    - 组合 → "mixed"
+    - layout_or_visual_needs_review: volume_inflation 或 text_coverage_low 出现时为 True
+    """
+    sig_set = frozenset(signals)
+    has_native = "native_table_text_missing" in sig_set
+    has_structural = bool({"excessive_empty_td", "excessive_columns"} & sig_set)
+    has_text = bool({"volume_inflation", "text_coverage_low"} & sig_set)
+    layout = has_text
+
+    if has_native and has_structural:
+        ctype = "mixed"
+    elif has_native:
+        ctype = "native_missing"
+    elif has_structural and has_text:
+        ctype = "mixed"
+    elif has_structural:
+        ctype = "structural"
+    elif has_text:
+        ctype = "text_omission"
+    else:
+        ctype = "unknown"
+
+    return ctype, layout
+
+
+def _extract_original_metrics(fb_entry: dict) -> dict:
+    """从 page_fallback 条目提取 original_metrics 子集。"""
+    metrics = fb_entry.get("original_metrics", {})
+    if not isinstance(metrics, dict):
+        metrics = {}
+    return {
+        "empty_td": metrics.get("empty_td", 0),
+        "max_td_per_row": metrics.get("max_td_per_row", 0),
+        "md_bytes": metrics.get("md_bytes", 0),
+        "pdf_bytes": metrics.get("pdf_bytes", 0),
+        "text_coverage": metrics.get("text_coverage", 1.0),
+        "pdf_tokens": metrics.get("pdf_tokens", 0),
+    }
+
+
+def _extract_missing_text(fb_entry: dict) -> list[str]:
+    """从 page_fallback 条目提取 missing_text 列表。"""
+    metrics = fb_entry.get("original_metrics", {})
+    if not isinstance(metrics, dict):
+        return []
+    missing = metrics.get("missing_text", [])
+    if isinstance(missing, list):
+        return missing
+    return []
+
+
+def _compute_source_info(pkg_dir: Path, manifest: dict) -> dict:
+    """计算候选来源信息：PDF 文件名和 canonical Markdown SHA-256。"""
+    pdf_rel = manifest.get("files", {}).get("pdf") or ""
+    md_rel = manifest.get("files", {}).get("markdown")
+    markdown_sha256 = ""
+    if md_rel:
+        md_path = pkg_dir / md_rel
+        if md_path.exists():
+            markdown_sha256 = _hash_file(md_path)
+    return {
+        "pdf": pdf_rel,
+        "markdown_sha256": markdown_sha256,
+    }
+
+
+def _hash_file(path: Path) -> str:
+    """计算文件 SHA-256 hex。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# ── 主扫描 ─────────────────────────────────────────────
+
+
 def scan_candidates(pkg_dir: Path) -> list[dict]:
     """扫描 package，返回候选页列表。"""
     manifest_path = pkg_dir / "manifest.json"
@@ -122,28 +244,33 @@ def scan_candidates(pkg_dir: Path) -> list[dict]:
 
     candidates = []
 
+    pkg_name = pkg_dir.name
+    source_info = _compute_source_info(pkg_dir, manifest)
+
     for page_str, fb_entry in sorted(page_fallback.items(),
                                      key=lambda x: int(x[0])):
         signals = fb_entry.get("quality_signals", [])
         if not signals:
             continue
 
-        # 筛选 excessive_empty_td 或 excessive_columns
-        has_empty_td = "excessive_empty_td" in signals
-        has_excess_cols = "excessive_columns" in signals
-
-        if not has_empty_td and not has_excess_cols:
+        # 筛选所有关注的信号类型
+        page_signals = [s for s in signals if s in _INTERESTING_SIGNALS]
+        if not page_signals:
             continue
 
         page_num = int(page_str)
 
-        # 获取 metrics 中的具体数值
-        metrics = fb_entry.get("original_metrics", {})
-        empty_td = metrics.get("empty_td", 0)
-        max_td = metrics.get("max_td_per_row", 0)
+        # 仅 text_coverage_low/volume_inflation（无表格信号）时，
+        # 需要页面实际包含 HTML 表格才算候选，避免 TOC/纯文本页噪音
+        has_table_signal = bool(
+            {"excessive_empty_td", "excessive_columns",
+             "native_table_text_missing"} & frozenset(signals)
+        )
 
-        # 读 HTML 候选
+        # 读 HTML 候选（table-signal 无时作为过滤条件，同时也作为 evidence）
         original_html = _find_fallback_html(pkg_dir, page_num, fb_entry)
+        if not has_table_signal and not original_html:
+            continue
 
         # 如果 selected=fallback，也尝试读 fallback HTML
         fallback_html = None
@@ -157,16 +284,31 @@ def scan_candidates(pkg_dir: Path) -> list[dict]:
         # PyMuPDF 提取原生文本
         native_text = _extract_page_native_text(pdf_path, page_num)
 
+        # 新字段计算
+        candidate_type, layout_flag = _determine_candidate_type(signals)
+        table_stats = _compute_table_stats(original_html or "")
+        orig_metrics = _extract_original_metrics(fb_entry)
+        missing_text = _extract_missing_text(fb_entry)
+        segment = fb_entry.get("original_path", "").rstrip("/")
+
         candidate = {
+            "schema_version": SCHEMA_VERSION,
+            "candidate_id": _build_candidate_id(pkg_name, page_num),
             "page": page_num,
+            "page_anchor": _compute_page_anchor(page_num),
+            "segment": segment,
             "signals": signals,
+            "candidate_type": candidate_type,
+            "layout_or_visual_needs_review": layout_flag,
             "has_fallback": fb_entry.get("fb_status") == "completed",
             "fallback_selected": fb_entry.get("selected", "unknown"),
-            "empty_td": empty_td,
-            "max_td_per_row": max_td,
+            "table_stats": table_stats,
+            "original_metrics": orig_metrics,
+            "missing_text": missing_text,
             "original_html": original_html or "",
             "fallback_html": fallback_html or "",
             "pdf_text": native_text,
+            "source": source_info,
             "needs_human": True,
         }
         candidates.append(candidate)
@@ -174,12 +316,56 @@ def scan_candidates(pkg_dir: Path) -> list[dict]:
     return candidates
 
 
-def write_candidates_jsonl(candidates: list[dict], output_path: Path) -> None:
-    """写入候选记录到 JSONL。"""
+def write_candidates_jsonl(candidates: list[dict], output_path: Path) -> Path | None:
+    """写入候选记录到 JSONL 临时文件，返回临时文件路径。
+
+    调用方负责：rename 到最终路径，并调用 _sync_manifest。
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
         for c in candidates:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
+    return tmp_path
+
+
+def _sync_manifest(pkg_dir: Path, candidates_relative: str,
+                   tmp_candidates_path: Path,
+                   final_candidates_path: Path) -> None:
+    """原子更新 manifest：登记 table_candidates 路径和 hash。
+
+    步骤：读取 manifest → 更新字段 → 写 .tmp → rename manifest →
+    rename candidates。任一步失败即清理临时文件。
+    """
+    manifest_path = pkg_dir / "manifest.json"
+    tmp_manifest_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+
+    try:
+        # 1. 计算候选文件 hash
+        candidates_hash = _hash_file(tmp_candidates_path)
+
+        # 2. 读取并更新 manifest
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.setdefault("files", {})["table_candidates"] = candidates_relative
+        manifest.setdefault("hash", {})["table_candidates_sha256"] = candidates_hash
+
+        # 3. 写 manifest 临时文件
+        tmp_manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        # 4. 原子 rename：先 candidates，再 manifest
+        #    当前者失败时 manifest 不变；后者失败时 candidates 已就位可重试
+        tmp_candidates_path.rename(final_candidates_path)
+        tmp_manifest_path.rename(manifest_path)
+
+    except Exception:
+        # 清理所有临时文件
+        for p in (tmp_manifest_path, tmp_candidates_path):
+            if p.exists():
+                p.unlink(missing_ok=True)
+        raise
 
 
 def main() -> None:
@@ -195,23 +381,33 @@ def main() -> None:
     candidates = scan_candidates(pkg_dir)
 
     if not candidates:
-        print("信息：未发现需扫描的候选页（无 excessive_empty_td/excessive_columns 信号）",
+        print("信息：未发现需扫描的候选页"
+              "（无 excessive_empty_td / excessive_columns /"
+              " native_table_text_missing / text_coverage_low / volume_inflation 信号）",
               file=sys.stderr)
         sys.exit(0)
 
-    # 输出到 data/table_candidates.jsonl
+    # 输出到 data/table_candidates.jsonl（先写 .tmp，再原子 rename + 同步 manifest）
     output_path = pkg_dir / "data" / "table_candidates.jsonl"
-    write_candidates_jsonl(candidates, output_path)
+    tmp_path = write_candidates_jsonl(candidates, output_path)
+    _sync_manifest(pkg_dir, "data/table_candidates.jsonl", tmp_path, output_path)
 
-    # 同时输出摘要到 stdout
-    print(f"候选扫描完成：{len(candidates)} 页", file=sys.stderr)
+    # 同时输出摘要到 stderr
+    type_counts: dict[str, int] = {}
+    for c in candidates:
+        ct = c.get("candidate_type", "unknown")
+        type_counts[ct] = type_counts.get(ct, 0) + 1
+    print(f"候选扫描完成：{len(candidates)} 页"
+          f"（{', '.join(f'{k}:{v}' for k, v in sorted(type_counts.items()))}）",
+          file=sys.stderr)
     for c in candidates:
         sigs = ", ".join(c["signals"])
+        ct = c.get("candidate_type", "?")
         text_preview = c["pdf_text"][:80].replace("\n", " ").strip()
-        print(f"  page {c['page']}: {sigs} | empty_td={c['empty_td']} "
-              f"| 文本: {text_preview}...", file=sys.stderr)
+        print(f"  page {c['page']} [{ct}]: {sigs}"
+              f" | 文本: {text_preview}...", file=sys.stderr)
 
-    # JSON 模式下输出候选计数到 stdout
+    # JSON 输出到 stdout
     print(json.dumps({"status": "completed", "candidate_count": len(candidates),
                        "output": str(output_path)}))
 

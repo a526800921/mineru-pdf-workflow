@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：候选
-- 当前阶段：阶段 0：审计范围与候选契约冻结
+- 状态：实施中
+- 当前阶段：阶段 1 已完成 — 阶段 2：skill 与人工/VLM流程同步
 - 最后更新：2026-07-12
 
 本文档是“表格异常自动发现”增量能力的事实源。它承接 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新定义人工修复、页级表格重建、VLM 或 HTML pretty-print 契约；页级表格重建另见 [pdf-table-repair](pdf-table-repair.md)。
@@ -76,7 +76,7 @@ manifest 至少登记：
 
 ### 阶段 0：审计边界与 Step 0 复现
 
-状态：设计中。
+状态：已完成准入审计。
 
 1. 在当前仓库确认 `pdf-table-fix` 的现有输入、输出和只读边界。
 2. 用至少一个已有 `page_fallback` 包复现 8192 候选扫描，并检查候选文件与 manifest 登记是否一致。
@@ -84,6 +84,38 @@ manifest 至少登记：
 4. 冻结候选 JSONL 字段、来源 hash、manifest 登记和失败回滚规则。
 
 准入条件：有可运行的候选扫描 fixture、候选记录 schema、manifest 路径/hash 契约和人工/VLM信任边界；未满足前不扩展代码和 skill。
+
+#### 阶段 0 审计复核（2026-07-12）
+
+结论：Step 0 证据已取得，阶段 1 达到 `待实施` 标准；本次不实施代码。
+
+在三个真实包的临时副本运行现有 `scripts/pdf-table-fix`，原始包未修改：
+
+| 包 | HTML 表格 | 现有候选页 | `native_table_text_missing` 等质量信号页 | 草案行 |
+|---|---:|---|---:|---:|
+| 春风250Sr | 87 | p11、p87、p90、p94（4页） | 29 | 172 |
+| demo20 | 11 | p12、p15（2页） | 4 | 20 |
+| demo60 | 29 | p12、p15、p37、p47、p48、p50（6页） | 15 | 115 |
+
+已确认的能力：
+
+- 现有 helper 能读取 `manifest.page_fallback`，提取 PDF 原生文本，并生成 `needs_human` 候选 JSONL。
+- demo60 当前已有 `files.table_candidates` 登记；p37/p47/p48/p50 候选与人工修复记录可关联。
+- demo20 p15 的 8192 候选和春风 p90 的 16292 空单元格均可复现。
+
+当前阻塞：
+
+1. 现有 helper 只筛选 `excessive_empty_td`/`excessive_columns`，不能覆盖 `native_table_text_missing` 等质量信号；三个包的质量信号页明显多于候选页。
+2. helper 写出 `data/table_candidates.jsonl` 后不自动更新 manifest；临时复核中春风250Sr和demo20生成了候选文件，但 `manifest.files.table_candidates` 仍为空，候选来源契约不完整。
+3. 当前候选 schema 缺少稳定 `candidate_id`、页锚点、segment 来源和候选文件 hash 的统一约束，暂不能作为下游公共契约。
+
+阶段 1 的实施范围已冻结：扩展现有 helper，补齐三类信号、候选 schema、manifest 原子登记和失败回滚；不新增重复入口，不修改 Markdown。
+
+用户确认（2026-07-12）：纳入 `excessive_empty_td`、`excessive_columns`、`native_table_text_missing` 三类信号；候选自动登记 manifest；布局/图片类标记 `layout_or_visual_needs_review`；审计阶段不修改 Markdown，所有候选默认 `needs_human`。
+
+#### 阶段 1 准入条件（2026-07-12）
+
+阶段 1 准入条件：Step 0 三包临时副本复现、候选字段方向、manifest 路径/hash 契约、人工/VLM边界和失败回滚边界均已明确；现有 helper 的信号覆盖与 manifest 登记缺口作为待实施工作项，不构成准入阻塞。
 
 ### 阶段 1：扩展现有候选扫描器
 
@@ -94,6 +126,26 @@ manifest 至少登记：
 5. 增加 malformed manifest、缺失 PDF、无候选、重复页锚点和候选写入失败的回归测试。
 
 完成条件：在临时包和至少两个真实输出包上，候选记录可复现、来源可追溯、manifest 可验证，且 canonical Markdown 与原始 segments 未被修改。
+
+#### 阶段 1 完成证据（2026-07-12）
+
+三包临时副本验收结果：
+
+| 包 | 候选数 | 类型分布 | md 未修改 | segments 未修改 | check-fixes 通过 |
+|---|---|---|---|---|---|
+| demo20 | 4 | mixed:2, native_missing:2 | ✅ | ✅ | ✅ |
+| demo60 | 16 | mixed:6, native_missing:9, text_omission:1 | ✅ | ✅ | ✅ |
+| 春风250Sr | 29 | mixed:4, native_missing:25 | ✅ | ✅ | ✅ |
+
+关键变更：
+- `scripts/pdf-table-fix`：信号覆盖从 2 类扩展到 5 类，候选 schema v2（17 字段），原子 manifest 同步
+- `scripts/pdf-check-fixes`：新增 `validate_table_candidates()` 校验 manifest 登记、hash、JSONL 格式和 candidate_id 去重
+- 单元测试：25/25 通过（`tests/test_table_candidates.py`）
+- 集成回归：79/79 通过（`tests/test-fix-validate.sh`）
+- 全量 pytest：147/147 通过
+- 非表格页（仅有 `text_coverage_low`/`volume_inflation` 但无 HTML 表格）不再误入候选，降低噪音
+
+阻塞项已解除：阶段 0 的三个缺口（信号覆盖、manifest 登记、候选 schema）全部补齐。
 
 ### 阶段 2：skill 与人工/VLM流程同步
 

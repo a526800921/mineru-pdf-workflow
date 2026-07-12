@@ -725,6 +725,114 @@ def check_idempotent(manifest: dict, pkg_dir: Path) -> list[str]:
 # ── 主入口 ──────────────────────────────────────────────────
 
 
+def validate_table_candidates(manifest: dict, pkg_dir: Path) -> list[str]:
+    """校验 table_candidates.jsonl 的 manifest 登记和格式完整性。"""
+    errors: list[str] = []
+    files = manifest.get("files", {})
+    hashes = manifest.get("hash", {})
+
+    tc_registered = files.get("table_candidates")
+    default_path = pkg_dir / "data" / "table_candidates.jsonl"
+    file_exists = default_path.exists()
+
+    # 1. 登记了但文件不存在
+    if tc_registered:
+        tc_path = pkg_dir / tc_registered
+        if not tc_path.exists():
+            errors.append(f"files.table_candidates 指向的文件不存在：{tc_path}")
+            return errors
+    else:
+        tc_path = default_path
+
+    # 2. 文件存在但未登记
+    if file_exists and not tc_registered:
+        errors.append("table_candidates.jsonl 存在但 manifest.files.table_candidates 未登记")
+        return errors
+
+    if not file_exists:
+        return errors  # 无候选文件，跳过后续检查
+
+    # 3. hash 为空
+    tc_hash = hashes.get("table_candidates_sha256")
+    if not tc_hash:
+        errors.append("hash.table_candidates_sha256 为空")
+    else:
+        actual_hash = file_sha256(tc_path)
+        if tc_hash != actual_hash:
+            errors.append(
+                f"table_candidates_sha256 不匹配"
+                f"（期望：{actual_hash[:16]}...，实际：{tc_hash[:16]}...）"
+            )
+
+    # 4. 逐行校验 JSONL 格式
+    anchor_re = re.compile(r"^<!-- pages \d+-\d+ -->$")
+    ids_seen: set[str] = set()
+    try:
+        with tc_path.open(encoding="utf-8") as f:
+            for lineno, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as e:
+                    errors.append(f"table_candidates 第 {lineno} 行 JSON 解析失败：{e}")
+                    continue
+                if not isinstance(obj, dict):
+                    errors.append(f"table_candidates 第 {lineno} 行不是 JSON 对象")
+                    continue
+
+                # schema_version
+                sv = obj.get("schema_version")
+                if not isinstance(sv, int) or sv < 2:
+                    errors.append(
+                        f"table_candidates 第 {lineno} 行 schema_version 应为 >=2，"
+                        f"实际：{sv}"
+                    )
+
+                # candidate_id
+                cid = obj.get("candidate_id")
+                if not cid or not isinstance(cid, str):
+                    errors.append(f"table_candidates 第 {lineno} 行缺少 candidate_id")
+                elif cid in ids_seen:
+                    errors.append(
+                        f"table_candidates 第 {lineno} 行 candidate_id 重复：{cid}"
+                    )
+                else:
+                    ids_seen.add(cid)
+
+                # page
+                pg = obj.get("page")
+                if not isinstance(pg, int) or pg < 1:
+                    errors.append(
+                        f"table_candidates 第 {lineno} 行 page 不是正整数：{pg}"
+                    )
+
+                # page_anchor
+                pa = obj.get("page_anchor", "")
+                if not anchor_re.match(pa or ""):
+                    errors.append(
+                        f"table_candidates 第 {lineno} 行 page_anchor 格式不合法：{pa}"
+                    )
+
+                # needs_human
+                if obj.get("needs_human") is not True:
+                    errors.append(
+                        f"table_candidates 第 {lineno} 行 needs_human 必须为 true"
+                    )
+
+                # signals
+                sigs = obj.get("signals")
+                if not sigs or not isinstance(sigs, list):
+                    errors.append(
+                        f"table_candidates 第 {lineno} 行 signals 为空或缺失"
+                    )
+    except OSError as e:
+        errors.append(f"读取 table_candidates 失败：{e}")
+
+    return errors
+
+
 def main() -> None:
     verbose = False
     args = []
@@ -777,6 +885,10 @@ def main() -> None:
     # -- manifest.formatting --
     fmt_errors = validate_formatting(manifest, pkg_dir)
     all_errors.extend(fmt_errors)
+
+    # -- table_candidates --
+    tc_errors = validate_table_candidates(manifest, pkg_dir)
+    all_errors.extend(tc_errors)
 
     # -- 幂等性 --
     idem_errors = check_idempotent(manifest, pkg_dir)

@@ -155,8 +155,18 @@ echo ""
 echo "--- T1: demo20 8192 扫描 ---"
 out="$("$_scripts"/pdf-table-fix "$_d20" 2>&1)" && rc=0 || rc=$?
 _ck0 $rc "T1: 扫描完成"
-_grep "$out" "候选扫描完成：2 页" "T1: 找到 2 页候选"
+_grep "$out" "候选扫描完成" "T1: 候选扫描成功"
+_grep "$out" "native_missing:2" "T1: 包含 native_missing 候选"
 rm -f "$_d20/data/table_candidates.jsonl"
+# 还原 manifest 登记（避免影响后续测试和真实包）
+python3 -c "
+import json
+p = '$_d20/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+m.get('files', {}).pop('table_candidates', None)
+m.get('hash', {}).pop('table_candidates_sha256', None)
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
 
 # ── T2: demo5 无 candidate ──
 echo ""
@@ -164,6 +174,130 @@ echo "--- T2: demo5 无 candidate ---"
 out="$("$_scripts"/pdf-table-fix "$_d5" 2>&1)" && rc=0 || rc=$?
 _ck0 $rc "T2: 无候选时正常退出"
 _grep "$out" "未发现需扫描的候选页" "T2: 输出无候选信息"
+
+# ═══════════════════════════════════════════════
+# 阶段 1：table_candidates v2 schema 集成测试
+# ═══════════════════════════════════════════════
+
+echo ""
+echo "=== 阶段 1：候选扫描与 manifest 同步 ==="
+
+# ── T3: 写 candidates 并同步 manifest ──
+echo "--- T3: 写入候选并同步 manifest ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+# 清空现有登记，确保 clean state
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+m.get('files', {}).pop('table_candidates', None)
+m.get('hash', {}).pop('table_candidates_sha256', None)
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
+rm -f "$t/data/table_candidates.jsonl"
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "T3: 扫描完成"
+_grep "$out" "status.*completed" "T3: JSON 状态为 completed"
+# 验证 manifest 已更新
+python3 -c "
+import json
+m = json.loads(open('$t/manifest.json', encoding='utf-8').read())
+assert 'table_candidates' in m.get('files', {}), 'manifest.files.table_candidates 未设置'
+assert m.get('hash', {}).get('table_candidates_sha256'), 'hash.table_candidates_sha256 为空'
+assert (__import__('pathlib').Path('$t') / m['files']['table_candidates']).exists(), '候选文件不存在'
+" && _pass "T3: manifest 已同步" || _fail "T3: manifest 同步失败"
+
+# ── T4: 无候选时不修改 manifest ──
+echo ""
+echo "--- T4: 无候选包不修改 manifest ---"
+t=$(_mk)
+cp -R "$_d5/"* "$t/" 2>/dev/null || true
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+m.get('files', {}).pop('table_candidates', None)
+m.get('hash', {}).pop('table_candidates_sha256', None)
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
+manifest_before=$(cat "$t/manifest.json")
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "T4: 无候选正常退出"
+manifest_after=$(cat "$t/manifest.json")
+if [ "$manifest_before" = "$manifest_after" ]; then
+  _pass "T4: manifest 未被修改"
+else
+  _fail "T4: manifest 被意外修改"
+fi
+
+# ── T5: native_table_text_missing 候选 ──
+echo ""
+echo "--- T5: native_table_text_missing 检测 ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
+# demo60 has native_table_text_missing pages (14,16,36,42,43,44,46,51,60)
+python3 -c "
+import json
+with open('$t/data/table_candidates.jsonl', encoding='utf-8') as f:
+    types = set()
+    for line in f:
+        c = json.loads(line)
+        types.add(c.get('candidate_type'))
+assert 'native_missing' in types, f'未找到 native_missing 类型候选，已有: {types}'
+" && _pass "T5: native_missing 候选已生成" || _fail "T5: 缺少 native_missing 候选"
+
+# ── T6: pdf-check-fixes 验证候选文件（先修复 hash） ──
+echo ""
+echo "--- T6: pdf-check-fixes 验证候选文件 ---"
+# T5 已写入候选并修复了 manifest hash，直接校验
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "T6: 修复后 check-fixes 通过（含 table_candidates）"
+
+# ── T7: 候选文件存在但 manifest 未登记 → 错误 ──
+echo ""
+echo "--- T7: manifest 登记缺失检测 ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+# 先运行扫描生成候选文件 + 同步 manifest
+"$_scripts"/pdf-table-fix "$t" > /dev/null 2>&1
+# 再从 manifest 移除登记
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+m.get('files', {}).pop('table_candidates', None)
+m.get('hash', {}).pop('table_candidates_sha256', None)
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "T7: manifest 登记缺失被检测到"
+_grep "$out" "table_candidates" "T7: 错误信息包含 table_candidates"
+
+# ── T8: 重复 candidate_id 检测 ──
+echo ""
+echo "--- T8: 重复 candidate_id 检测 ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+"$_scripts"/pdf-table-fix "$t" > /dev/null 2>&1
+python3 -c "
+import json, hashlib
+src = '$t/data/table_candidates.jsonl'
+with open(src, encoding='utf-8') as f:
+    lines = f.readlines()
+# Append first line again to create duplicate
+lines.append(lines[0])
+with open(src, 'w', encoding='utf-8') as f:
+    f.writelines(lines)
+# Update manifest hash
+m = json.loads(open('$t/manifest.json', encoding='utf-8').read())
+m['hash']['table_candidates_sha256'] = hashlib.sha256(open(src, 'rb').read()).hexdigest()
+open('$t/manifest.json', 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "T8: 重复 candidate_id 被检测到"
+_grep "$out" "重复" "T8: 错误信息包含重复提示"
 
 # ── A1: pdf-apply-fixes 简单修复应用 ──
 echo ""
