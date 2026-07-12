@@ -16,7 +16,7 @@
 ## 计划索引
 
 | 计划 | 状态 | 当前阶段 | 最后更新 | 依赖 | 证据 |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | [automated-pdf-pipeline](plans/automated-pdf-pipeline.md) | 已完成 | 阶段 8：PDF 输出包目录结构 | 2026-06-30 | MinerU CLI、PDF 文本层、分段输出目录、JSON 验证报告、`pdf-auto` 闭环脚本、`PDF_AUTO_JSON=1` | [阶段 8 完成证据](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [pdf-output-package-layout](plans/pdf-output-package-layout.md) | 已完成 | 无/有 API 双路径验收通过，`_api_arg[@]` 修复 | 2026-06-30 | automated-pdf-pipeline、coverage-validation-optimization | [验收记录](plans/pdf-output-package-layout.md#验收记录2026-06-30) |
 | [modelpad-pdf-service-lifecycle](plans/modelpad-pdf-service-lifecycle.md) | 已完成 | 全阶段（0-3） | 2026-07-03 | ModelPad app、automated-pdf-pipeline、pdf-output-package-layout | [阶段 3 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-3-完成证据2026-07-03) |
@@ -37,6 +37,7 @@
 | [table-text-omission-detection](plans/table-text-omission-detection.md) | 已完成 | 阶段 4：整表头/顶部列头漏报补强（已完成） | 2026-07-11 | single-page-segmentation-migration 阶段 3、pdf-evaluation-suite P4b、PyMuPDF 原生文本层、demo20 p14/p16 真实样本 | [阶段 4 最终验收](plans/table-text-omission-detection.md#阶段-4-最终验收2026-07-11) |
 | [toc-page-physical-attribution-fix](plans/toc-page-physical-attribution-fix.md) | 已完成 | 全阶段（0-3） | 2026-07-11 | coverage-validation-optimization、per-page-anchors、pdf-auto-repair-before-merge、demo20/demo5/demo60 真实样本、`pdf/demo20toc2/demo20toc2.pdf` p3/p4 多页目录归属样本 | [阶段 3 再次独立验收](plans/toc-page-physical-attribution-fix.md#阶段-3-再次独立验收2026-07-11) |
 | [cli-only-migration](plans/cli-only-migration.md) | 已完成 | 阶段 1 已完成：移除 MCP 适配层 | 2026-07-11 | 已验证的 CLI 脚本、`PDF_AUTO_JSON=1` JSON 契约、ADR 0002 | [完成证据](plans/cli-only-migration.md#完成证据-2026-07-11) |
+| [pdf2md-fix-manual-workflow](plans/pdf2md-fix-manual-workflow.md) | 实施中 | 阶段 1：创建 `pdf2md-fix` skill 与人工操作规范 | 2026-07-12 | `pdf-output-package-layout`、`pdf-merge`、`pdf-auto`、`pdf-auto-repair-before-merge`、`review.md`、`pdf-evaluation-suite`、`local-vlm-autostart`、`table-text-omission-detection`、`structured-data-extraction`、`data-ingestion-pipeline`、demo20/demo60 8192 空列实测、p37/p47/p48 全局 replace 漂移复盘、demo20 p14-p16 | [阶段 0 完成证据与阶段 1](plans/pdf2md-fix-manual-workflow.md#阶段-1-创建-pdf2md-fix-skill-与人工操作规范) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -61,6 +62,7 @@
 17. `table-text-omission-detection`（通用表格字段缺失检测与页级 fallback 触发）
 18. `toc-page-physical-attribution-fix`（目录页物理归属与过度生成修复）
 19. `local-vlm-autostart`（P4c 本地 VLM 自动启动、复用与完成后关闭）
+20. `pdf2md-fix-manual-workflow`（pdf2md 完成后的人工复核、内容修复和逻辑表格契约）
 
 ## 依赖关系
 
@@ -107,6 +109,11 @@
 | toc-page-physical-attribution-fix | coverage-validation-optimization、per-page-anchors、pdf-auto-repair-before-merge、demo20 目录页真实样本 | 修复 MinerU 目录过度生成和 `toc_repair` 短标题子串错页，同时保留段级锚点消费者契约 |
 | per-page-anchors | structured-data-extraction | 阶段 4 复用逐页锚点收窄 `page_start/page_end` |
 | per-page-anchors | 春风 150AURA 输出包 | Step 0 保真度实测与 `content_list.json` `page_idx` 基线 |
+| pdf2md-fix-manual-workflow | `pdf-auto`、`review.md`、`table-text-omission-detection`、`structured-data-extraction`、`data-ingestion-pipeline`、demo20 p14-p16 | 在自动解析、人工内容修复、结构化草案和入库审核之间建立独立的修复记录与逻辑表格边界 |
+| pdf2md-fix-manual-workflow | `pdf-evaluation-suite`、`local-vlm-autostart` | 复用现有 VLM 评测和 ModelPad 自动启停能力，但只在人工复核阶段按需调用，不接入 `pdf-auto` 主链路 |
+| pdf2md-fix-manual-workflow | pdf-output-package-layout | 复用输出包 `manifest.json`，将 Markdown、修复记录、逻辑表格和 hash 作为同步发布契约 |
+| pdf2md-fix-manual-workflow | pdf-merge | 在 canonical Markdown 生成阶段完成 HTML 表格 pretty-print，避免额外的 `*-formatted.md` 入口 |
+| pdf2md-fix-manual-workflow | pdf-auto-repair-before-merge | 复用现有 TOC 段级/合并级修复顺序，最终 manifest hash 必须覆盖所有 Markdown 后处理 |
 
 ## 替代、合并和废弃
 
