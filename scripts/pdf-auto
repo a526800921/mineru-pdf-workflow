@@ -816,10 +816,26 @@ pdf_path = Path(sys.argv[2])
 merged_md = Path(sys.argv[3])
 segments_dir = merged_md.parent / "segments"
 validate_tmp = sys.argv[4]
-from lib.toc_repair import repair_merged, verify_entry_recall
-fixed = repair_merged(pdf_path, merged_md, validate_tmp)
-if fixed:
-    verify_entry_recall(pdf_path, segments_dir, validate_tmp)
+pkg_dir = merged_md.parent
+manifest_path = pkg_dir / "manifest.json"
+previous_md = merged_md.read_bytes()
+previous_manifest = manifest_path.read_bytes() if manifest_path.exists() else None
+from lib.markdown_table_formatter import _atomic_write, finalize_markdown_formatting
+try:
+    from lib.toc_repair import repair_merged, verify_entry_recall
+    fixed = repair_merged(pdf_path, merged_md, validate_tmp)
+    if fixed:
+        verify_entry_recall(pdf_path, segments_dir, validate_tmp)
+    result = finalize_markdown_formatting(pkg_dir)
+    if result.get("status") == "error":
+        raise RuntimeError(result.get("error", "表格格式化失败"))
+except Exception as exc:
+    _atomic_write(merged_md, previous_md.decode("utf-8"))
+    if previous_manifest is None:
+        manifest_path.unlink(missing_ok=True)
+    else:
+        _atomic_write(manifest_path, previous_manifest.decode("utf-8"))
+    raise SystemExit(f"合并后最终化失败，已回滚: {exc}")
 PY
 
   log "  → 输出: $merge_output"
@@ -894,8 +910,27 @@ import sys
 from pathlib import Path
 scripts_dir = sys.argv[1]
 sys.path.insert(0, scripts_dir)
-from lib.toc_repair import repair_merged
-repair_merged(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+pdf_path = Path(sys.argv[2])
+merged_md = Path(sys.argv[3])
+validate_tmp = sys.argv[4]
+pkg_dir = merged_md.parent
+manifest_path = pkg_dir / "manifest.json"
+previous_md = merged_md.read_bytes()
+previous_manifest = manifest_path.read_bytes() if manifest_path.exists() else None
+from lib.markdown_table_formatter import _atomic_write, finalize_markdown_formatting
+try:
+    from lib.toc_repair import repair_merged
+    repair_merged(pdf_path, merged_md, validate_tmp)
+    result = finalize_markdown_formatting(pkg_dir)
+    if result.get("status") == "error":
+        raise RuntimeError(result.get("error", "表格格式化失败"))
+except Exception as exc:
+    _atomic_write(merged_md, previous_md.decode("utf-8"))
+    if previous_manifest is None:
+        manifest_path.unlink(missing_ok=True)
+    else:
+        _atomic_write(manifest_path, previous_manifest.decode("utf-8"))
+    raise SystemExit(f"合并后最终化失败，已回滚: {exc}")
 PY
 
   step_done

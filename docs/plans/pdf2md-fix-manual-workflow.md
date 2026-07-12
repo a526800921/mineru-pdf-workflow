@@ -160,6 +160,14 @@ pdf-seg（必要时）
 - p47/p48 曾因全局 `replace()` 误命中其他页面，证明修复必须使用 `<!-- pages N-N -->` 锚点和页级目标边界。
 - VLM 对文字正确性、表头和符号确认较可靠，但对表格行列、`rowspan/colspan` 结构判断不可靠；VLM 使用边界应收窄到文字/视觉证据。
 
+### VLM 固定模型契约
+
+- 标准模型固定为 `qwen3-vl-8b`，标准 `pdf2md-fix` 证据链不得静默替换模型。
+- 标准入口为 `scripts/pdf-eval-vlm <package>`。
+- ModelPad 管理 API 固定为 `http://127.0.0.1:9999`，实际 VLM 服务端点固定为 `http://127.0.0.1:9005`。
+- `VLM_API_BASE` 仅用于直连仍提供 `qwen3-vl-8b` 的远程端点；无法确认模型身份时，结果只能作为实验记录，不能写入标准 `vlm_evidence`。
+- 模型不可用时保持 `needs_review`，不得自动降级到未登记模型。
+
 ### demo20 真实样本证据
 
 - `pdf/demo20/demo20.md` 的第 14、15、16 页分别包含一个 HTML `<table>`，但视觉和语义上是同一张连续参数表。
@@ -1097,7 +1105,7 @@ scripts/pdf-export-ingest pdf/春风\ 150AURA
 - 增加的 VLM/manifest 一致性检查通过，三个真实样本的 `scripts/pdf-check-fixes` 均通过。
 - `bash tests/test-fix-validate.sh`：67/67 通过；`pytest -q`：135 passed；`python3 scripts/check_plan_governance.py .` 及 `--drift` 均通过。
 
-阶段 4 的真实样本、VLM 证据、8192 候选恢复、页锚点保护、人工修复记录、manifest 同步和回归门禁均已形成闭环；后续若增加新的自动化能力，应另立计划，不在本计划中继续扩展。
+阶段 4 的真实样本、VLM 证据、8192 候选恢复、页锚点保护、人工修复记录、manifest 同步和回归门禁均已形成闭环；后续若增加新的自动化能力，应另立计划，不在本计划中继续扩展。当前候选审计增量见 [pdf-table-audit](pdf-table-audit.md)。
 
 #### 目录修复输出契约补充（2026-07-12）
 

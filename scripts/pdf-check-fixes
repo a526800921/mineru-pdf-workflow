@@ -133,11 +133,19 @@ def _log(msg: str, kind: str = "ERROR"):
 # ── 校验函数（各返回 str 列表，每项一条错误） ──────────────────
 
 
-def validate_manual_fixes(path: Path) -> list[str]:
-    """校验 manual_fixes.jsonl 格式。文件不存在时返回一条错误。"""
+def validate_manual_fixes(path: Path, manifest: dict | None = None) -> list[str]:
+    """校验 manual_fixes.jsonl 格式。
+
+    文件不存在时：
+    - 若 manifest.fixes.status 为 applied/verified → 错误（应有修复记录）
+    - 否则 → 跳过（新包尚未有修复记录）
+    """
     errors = []
     if not path.exists():
-        errors.append(f"manual_fixes.jsonl 不存在：{path}")
+        # 只有确认应有修复记录时才报错
+        fixes = (manifest or {}).get("fixes")
+        if isinstance(fixes, dict) and fixes.get("status") in ("applied", "verified"):
+            errors.append(f"manual_fixes.jsonl 不存在但 fixes.status 为 {fixes['status']}")
         return errors
     if path.stat().st_size == 0:
         errors.append(f"manual_fixes.jsonl 为空文件：{path}")
@@ -263,11 +271,19 @@ def validate_vlm_evidence(path: Path) -> list[str]:
 
 
 def validate_manifest_fixes(manifest: dict, pkg_dir: Path) -> list[str]:
-    """校验 manifest.json 中的 fixes 块。"""
+    """校验 manifest.json 中的 fixes 块。
+
+    缺少 fixes 块时：
+    - 若 manual_fixes.jsonl 存在且有 applied/verified 记录 → 错误
+    - 否则 → 跳过（新包尚未有修复记录）
+    """
     errors = []
     fixes = manifest.get("fixes")
     if fixes is None:
-        errors.append("manifest.json 缺少 fixes 块")
+        # 检查是否实际有修复记录需要追踪
+        fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+        if fixes_path.exists() and fixes_path.stat().st_size > 0:
+            errors.append("manifest.json 缺少 fixes 块但 manual_fixes.jsonl 存在")
         return errors
 
     if not isinstance(fixes, dict):
@@ -354,7 +370,7 @@ def validate_manifest_fixes(manifest: dict, pkg_dir: Path) -> list[str]:
 
 
 def validate_formatting(manifest: dict, pkg_dir: Path) -> list[str]:
-    """校验 manifest.json 中的 formatting 块。"""
+    """校验 manifest.json 中的 formatting 块（升级版：验证 hash 一致性）。"""
     errors = []
     fmt = manifest.get("formatting")
     if fmt is None:
@@ -385,9 +401,53 @@ def validate_formatting(manifest: dict, pkg_dir: Path) -> list[str]:
             f"（允许：{', '.join(sorted(FORMATTING_STATUSES))}）"
         )
 
-    # source_markdown_sha256 非空
-    if not fmt.get("source_markdown_sha256"):
-        errors.append("formatting.source_markdown_sha256 不能为空")
+    # source_markdown_sha256 非空（applied/verified 时必须）
+    source_hash = fmt.get("source_markdown_sha256")
+    if status in ("applied", "verified") and not source_hash:
+        errors.append(
+            f"formatting.status={status} 但 source_markdown_sha256 为空"
+        )
+
+    # formatted_markdown_sha256 必须与当前 Markdown 一致（applied/verified 时）
+    formatted_hash = fmt.get("formatted_markdown_sha256")
+    if status in ("applied", "verified"):
+        md_rel = manifest.get("files", {}).get("markdown")
+        if md_rel:
+            md_path = pkg_dir / md_rel
+            if md_path.exists():
+                current_hash = file_sha256(md_path)
+                if formatted_hash and formatted_hash != current_hash:
+                    errors.append(
+                        f"formatting.formatted_markdown_sha256 不匹配"
+                        f"（当前文件: {current_hash[:16]}...，"
+                        f"记录: {formatted_hash[:16]}...）"
+                    )
+                elif not formatted_hash:
+                    errors.append(
+                        f"formatting.status={status} 但 "
+                        f"formatted_markdown_sha256 为空"
+                    )
+
+    # 备份文件必须存在（applied/verified 时）
+    if status in ("applied", "verified") and source_hash:
+        backup_path = pkg_dir / "data" / f"pre_format_md_{source_hash[:16]}.md"
+        if not backup_path.exists():
+            errors.append(
+                f"格式化前备份不存在: {backup_path}"
+            )
+        elif file_sha256(backup_path) != source_hash:
+            errors.append(
+                f"格式化前备份 hash 不匹配: {backup_path}"
+            )
+
+    # fixes.markdown_sha256 必须与 formatted_markdown_sha256 一致
+    fixes = manifest.get("fixes")
+    if isinstance(fixes, dict) and formatted_hash:
+        fixes_md_hash = fixes.get("markdown_sha256")
+        if fixes_md_hash and fixes_md_hash != formatted_hash:
+            errors.append(
+                f"fixes.markdown_sha256 与 formatting.formatted_markdown_sha256 不一致"
+            )
 
     return errors
 
@@ -428,23 +488,29 @@ def validate_manifest_files(manifest: dict, pkg_dir: Path) -> list[str]:
 
 
 def check_table_consistency(manifest: dict, pkg_dir: Path) -> list[str]:
-    """校验表格格式化前后一致性（门禁级别）。
+    """校验表格格式化前后一致性（门禁级别，升级版）。
 
-    当 formatting.source_markdown_sha256 对应的原始 Markdown 副本存在时，
-    对表格结构变化返回致命错误（门禁）。备份不存在时跳过校验。
+    当 formatting.status 为 applied 或 verified 时：
+    - 备份文件必须存在
+    - 使用 markdown_table_formatter.validate_structure 做逐格校验
+    备份不存在时跳过（status=none 或无 source_hash）。
 
-    校验项：
-    - 表格数量
-    - 行数
-    - 列数
-    - 单元格文本（去空白后比较）
+    校验项（逐格）：
+    - 表格数量、行数、逐行列数
+    - 单元格文本、colspan、rowspan
+    - <img> 数量
     """
     errors = []
     fmt = manifest.get("formatting")
     if not isinstance(fmt, dict):
         return errors
 
-    # 获取当前 canonical Markdown
+    status = fmt.get("status", "")
+    source_hash = fmt.get("source_markdown_sha256")
+    if not source_hash or status in ("none",):
+        return errors
+
+    # 获取当前 canonical Markdown（升级版格式器需从 scripts/lib 导入）
     md_rel = manifest.get("files", {}).get("markdown")
     if not md_rel:
         return errors
@@ -452,60 +518,74 @@ def check_table_consistency(manifest: dict, pkg_dir: Path) -> list[str]:
     if not current_md_path.exists():
         return errors
 
-    # 获取格式化前 Markdown 的 source hash
-    source_hash = fmt.get("source_markdown_sha256")
-    if not source_hash:
-        return errors
-
-    # 尝试找备份：<stem>-pre-format.md 或 <data>/pre_format_md_<hash>.md
+    # 找备份文件
+    backup_path = pkg_dir / "data" / f"pre_format_md_{source_hash[:16]}.md"
+    # 兼容旧命名规则
     stem = current_md_path.stem
-    backup_candidates = [
-        current_md_path.parent / f"{stem}-pre-format.md",
-        pkg_dir / "data" / f"pre_format_md_{source_hash[:16]}.md",
-    ]
+    alt_backup = current_md_path.parent / f"{stem}-pre-format.md"
+
     source_md_path = None
-    for bc in backup_candidates:
-        if bc.exists() and file_sha256(bc) == source_hash:
-            source_md_path = bc
-            break
+    if backup_path.exists() and file_sha256(backup_path) == source_hash:
+        source_md_path = backup_path
+    elif alt_backup.exists() and file_sha256(alt_backup) == source_hash:
+        source_md_path = alt_backup
 
     if source_md_path is None:
-        return errors  # 备份不存在，跳过校验
+        if status in ("applied", "verified"):
+            errors.append(
+                f"表格一致性：formatting.status={status} 但备份文件不存在"
+                f"或 hash 不匹配"
+            )
+        return errors
 
-    # 解析格式化前后的表格
     source_text = source_md_path.read_text(encoding="utf-8")
     current_text = current_md_path.read_text(encoding="utf-8")
 
+    # 使用格式化器的 validate_structure 做完整校验
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+        from markdown_table_formatter import validate_structure as fmt_validate
+        struct_errors = fmt_validate(source_text, current_text)
+    except ImportError:
+        # fallback：使用旧版 parse_html_tables 校验
+        struct_errors = _legacy_table_check(source_text, current_text)
+
+    for e in struct_errors:
+        errors.append(f"表格一致性：{e}")
+
+    return errors
+
+
+def _legacy_table_check(source_text: str, current_text: str) -> list[str]:
+    """旧版表格结构校验（parse_html_tables 方式，fallback 用）。"""
+    errors: list[str] = []
     source_tables = parse_html_tables(source_text)
     current_tables = parse_html_tables(current_text)
 
-    # 比较表格数量
     if len(source_tables) != len(current_tables):
         errors.append(
-            f"表格一致性：格式化前后表格数量不一致"
-            f"（{len(source_tables)} → {len(current_tables)}）"
+            f"表格数量不一致（{len(source_tables)} → {len(current_tables)}）"
         )
         return errors
 
-    # 逐表比较行数和单元格文本
     for i, (st, ct) in enumerate(zip(source_tables, current_tables)):
         if len(st) != len(ct):
             errors.append(
-                f"表格一致性：表格 {i+1} 行数不一致"
-                f"（{len(st)} → {len(ct)}）"
+                f"表格 {i+1} 行数不一致（{len(st)} → {len(ct)}）"
             )
             continue
         for ri, (sr, cr) in enumerate(zip(st, ct)):
             if len(sr) != len(cr):
                 errors.append(
-                    f"表格一致性：表格 {i+1} 第 {ri+1} 行列数不一致"
+                    f"表格 {i+1} 第 {ri+1} 行列数不一致"
                     f"（{len(sr)} → {len(cr)}）"
                 )
                 continue
             for ci, (sc, cc) in enumerate(zip(sr, cr)):
                 if not cell_texts_equal(sc["text"], cc["text"]):
                     errors.append(
-                        f"表格一致性：表格 {i+1} 第 {ri+1} 行第 {ci+1} 列文本不一致"
+                        f"表格 {i+1} ({ri+1},{ci+1}) 文本不一致"
                         f"（'{sc['text']}' → '{cc['text']}'）"
                     )
 
@@ -683,7 +763,7 @@ def main() -> None:
 
     # -- manual_fixes.jsonl --
     fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
-    mf_errors = validate_manual_fixes(fixes_path)
+    mf_errors = validate_manual_fixes(fixes_path, manifest)
     all_errors.extend(mf_errors)
 
     # -- VLM 引用 --

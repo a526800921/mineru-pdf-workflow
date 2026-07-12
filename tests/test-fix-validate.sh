@@ -30,7 +30,11 @@ fh = hashlib.sha256(open(mf,'rb').read()).hexdigest() if mf and __import__('os')
 md = sorted(__import__('pathlib').Path(pkg).glob('*.md'))
 mdh = hashlib.sha256([p for p in md if p.name != 'review.md'][0].read_bytes()).hexdigest()
 m['fixes']={'schema_version':1,'status':fs,'source_manifest_sha256':mh,'manual_fixes_sha256':fh,'markdown_sha256':mdh}
-m['formatting']={'schema_version':1,'mode':'merge_time','status':fm,'source_markdown_sha256':mdh}
+m['formatting']={'schema_version':1,'mode':'merge_time','status':fm,'source_markdown_sha256':mdh,'formatted_markdown_sha256':mdh}
+import pathlib
+data_dir = pathlib.Path(pkg) / 'data'
+data_dir.mkdir(parents=True, exist_ok=True)
+(data_dir / ('pre_format_md_' + mdh[:16] + '.md')).write_bytes([p for p in md if p.name != 'review.md'][0].read_bytes())
 open(pkg+'/manifest.json','w',encoding='utf-8').write(json.dumps(m,ensure_ascii=False,indent=2)+'\n')
 "
 }
@@ -352,9 +356,11 @@ demo20.pdf,demo20,引擎 / 性能,最大净功率,11.8 Kw / 8500 rpm,kW,14,14,�
 EOFCSV
 # 创建 manifest.json（含 formatting 块）
 cat > "$t/manifest.json" <<'EOFJSON'
-{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"fixes":{"schema_version":1,"status":"applied","source_manifest_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","manual_fixes_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","formatted_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"fixes":{"schema_version":1,"status":"applied","source_manifest_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","manual_fixes_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
 EOFJSON
 touch "$t/test.md"
+mkdir -p "$t/data"
+cp "$t/test.md" "$t/data/pre_format_md_e3b0c44298fc1c14.md"
 # 首次运行 pdf-prepare-ingest 生成 ingest_ready.csv（获得 record_id）
 "$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
 # 获取 record_id

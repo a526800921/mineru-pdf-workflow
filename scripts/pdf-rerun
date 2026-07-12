@@ -355,7 +355,16 @@ log "重跑完成: $rerun_count 段"
 log
 log "=== 合并 ==="
 if [[ "$json_mode" == "1" ]]; then
-  "$_scripts_dir/pdf-merge" "$segments_dir" >&2 || true
+  set +e
+  "$_scripts_dir/pdf-merge" "$segments_dir" >&2
+  merge_rc=$?
+  set -e
+  if [[ "$merge_rc" -ne 0 ]]; then
+    _pkg_dir="$(dirname "$segments_dir")"
+    merge_out="${PDF_MERGE_OUTPUT:-$_pkg_dir/${pdf_stem}.md}"
+    emit_json "error" "$merge_rc" "$rerun_count" "$merge_out" "${_rerun_results[@]}"
+    exit "$merge_rc"
+  fi
 else
   "$_scripts_dir/pdf-merge" "$segments_dir"
 fi

@@ -11,14 +11,17 @@
 
 import pytest
 import sys
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "lib"))
+import markdown_table_formatter as formatter
 from markdown_table_formatter import (
     format_tables,
     validate_structure,
     is_idempotent,
     TableFormatError,
+    finalize_markdown_formatting,
 )
 
 
@@ -224,6 +227,105 @@ def test_mismatched_close_tags():
         format_tables(md)
 
 
+# ── 修复 1: 已格式化外观不绕过 malformed 校验 ───────────────
+
+def test_formatted_but_malformed_raises():
+    """已格式化但标签错配的表格必须抛出 TableFormatError。"""
+    md = (
+        "<table>\n"
+        "  <tr>\n"
+        "    <td>a</td>\n"
+        "  </tr>\n"
+        # 多余的 </td> — 闭合标签不匹配
+        "</td>\n"
+        "</table>"
+    )
+    with pytest.raises(TableFormatError):
+        format_tables(md)
+
+
+def test_formatted_but_unclosed_raises():
+    """已格式化但 <tr> 未闭合的表格必须抛出。"""
+    md = (
+        "<table>\n"
+        "  <tr>\n"
+        "    <td>a</td>\n"
+        # 缺少 </tr>
+        "</table>"
+    )
+    with pytest.raises(TableFormatError):
+        format_tables(md)
+
+
+# ── 修复 2: fenced code block 内的伪表格不被格式化 ──────────
+
+def test_fenced_code_block_skipped():
+    """``` 代码块内的 <table> 不应被格式化。"""
+    md = (
+        "## 示例\n\n"
+        "```html\n"
+        "<table><tr><td>code</td></tr></table>\n"
+        "```\n\n"
+        "真正的表格：\n\n"
+        "<table><tr><td>real</td></tr></table>"
+    )
+    result = format_tables(md)
+    # 代码块内应保持不变
+    assert "<table><tr><td>code</td></tr></table>" in result
+    # 真正的表格被格式化
+    assert "    <td>real</td>" in result
+
+
+def test_fenced_tilde_skipped():
+    """~~~ 围栏代码块同样跳过。"""
+    md = (
+        "~~~\n"
+        "<table><tr><td>a</td></tr></table>\n"
+        "~~~\n"
+    )
+    result = format_tables(md)
+    assert result == md  # 全部跳过
+
+
+def test_multiple_fenced_blocks():
+    """多个代码块中的表格全部跳过。"""
+    md = (
+        "```\n<table><tr><td>1</td></tr></table>\n```\n"
+        "<table><tr><td>A</td></tr></table>\n"
+        "```\n<table><tr><td>2</td></tr></table>\n```\n"
+        "<table><tr><td>B</td></tr></table>"
+    )
+    result = format_tables(md)
+    # 代码块内的两个都保持原样
+    assert "<table><tr><td>1</td></tr></table>" in result
+    assert "<table><tr><td>2</td></tr></table>" in result
+    # 外部的两个被格式化
+    assert "    <td>A</td>" in result
+    assert "    <td>B</td>" in result
+
+
+def test_fenced_with_language_tag():
+    """```python 等语言标记也应跳过。"""
+    md = (
+        "```html\n"
+        "<table><tr><td>x</td></tr></table>\n"
+        "```\n"
+    )
+    result = format_tables(md)
+    assert result == md
+
+
+def test_unclosed_fence_skipped():
+    """未闭合的 fence 延伸到文末，内中的表格应跳过。"""
+    md = (
+        "```html\n"
+        "<table><tr><td>a</td></tr></table>\n"
+        # fence 未闭合
+    )
+    result = format_tables(md)
+    assert result == md  # 表格在未闭合 fence 内，跳过
+
+
 # ── validate_structure ─────────────────────────────────────────
 
 def test_validate_structure_pass():
@@ -238,6 +340,77 @@ def test_validate_structure_count_mismatch():
     bad = "<table><tr><td>a</td></tr></table>"
     errors = validate_structure(orig, bad)
     assert len(errors) > 0
+
+
+# ── 修复 3: validate_structure 逐格校验 ──────────────────────
+
+def test_validate_structure_cell_text_mismatch():
+    """单元格文本不一致应被检测。"""
+    orig = "<table><tr><td>foo</td></tr></table>"
+    bad = "<table><tr><td>bar</td></tr></table>"
+    errors = validate_structure(orig, bad)
+    assert len(errors) > 0
+    assert any("文本不一致" in e for e in errors)
+
+
+def test_validate_structure_colspan_mismatch():
+    """colspan 不一致应被检测。"""
+    orig = '<table><tr><td colspan="2">a</td></tr></table>'
+    bad = '<table><tr><td colspan="3">a</td></tr></table>'
+    errors = validate_structure(orig, bad)
+    assert len(errors) > 0
+    assert any("colspan" in e for e in errors)
+
+
+def test_validate_structure_rowspan_mismatch():
+    """rowspan 不一致应被检测。"""
+    orig = '<table><tr><td rowspan="2">a</td></tr><tr><td>b</td></tr></table>'
+    bad = '<table><tr><td rowspan="1">a</td></tr><tr><td>b</td></tr></table>'
+    errors = validate_structure(orig, bad)
+    assert len(errors) > 0
+    assert any("rowspan" in e for e in errors)
+
+
+def test_validate_structure_per_row_col_count():
+    """逐行列数不一致应被检测。"""
+    orig = "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>"
+    bad = "<table><tr><td>a</td></tr><tr><td>c</td><td>d</td></tr></table>"
+    errors = validate_structure(orig, bad)
+    assert len(errors) > 0
+    assert any("列数不一致" in e for e in errors)
+
+
+def test_validate_structure_img_count_mismatch():
+    """图片数量不一致应被检测。"""
+    orig = '<table><tr><td><img src="a.jpg"/></td></tr></table>'
+    bad = '<table><tr><td></td></tr></table>'
+    errors = validate_structure(orig, bad)
+    assert len(errors) > 0
+    assert any("img" in e for e in errors)
+
+
+def test_validate_structure_empty_cell_text():
+    """空单元格文本比较应通过（不报错）。"""
+    orig = "<table><tr><td></td><td>x</td></tr></table>"
+    formatted = format_tables(orig)
+    errors = validate_structure(orig, formatted)
+    assert errors == []
+
+
+def test_validate_structure_unicode_cell_text():
+    """Unicode 单元格内容应正确比较。"""
+    orig = "<table><tr><td>单缸,四冲程</td></tr></table>"
+    formatted = format_tables(orig)
+    errors = validate_structure(orig, formatted)
+    assert errors == []
+
+
+def test_validate_structure_with_th():
+    """th 标签的 colspan/rowspan/文本都应验证。"""
+    orig = '<table><tr><th colspan="2">Header</th></tr><tr><td>a</td><td>b</td></tr></table>'
+    formatted = format_tables(orig)
+    errors = validate_structure(orig, formatted)
+    assert errors == []
 
 
 # ── 边界 ──────────────────────────────────────────────────────
@@ -328,3 +501,93 @@ def test_real_fixture_idempotent():
         pytest.skip("真实 fixture 不存在")
     text = p.read_text(encoding="utf-8")
     assert is_idempotent(text)
+
+
+# ── 最终化事务 ────────────────────────────────────────────────
+
+def _write_formatting_fixture(pkg: Path, markdown: str) -> tuple[Path, Path]:
+    md_path = pkg / "demo.md"
+    manifest_path = pkg / "manifest.json"
+    md_path.write_text(markdown, encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps({"files": {"markdown": "demo.md"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return md_path, manifest_path
+
+
+def test_finalize_malformed_keeps_markdown_and_manifest(tmp_path):
+    """格式化失败不得覆盖已有 canonical Markdown 或 manifest。"""
+    md_path, manifest_path = _write_formatting_fixture(
+        tmp_path, "ORIGINAL\n<table><tr><td>A</td></tr>\n"
+    )
+    original_md = md_path.read_bytes()
+    original_manifest = manifest_path.read_bytes()
+
+    result = finalize_markdown_formatting(tmp_path)
+
+    assert result["status"] == "error"
+    assert md_path.read_bytes() == original_md
+    assert manifest_path.read_bytes() == original_manifest
+    assert not (tmp_path / "data").exists()
+
+
+def test_finalize_write_failure_rolls_back_all_outputs(tmp_path, monkeypatch):
+    """Markdown 或 manifest 提交中途失败时，整组派生产物回滚。"""
+    md_path, manifest_path = _write_formatting_fixture(
+        tmp_path, "<table><tr><td>A</td></tr></table>\n"
+    )
+    original_md = md_path.read_bytes()
+    original_manifest = manifest_path.read_bytes()
+    real_atomic_write = formatter._atomic_write
+    calls = {"count": 0}
+
+    def fail_manifest_write(path, content):
+        calls["count"] += 1
+        if calls["count"] == 3:
+            raise OSError("injected manifest write failure")
+        return real_atomic_write(path, content)
+
+    monkeypatch.setattr(formatter, "_atomic_write", fail_manifest_write)
+    result = finalize_markdown_formatting(tmp_path)
+
+    assert result["status"] == "error"
+    assert "injected manifest write failure" in result["error"]
+    assert md_path.read_bytes() == original_md
+    assert manifest_path.read_bytes() == original_manifest
+    assert not (tmp_path / "data").exists()
+
+
+def test_finalize_syncs_hash_when_only_non_table_text_changed(tmp_path):
+    """TOC 等表格外修改后，已有 formatting hash 也必须刷新。"""
+    md_path, manifest_path = _write_formatting_fixture(
+        tmp_path,
+        "目录修复后的标题\n\n<table>\n  <tr>\n    <td>A</td>\n  </tr>\n</table>\n",
+    )
+    stale_hash = "0" * 64
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "files": {"markdown": "demo.md"},
+                "formatting": {
+                    "schema_version": 1,
+                    "mode": "merge_time",
+                    "status": "verified",
+                    "source_markdown_sha256": "1" * 64,
+                    "formatted_markdown_sha256": stale_hash,
+                },
+                "fixes": {"markdown_sha256": stale_hash},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = finalize_markdown_formatting(tmp_path)
+    current_hash = __import__("hashlib").sha256(md_path.read_bytes()).hexdigest()
+    updated = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert result["status"] == "ok"
+    assert result["hash_synced"] is True
+    assert updated["formatting"]["formatted_markdown_sha256"] == current_hash
+    assert updated["fixes"]["markdown_sha256"] == current_hash

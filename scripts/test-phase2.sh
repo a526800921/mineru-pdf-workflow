@@ -22,6 +22,8 @@ mkdir -p "$MOCK_DIR/lib"
 
 # 共享输出目录一致性检查 helper
 cp "$SCRIPTS_DIR/lib/segment-consistency" "$MOCK_DIR/lib/segment-consistency"
+# pdf-auto 的合并后最终化依赖
+cp "$SCRIPTS_DIR/lib/markdown_table_formatter.py" "$MOCK_DIR/lib/markdown_table_formatter.py"
 
 # mock modelpad-pdf-service（阻止 ensure_pdf_api 启动真实 ModelPad）
 cat > "$MOCK_DIR/lib/modelpad-pdf-service" << 'EOF'
@@ -73,6 +75,10 @@ chmod +x "$MOCK_DIR/mineru"
 # mock pdf-merge（生成最小输出文件）
 cat > "$MOCK_DIR/pdf-merge" << 'EOF'
 #!/usr/bin/env bash
+if [[ "${MOCK_PDF_MERGE_FAIL:-0}" == "1" ]]; then
+    echo "mock pdf-merge: injected failure" >&2
+    exit 7
+fi
 output="${PDF_MERGE_OUTPUT:-$(dirname "$1")/../test.md}"
 mkdir -p "$(dirname "$output")"
 echo "# mock merge output" > "$output"
@@ -647,6 +653,36 @@ HOME="$MOCK_HOME" MINERU_MOCK_MODE=success PDF_VALIDATE_BEHAVIOR=all_pass PATH="
 
 assert_file_missing "全量重解析前旧多页目录已删除" "$T18/segments/p0001-0010"
 assert_file_exists "全量重解析后新单页产物已生成" "$T18/segments/p0001-0001/content/page.md"
+
+# ── 场景 19：pdf-rerun JSON 合并失败 → 错误向调用方传播 ──
+echo ""
+echo "=== 场景 19：pdf-rerun JSON 合并失败 → 错误传播 ==="
+T19="$TEST_ROOT/t19"
+OUT19="$T19/out.json"
+mkdir -p "$T19/segments/p0001-0001"
+echo "original" > "$T19/segments/p0001-0001/page.md"
+touch "$T19/dummy.pdf"
+set +e
+HOME="$MOCK_HOME" MINERU_MOCK_MODE=success MOCK_PDF_MERGE_FAIL=1 \
+  PATH="$MOCK_DIR:$PATH" PDF_RERUN_JSON=1 \
+  bash "$MOCK_DIR/pdf-rerun" "$T19/dummy.pdf" "$T19/segments" p0001-0001 \
+  2>/dev/null > "$OUT19"
+rerun_fail_rc=$?
+set -e
+python3 - "$OUT19" "$rerun_fail_rc" <<'PY'
+import json
+import sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+assert data.get("status") == "error", data
+assert data.get("exit_code") == 7, data
+assert int(sys.argv[2]) == 7, sys.argv[2]
+PY
+if [[ $? -eq 0 ]]; then
+    ok "pdf-rerun JSON 正确传播合并失败"
+else
+    fail "pdf-rerun JSON 未传播合并失败"
+fi
 
 echo ""
 echo "═══════════════════════════════════════════"

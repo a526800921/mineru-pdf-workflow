@@ -98,7 +98,7 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
 - `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
-- `scripts/pdf-eval-vlm /path/to` **可选**写入 `<pdf_dir>/data/vlm_eval.jsonl`（对 `image_or_sparse` 页做本地 VLM 视觉补充；默认自动启停 `qwen3-vl-8b`，设 `VLM_API_BASE` 可直连远程端口）。
+- `scripts/pdf-eval-vlm /path/to` **可选**写入 `<pdf_dir>/data/vlm_eval.jsonl`（对 `image_or_sparse` 页做本地 VLM 视觉补充；标准模型固定为 `qwen3-vl-8b`，默认自动启停，设 `VLM_API_BASE` 可直连但仍需确认模型身份）。
 - `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 的合并 md。回填旧包时直接重跑此命令。
 - `pdf2md-fix` 位于 `pdf-auto` 完成之后、`pdf-extract-data` 之前；人工修复原地更新 canonical Markdown，并将修复状态、来源 hash、`manual_fixes.jsonl` hash 和当前 Markdown hash 同步写入 `manifest.json`。不生成 `*-fixed.md`。
 - `logical_tables.jsonl` 只有存在独立下游消费者时才生成，且必须由 `manual_fixes.jsonl` 派生，不能作为第二个事实源。
@@ -333,7 +333,7 @@ data/ingest_manifest.json
 scripts/pdf-eval-vlm /path/to/package
 ```
 
-该命令通过 ModelPad API 自动管理 `qwen3-vl-8b` 生命周期。VLM 已运行时复用不停止；已停止时自动启动，执行完成后自动停止。也支持 `VLM_API_BASE=http://127.0.0.1:9005` 直连远端 VLM 端点（跳过 ModelPad 启停）。它只读取输出包并将每页结构化结果写入 `data/vlm_eval.jsonl`，不参与表格 `td` 异常修复，也不替代 MinerU 主解析。
+该命令固定使用 `qwen3-vl-8b`，通过 ModelPad API 自动管理生命周期。ModelPad 管理 API 固定为 `http://127.0.0.1:9999`，实际 VLM 服务端点固定为 `http://127.0.0.1:9005`。VLM 已运行时复用不停止；已停止时自动启动，执行完成后自动停止。也支持 `VLM_API_BASE=http://127.0.0.1:9005` 直连远端 VLM 端点（跳过 ModelPad 启停），但远端必须仍提供 `qwen3-vl-8b`。它只读取输出包并将每页结构化结果写入 `data/vlm_eval.jsonl`，不参与表格 `td` 异常修复，也不替代 MinerU 主解析。
 
 ## 排障
 

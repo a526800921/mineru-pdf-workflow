@@ -1,6 +1,6 @@
 ---
 name: pdf2md-fix
-description: Use when pdf-auto 已完成且存在 review.md、需要人工复核和修复 PDF 转换结果、处理跨页表格逻辑连续性、目录内容/物理页归属和目录产物同步、修复 8192 空列/异常列数表格、修正字段遗漏/章节归属/结构语义、按页锚点边界执行安全内容修复、使用 VLM 辅助视觉证据确认、生成 manual_fixes.jsonl 修复记录并同步 manifest。
+description: Use when pdf-auto 已完成且存在 review.md、需要人工复核和修复 PDF 转换结果、处理跨页表格逻辑连续性、目录内容/物理页归属和目录产物同步、修复 8192 空列/异常列数表格、修正字段遗漏/章节归属/结构语义、按页锚点边界执行安全内容修复、使用固定的 qwen3-vl-8b VLM 辅助视觉证据确认、生成 manual_fixes.jsonl 修复记录并同步 manifest。
 ---
 
 # pdf2md-fix — 人工复核与内容修复
@@ -147,6 +147,15 @@ grep -n '^<!-- pages' <package>/<stem>.md
 
 VLM 只生成候选证据，不直接产生最终事实或审核结论。
 
+### 固定模型与调用入口
+
+- 标准模型固定为 `qwen3-vl-8b`，不得在标准 `pdf2md-fix` 证据链中静默替换为其他模型。
+- 标准调用入口为 `scripts/pdf-eval-vlm <package>`。
+- ModelPad 管理 API 固定为 `http://127.0.0.1:9999`，实际 VLM 服务端点固定为 `http://127.0.0.1:9005`。
+- VLM 已运行时复用，不由本次流程停止；由本次流程启动时，执行结束后自动停止。
+- 允许用 `VLM_API_BASE` 直连远程端点，但远程端点仍必须提供 `qwen3-vl-8b`；无法确认模型身份时不得写入合规 VLM 证据。
+- 模型不可用时保持 `needs_review`，不得自动降级到未登记模型或把 VLM 缺失伪装成人工确认。
+
 ### 适用场景（优先）
 
 - 跨页表格视觉连续性确认。
@@ -164,7 +173,7 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 
 | 字段 | 说明 |
 |---|---|
-| `model` | 使用的 VLM 模型（如 qwen3-vl-8b） |
+| `model` | 固定填写 `qwen3-vl-8b`；其他模型只能作为未纳入标准证据链的实验记录 |
 | `input_pages` | 输入 PDF 页码 |
 | `crop_area` | 裁剪区域（如适用） |
 | `output_file` | VLM 输出文件路径 |

@@ -131,7 +131,33 @@ for index, (start, end, name, md_path) in enumerate(segments):
     pieces.append(text)
 
 output.parent.mkdir(parents=True, exist_ok=True)
+previous_output = output.read_bytes() if output.exists() else None
+previous_manifest = manifest_path.read_bytes() if manifest_path.exists() else None
 output.write_text("".join(pieces), encoding="utf-8")
+
+# ── 表格 pretty-print 格式化 ──
+from lib.markdown_table_formatter import finalize_markdown_formatting, _atomic_write
+pkg_dir_fmt = output.parent
+fmt_result = finalize_markdown_formatting(pkg_dir_fmt)
+if fmt_result.get("status") == "ok":
+    print(f"表格格式化完成（{fmt_result.get('formatting_status', '?')}）")
+elif fmt_result.get("status") == "error":
+    print(f"表格格式化失败: {fmt_result.get('error', '?')}", file=sys.stderr)
+    # 格式化失败时恢复合并前的 canonical Markdown 和 manifest。
+    try:
+        if previous_output is None:
+            output.unlink(missing_ok=True)
+        else:
+            _atomic_write(output, previous_output.decode("utf-8"))
+        if previous_manifest is None:
+            manifest_path.unlink(missing_ok=True)
+        else:
+            _atomic_write(manifest_path, previous_manifest.decode("utf-8"))
+    except Exception as rollback_error:
+        raise SystemExit(
+            f"表格格式化失败且回滚失败: {rollback_error}"
+        )
+    raise SystemExit(f"表格格式化失败: {fmt_result.get('error', '?')}")
 
 print(f"已合并分段数: {len(segments)}")
 print(f"输出文件: {output}")
