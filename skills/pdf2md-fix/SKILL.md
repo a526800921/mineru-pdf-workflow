@@ -1,6 +1,6 @@
 ---
 name: pdf2md-fix
-description: Use when pdf-auto 已完成且存在 review.md、需要人工复核和修复 PDF 转换结果、处理跨页表格逻辑连续性、修复 8192 空列/异常列数表格、修正字段遗漏/章节归属/结构语义、按页锚点边界执行安全内容修复、使用 VLM 辅助视觉证据确认、生成 manual_fixes.jsonl 修复记录并同步 manifest。
+description: Use when pdf-auto 已完成且存在 review.md、需要人工复核和修复 PDF 转换结果、处理跨页表格逻辑连续性、目录内容/物理页归属和目录产物同步、修复 8192 空列/异常列数表格、修正字段遗漏/章节归属/结构语义、按页锚点边界执行安全内容修复、使用 VLM 辅助视觉证据确认、生成 manual_fixes.jsonl 修复记录并同步 manifest。
 ---
 
 # pdf2md-fix — 人工复核与内容修复
@@ -207,6 +207,18 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 - `formatting.status`：`none` → `applied` → `verified`。
 - manifest 引用的每个派生文件都必须存在；hash 不匹配时 `pdf2md-fix` 必须失败。
 - 不得把人工修复状态伪装成 `parse_status`。
+
+### 目录修复同步门禁
+
+目录修复不是只改 canonical Markdown：必须从同一份人工确认后的目录条目集合重新生成并同步以下产物：
+
+- `files.markdown` 对应的 canonical `<stem>.md`，保留物理页锚点；
+- `files.toc` → `toc.md`，无锚点连续展示视图；
+- `files.toc_tree` → `toc_tree.json`，机器权威结构，逐条包含 `title`、`target_page`、`toc_page`、`depth`；
+- `review.md`，仅当目录复核状态、缺失条目或物理页归属发生变化时同步；
+- `hash.toc_md_sha256` 与 `hash.toc_tree_json_sha256`，并与当前文件内容一致。
+
+`toc.md` 和 `toc_tree.json` 必须来自同一份已确认条目集合，禁止只修其中一份。`toc_tree.json` 的 `toc_page` 表示条目所在 PDF 物理目录页，`target_page` 表示条目指向的正文页，二者不可混用。原始 `segments/**/content_list*.json` 只作为证据读取，不得人工改写。
 
 ## 修复记录格式
 

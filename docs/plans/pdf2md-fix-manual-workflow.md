@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：已完成
-- 当前阶段：全阶段（0-4）已完成——真实样本扩展与收敛（2026-07-12，重新验收通过）
+- 当前阶段：全阶段（0-4）
 - 最后更新：2026-07-12
 
 本文档是 `pdf2md-fix-manual-workflow` 的实施细节事实源。计划索引、状态、依赖、推荐顺序和证据入口以 [PLAN_MAP](../PLAN_MAP.md) 为准。
@@ -31,6 +31,7 @@
 - 保留原始 PDF、原始分段和格式化前 Markdown 的 hash，不让人工修复破坏回溯链。
 - 让下游通过稳定的逻辑表格和修复记录知道人工结论，而不是根据 `<table>` 数量猜测语义。
 - 规定 Markdown、`manifest.json`、修复记录和逻辑表格元数据必须作为一个原子发布单元同步更新。
+- 目录修复必须同步 canonical Markdown、`toc.md`、`toc_tree.json`、必要时的 `review.md` 以及 manifest 中的路径和 hash；`content_list*.json` 只作为原始证据，不作为人工修改目标。
 - 保持现有 `review_overrides.csv` 的职责：只表达结构化记录的审核状态，不承担内容字段改写。
 
 ## 非目标
@@ -969,6 +970,23 @@ scripts/pdf-export-ingest pdf/春风\ 150AURA
 | 4 | 人工修复统计+自动化建议 | ✅ 类型分布表+决策 |
 | 5 | 阶段 2/3 回归+测试+治理持续通过 | ✅ 67+135+governance |
 
+#### 阶段 4 再次独立验收复核（2026-07-12）
+
+结论：未通过阶段完成验收，当前状态为 `实施中`。
+
+本次实际检查发现完成证据与工作区产物不一致：
+
+- `pdf/demo20/data/vlm_eval.jsonl` 当前不存在，因此无法验证计划中所称的 5 条 VLM 记录，也无法验证图片/OCR 页的人工采纳/拒绝路径。
+- `pdf/demo60/data/manual_fixes.jsonl` 当前已有 p37、p47、p48、p50 修复记录，但 `pdf/demo60/manifest.json.files` 没有 `table_candidates` 引用；候选证据没有作为输出包的一部分登记。
+- `pdf/demo60/data/table_candidates.jsonl` 当前存在与否不能只靠临时扫描证明；阶段 4 要求真实包内候选、人工修复记录和 manifest 关联同时存在。
+- 因此，之前“阶段 4 完成证据”中的 VLM 记录和 demo60 候选登记属于已漂移声明，不能作为本次验收证据。
+
+完成前必须重新生成并核对：
+
+1. demo20 的 VLM 评测文件，以及至少一个跨页表格和一个图片/OCR 页面对应的 `model`、`input_pages`、输出引用和人工采纳/拒绝结论；
+2. demo60 的 `table_candidates.jsonl`、p37/p47/p48/p50 `manual_fixes.jsonl` 和 `manifest.json.files`/hash 关联；
+3. 真实包产物与计划矩阵一致后，再重跑阶段 4 验收及治理检查。
+
 #### 阶段 4 独立验收复核（2026-07-12）
 
 结论：未通过阶段完成验收，当前状态为 `实施中`。
@@ -1020,6 +1038,83 @@ scripts/pdf-export-ingest pdf/春风\ 150AURA
 - `bash tests/test-fix-validate.sh`：67/67 通过
 - `pytest -q`：135 passed
 - `python3 scripts/check_plan_governance.py . --drift`：通过
+
+#### 阶段 4 再次独立验收复核（2026-07-12，VLM 证据链）
+
+结论：仍未通过阶段完成验收，状态保持 `实施中`。
+
+本次复核确认上一轮阻塞项中的真实包产物已经补齐：
+
+- `pdf/demo20/data/vlm_eval.jsonl` 存在 5 条记录，字段包含 `model`、`input_pages`、`crop_area`、`output_file` 和 `human_conclusion`。
+- `pdf/demo60/data/table_candidates.jsonl` 存在 6 页候选（p12/p15/p37/p47/p48/p50），并已由 `manifest.json.files.table_candidates` 登记；p37/p47/p48/p50 的 `manual_fixes.jsonl` 记录和页级证据存在。
+- `scripts/pdf-check-fixes` 对 demo20、demo60、春风样本均通过；阶段回归为 67/67，`pytest -q` 为 135 passed，治理检查及 drift 检查通过。
+
+但阶段 4 的 VLM 完成条件仍不满足：
+
+- `vlm_eval.jsonl` 的 5 条记录全部是单页，`input_pages` 中没有 `[14, 15, 16]` 或其他跨页输入；因此 demo20 的跨页表格没有对应的 VLM 原始证据记录。
+- `demo20-p14-p16-cross` 的 `vlm_evidence` 声称输入页为 `[14, 15, 16]`，但它引用的 `vlm_eval.jsonl` 没有该记录，形成悬空/不一致的证据引用，不能作为采纳结论依据。
+- demo20 的 `manifest.json.files` 和 `hash` 当前没有登记 `vlm_eval.jsonl`；下游无法仅依赖 manifest 完整发现并校验这份 VLM 证据。
+- p19 的单页记录同时包含“采纳”和“拒绝”文字，只能证明该单页有人工作出了两种判断，不能替代跨页表格的 VLM 证据采纳/拒绝路径。
+
+阶段 4 完成前只需补齐以下最小闭环：
+
+1. 增加一条真实的跨页 VLM 记录，`input_pages` 与 `demo20-p14-p16-cross.vlm_evidence` 完全一致，并明确人工采纳或拒绝结论；若要证明两条路径，则分别记录采纳和拒绝，不把两种结论拼在一条无法复核的文本里。
+2. 在 `pdf/demo20/manifest.json` 中登记 `vlm_eval` 文件路径和 hash，或将其纳入已有可验证证据文件的 hash 契约。
+3. 重新运行阶段 4 验收矩阵和治理检查；现有 67/67、135 passed、demo60 候选登记结果可复用。
+
+#### 阶段 4 再次独立验收复核（2026-07-12，跨页记录已补齐）
+
+结论：仍未通过阶段完成验收，状态保持 `实施中`。
+
+本次已确认：
+
+- `pdf/demo20/data/vlm_eval.jsonl` 已有 6 条记录，新增 `input_pages=[14,15,16]` 的跨页记录。
+- `demo20-p14-p16-cross.vlm_evidence` 已能关联到该跨页记录的模型、输入页和输出文件。
+- `pdf/demo20/manifest.json.files.vlm_eval` 已登记 `data/vlm_eval.jsonl`。
+- demo60 的 6 页候选、p37/p47/p48/p50 人工修复记录和 manifest 登记仍然完整。
+- `scripts/pdf-check-fixes`、67/67 回归、135 项 pytest、治理检查及 drift 检查均通过。
+
+仍存在两个证据链阻塞项：
+
+- `pdf/demo20/manifest.json.hash` 没有 `vlm_eval_sha256`，下游无法通过 manifest 校验 VLM 文件内容是否发生漂移。
+- `demo20-p14-p16-cross.vlm_evidence.human_conclusion` 与 `vlm_eval.jsonl` 对应记录的 `human_conclusion` 不完全一致；修复记录是摘要版，不能作为与原始 VLM 记录可机器比对的完整引用。
+
+阶段 4 完成前需要：
+
+1. 写入 `hash.vlm_eval_sha256`，值必须等于当前 `data/vlm_eval.jsonl` 的 SHA-256。
+2. 让跨页修复记录的 `vlm_evidence` 与原始 VLM 记录逐字段一致，或改为使用稳定的 `vlm_eval_id` 引用并由校验器解析关联，不能只靠人工摘要。
+3. 重跑上述验收命令后，再推进阶段状态。
+
+#### 阶段 4 最终验收（2026-07-12）
+
+结论：通过阶段完成验收，阶段 4 及本计划状态推进为 `已完成`。
+
+本次修复与验证：
+
+- `pdf/demo20/data/vlm_eval.jsonl` 的跨页记录与 `demo20-p14-p16-cross.vlm_evidence` 已逐字段一致。
+- `pdf/demo20/manifest.json` 已登记 `files.vlm_eval`、`hash.vlm_eval_sha256`，并同步更新 `fixes.manual_fixes_sha256`。
+- demo60 的 8192 候选、页锚点修复和 manifest 登记保持完整；春风样本的 `fix_data` 与入库门禁保持通过。
+- 增加的 VLM/manifest 一致性检查通过，三个真实样本的 `scripts/pdf-check-fixes` 均通过。
+- `bash tests/test-fix-validate.sh`：67/67 通过；`pytest -q`：135 passed；`python3 scripts/check_plan_governance.py .` 及 `--drift` 均通过。
+
+阶段 4 的真实样本、VLM 证据、8192 候选恢复、页锚点保护、人工修复记录、manifest 同步和回归门禁均已形成闭环；后续若增加新的自动化能力，应另立计划，不在本计划中继续扩展。
+
+#### 目录修复输出契约补充（2026-07-12）
+
+基于 `pdf/春风250Sr/` 复核发现，目录修复不能只更新带页锚点的 canonical Markdown。输出包的目录事实由同一份已确认条目集合派生为三类视图：
+
+- `<stem>.md`：按物理页锚点保存目录原文和修复结果；
+- `toc.md`：无锚点、供人工阅读和前端展示的连续目录；
+- `toc_tree.json`：机器权威目录结构，字段为 `title`、`target_page`、`toc_page`、`depth`，供 `pdf-extract-data` 做 section 映射。
+
+目录修复还必须按需同步 `review.md` 的目录复核段，并在 `manifest.json` 中登记：
+
+- `files.toc = "toc.md"`；
+- `files.toc_tree = "toc_tree.json"`；
+- `hash.toc_md_sha256`；
+- `hash.toc_tree_json_sha256`。
+
+这是一项对输出包公共契约的补充。现有阶段 0–4 的历史验收证据仍保留；目录产物登记和修复器的自动一致性校验作为后续增量实施项，不得把只更新 `<stem>.md` 的目录修复标记为完整闭环。`segments/**/content_list*.json` 继续保持只读。
 
 ## 阶段验证方式
 

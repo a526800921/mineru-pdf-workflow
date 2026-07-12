@@ -106,6 +106,7 @@ MODELPAD_PDF_START_TIMEOUT=120
   - `doc.md`：主文档，保留段级锚点 `<!-- pages N-M -->`，供按页读取、结构化抽取和 section 映射；
   - `toc.md`：无锚点连续目录列表，供人工阅读和前端渲染；不含任何页级锚点，不重新解析或猜测页码；
   - `toc_tree.json`：机器权威目录结构，每条含 `title`、`target_page`（条目指向正文页）、`toc_page`（条目所在物理目录页）、`depth`；`pdf-extract-data` 用 `target_page` 做 section 映射。
+- 目录修复必须把 `doc.md`、`toc.md`、`toc_tree.json`、`review.md`（如复核结论变化）和 `manifest.json` 作为一个同步发布单元：`manifest.files.toc` 指向 `toc.md`，`manifest.files.toc_tree` 指向 `toc_tree.json`，并登记 `manifest.hash.toc_md_sha256` 与 `manifest.hash.toc_tree_json_sha256`。不得只改主 Markdown 或只改展示目录；原始 `segments/**/content_list*.json` 只读，不能作为人工修复目标。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 
 ## 核心流程
