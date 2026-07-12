@@ -767,6 +767,7 @@ def validate_table_candidates(manifest: dict, pkg_dir: Path) -> list[str]:
     # 4. 逐行校验 JSONL 格式
     anchor_re = re.compile(r"^<!-- pages \d+-\d+ -->$")
     ids_seen: set[str] = set()
+    anchors_seen: set[str] = set()
     try:
         with tc_path.open(encoding="utf-8") as f:
             for lineno, line in enumerate(f, start=1):
@@ -808,12 +809,18 @@ def validate_table_candidates(manifest: dict, pkg_dir: Path) -> list[str]:
                         f"table_candidates 第 {lineno} 行 page 不是正整数：{pg}"
                     )
 
-                # page_anchor
+                # page_anchor（格式 + 去重）
                 pa = obj.get("page_anchor", "")
                 if not anchor_re.match(pa or ""):
                     errors.append(
                         f"table_candidates 第 {lineno} 行 page_anchor 格式不合法：{pa}"
                     )
+                elif pa in anchors_seen:
+                    errors.append(
+                        f"table_candidates 第 {lineno} 行 page_anchor 重复：{pa}"
+                    )
+                else:
+                    anchors_seen.add(pa)
 
                 # needs_human
                 if obj.get("needs_human") is not True:

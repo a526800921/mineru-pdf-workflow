@@ -170,6 +170,25 @@ manifest 至少登记：
 - 补齐 malformed manifest、缺失 PDF、重复页锚点/候选 ID 以及候选写入失败的回归测试，并明确各自退出码和残留文件行为；
 - 重新运行三包临时副本、`pdf-check-fixes`、全量 pytest 和治理检查后，再记录阶段 1 通过结论。
 
+#### 阶段 1 再次独立验收（2026-07-12，仍未通过）
+
+本次复核确认上次的失败回滚阻塞已解除，但阶段 1 仍不能通过，暂不进入阶段 2。
+
+已确认：
+
+- `python3 tests/test_table_candidates.py`：28/28 通过；
+- `bash tests/test-fix-validate.sh`：89/89 通过，已覆盖 malformed manifest、缺失 PDF、候选写入失败和 manifest rename 失败回滚；
+- `pytest -q`：221/221 通过；
+- `python3 scripts/check_plan_governance.py .` 与 `--drift` 均通过；
+- 故障注入确认 manifest rename 失败后，候选最终文件、候选临时文件和 manifest 临时文件均被清理，manifest 未登记候选；
+- `demo20`、`demo60`、`春风250Sr` 临时副本扫描分别生成 4、16、29 条候选，manifest hash、Markdown、segments 和 `pdf-check-fixes` 均通过，候选 ID 与页锚点在真实结果中无重复。
+
+仍存在的阻塞：
+
+- `scripts/pdf-check-fixes` 只检测重复 `candidate_id`，没有检测重复 `page_anchor`。在临时副本中保留两个不同 `candidate_id`、但将第二条 `page_anchor` 改成第一条并同步 hash 后，`pdf-check-fixes` 仍返回 0；这违反阶段 1 要求的重复页锚点门禁。
+
+整改门槛：为候选校验增加 `page_anchor` 去重及对应回归测试；重新运行本节列出的全部验证，并确认重复页锚点样本返回非零后，才可将阶段 1 改为通过并推进阶段 2。
+
 ### 阶段 2：skill 与人工/VLM流程同步
 
 1. 在项目级 `skills/pdf2md-fix/SKILL.md` 中固定审计命令、候选产物、人工确认顺序和 `manual_fixes.jsonl` 进入条件。

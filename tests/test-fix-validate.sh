@@ -382,6 +382,33 @@ else
   _pass "T12: 未产生任何候选文件"
 fi
 
+# ── T13: 重复 page_anchor 检测 ──
+echo ""
+echo "--- T13: 重复 page_anchor 检测 ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+"$_scripts"/pdf-table-fix "$t" > /dev/null 2>&1
+python3 -c "
+import json, hashlib
+src = '$t/data/table_candidates.jsonl'
+with open(src, encoding='utf-8') as f:
+    lines = f.readlines()
+# 用不同的 candidate_id 但相同的 page_anchor 构造重复
+first = json.loads(lines[0])
+dup = dict(first)
+dup['candidate_id'] = first['candidate_id'] + '_DUP'
+lines.append(json.dumps(dup, ensure_ascii=False) + '\n')
+with open(src, 'w', encoding='utf-8') as f:
+    f.writelines(lines)
+# Update manifest hash
+m = json.loads(open('$t/manifest.json', encoding='utf-8').read())
+m['hash']['table_candidates_sha256'] = hashlib.sha256(open(src, 'rb').read()).hexdigest()
+open('$t/manifest.json', 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "T13: 重复 page_anchor 被检测到"
+_grep "$out" "page_anchor 重复" "T13: 错误信息包含 page_anchor 重复"
+
 # ── A1: pdf-apply-fixes 简单修复应用 ──
 echo ""
 echo "--- A1: pdf-apply-fixes 简单修复应用 ---"
