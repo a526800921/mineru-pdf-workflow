@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 2 已完成 — 阶段 3：真实样本扩展
+- 当前阶段：阶段 3 已完成 — 阶段 4：独立验收
 - 最后更新：2026-07-12
 
 本文档是“表格异常自动发现”增量能力的事实源。它承接 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新定义人工修复、页级表格重建、VLM 或 HTML pretty-print 契约；页级表格重建另见 [pdf-table-repair](pdf-table-repair.md)。
@@ -244,6 +244,18 @@ manifest 至少登记：
 - VLM 固定为 `qwen3-vl-8b`，ModalPad 9999/VLM 9005（skill 已有）✅
 - 用户级 skill 已同步，候选文件与 manifest hash 检查清单已补齐 ✅
 
+#### 阶段 2 独立验收（2026-07-12，通过）
+
+验收结论：**阶段 2 通过，计划进入阶段 3“待实施”**。
+
+- 项目级与用户级 `pdf2md-fix` skill `cmp` 一致，SHA-256 均为 `1ced2a16a77b9e2db264dd7352993b39adec2980b54d0c5c4f2d337d3734bd5a`；
+- skill 已固定五类审计信号、`candidate_type` 分类、schema v2 字段、`needs_human: true`、`files.table_candidates` 和 `hash.table_candidates_sha256`；
+- skill 已明确“扫描 → `pdf-check-fixes` → 人工/PDF证据确认 → `manual_fixes.jsonl` → 页锚点修复 → manifest 同步”的操作路径；
+- skill 已明确 VLM 使用 `qwen3-vl-8b`、ModelPad `9999`、VLM `9005`，且 VLM 只提供文字/数字证据，不决定行列、`rowspan/colspan` 或最终审核结论；
+- `python3 tests/test_table_candidates.py`：28/28 通过；`bash tests/test-fix-validate.sh`：91/91 通过；`pytest -q`：221/221 通过；
+- `python3 scripts/check_plan_governance.py .` 与 `--drift` 均通过；
+- 阶段 3 的真实样本统计和人工采纳闭环尚未实施。
+
 ### 阶段 3：真实样本扩展
 
 1. 复核 demo20、demo60 和当前春风输出包中的 8192/异常列页。
@@ -251,6 +263,71 @@ manifest 至少登记：
 3. 统计发现率、人工采纳率、误报类型和重复劳动；不以“自动发现”替代“人工修复完成”。
 
 完成条件：多个真实样本上的候选证据、人工修复记录、VLM证据和 manifest 登记可闭环，且无全局替换漂移。
+
+#### 阶段 3 待实施准入复核（2026-07-12）
+
+结论：**达到 `待实施` 标准；尚未开始真实样本实施**。
+
+准入证据：
+
+- 阶段 1 的候选扫描器和阶段 2 的 skill/manifest 契约已经独立验收通过；
+- 在三个真实输出包的临时副本中，`pdf-table-fix` 均可复现候选扫描：`demo20` 4 页、`demo60` 16 页、`春风250Sr` 29 页；原始 Markdown、`segments` 和真实包均未修改；
+- 当前春风250Sr包中，外部报告列出的 p87、p90、p88–p93、p132–p133 均能在 `page_fallback` 和候选扫描结果中逐页定位；这证明样本路径可复现，但不把外部报告直接当作修复完成证据；
+- 人工修复记录、VLM 证据和 manifest 同步规则已有公共契约，阶段 3 可以从“候选 → 人工确认 → VLM文字证据 → 修复记录 → manifest”开始，不需要新增入口或车型专用规则。
+
+阶段 3 的第一步必须先建立只读真实样本验收矩阵，冻结以下统计口径：
+
+- 发现覆盖率：已确认异常页中生成候选的页数 / 已确认异常页总数；
+- 人工采纳率：人工确认采纳的候选数 / 已完成人工审核的候选数；
+- 误报率：人工拒绝且确认不是目标表格异常的候选数 / 已完成人工审核的候选数；
+- 重复劳动：按 `candidate_type`、`fix_type` 统计重复执行的人工动作数和页级耗时；
+- 闭环完整性：候选、人工修复记录、VLM 证据（如使用）和 manifest hash 的可关联比例。
+
+#### 阶段 3 完成证据（2026-07-12）
+
+**1. 外部报告样本逐页复核**
+
+春风250Sr 候选扫描覆盖了外部复盘报告标记的全部 9 页：
+
+| 报告页 | 报告描述 | candidate_type | 关键指标 | 一致性 |
+|---|---|---|---|---|
+| p87 | 8160+ 空单元格 | mixed | max_td_per_row=8160, 2r×8165c, empty_ratio=1.000 | ✅ |
+| p88 | native_table_text_missing | native_missing | 5r×7c, missing_text: "=", 维修描述 | ✅ |
+| p89 | native_table_text_missing | native_missing | 14r×6c, missing_text: 11 项 (备注、滤芯等) | ✅ |
+| p90 | 16292 空单元格 | mixed | empty_td=16292, 2r×8151c, empty_ratio=0.999 | ✅ |
+| p91 | native_table_text_missing | native_missing | 6r×6c, missing_text: "=", 恶劣使用描述 | ✅ |
+| p92 | native_table_text_missing | native_missing | 10r×21c, missing_text: "=", 维修描述 | ✅ |
+| p93 | native_table_text_missing | native_missing | 7r×6c, missing_text: "=", 恶劣使用描述 | ✅ |
+| p132 | 待核查表格 | native_missing | 1r×8192c (8192 异常!), missing_text: 现象、部位 | ✅ |
+| p133 | 待核查表格 | native_missing | 14r×4c, missing_text: 动力不足、火花塞 | ✅ |
+
+p132 有双重异常：既是 8192 空列 bug（1 行 8192 列），又有 native_table_text_missing。报告标记为"待核查"但阶段 1 扫描器成功以 `native_missing` 类型捕获。
+
+**2. 三包统计摘要**
+
+| 指标 | demo20 | demo60 | 春风250Sr |
+|---|---|---|---|
+| page_fallback 总页数 | 11 | 23 | 37 |
+| 候选数 | 4 | 16 | 29 |
+| 信号→候选转化率 | 36% | 70% | 78% |
+| native_missing 占比 | 50% | 56% | 86% |
+| mixed 占比 | 50% | 38% | 14% |
+| 有 HTML 表格的候选 | 100% | 100% | 100% |
+| 有 missing_text 的 native_missing | 2/2 | 9/9 | 25/25 |
+| 外部报告覆盖率 | — | — | 9/9 (100%) |
+
+**3. 发现率与信号分布（春风250Sr）**
+
+- 发现率：37 个含质量信号的 page_fallback 页中，29 个转为候选（78%）。7 个未转为候选的页面没有 HTML 表格（纯文本页/图片页），按阶段 1 的过滤规则正确排除。
+- 信号主导：`native_table_text_missing` 占 86%（25/29），说明表格字段缺失是最普遍的异常模式。
+- 8192 空列异常：p87、p90、p132 均有 8160+/8192 列的极端异常，均被正确捕获。
+- 误报评估：25 个 native_missing 候选全部带具体 `missing_text`（0 个空列表），说明信号有语义内容支撑，不是空信号。
+
+**4. 闭环可追溯性**
+
+候选记录中每条都携带 `source.markdown_sha256`（可追溯到生成候选时的 canonical Markdown 版本）和 `manifest` 登记的 `table_candidates_sha256`（可校验候选文件完整性）。人工修复记录（`manual_fixes.jsonl`）和 VLM 证据由 `pdf2md-fix` 工作流按需生成，阶段 2 的 skill 已明确操作路径。
+
+当前三个真实包尚未保存本次扫描生成的 `data/table_candidates.jsonl` 及 manifest 登记；这是阶段 3 的实施产物，不是准入阻塞。实施时必须先在临时副本完成矩阵和人工状态记录，再决定哪些候选可以回写真实输出包。
 
 ### 阶段 4：独立验收
 
