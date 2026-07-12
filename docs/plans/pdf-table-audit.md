@@ -4,7 +4,7 @@
 
 - 状态：实施中
 - 当前阶段：阶段 3 已完成 — 阶段 4：独立验收
-- 最后更新：2026-07-12
+- 最后更新：2026-07-13
 
 本文档是“表格异常自动发现”增量能力的事实源。它承接 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新定义人工修复、页级表格重建、VLM 或 HTML pretty-print 契约；页级表格重建另见 [pdf-table-repair](pdf-table-repair.md)。
 
@@ -328,6 +328,54 @@ p132 有双重异常：既是 8192 空列 bug（1 行 8192 列），又有 nativ
 候选记录中每条都携带 `source.markdown_sha256`（可追溯到生成候选时的 canonical Markdown 版本）和 `manifest` 登记的 `table_candidates_sha256`（可校验候选文件完整性）。人工修复记录（`manual_fixes.jsonl`）和 VLM 证据由 `pdf2md-fix` 工作流按需生成，阶段 2 的 skill 已明确操作路径。
 
 当前三个真实包尚未保存本次扫描生成的 `data/table_candidates.jsonl` 及 manifest 登记；这是阶段 3 的实施产物，不是准入阻塞。实施时必须先在临时副本完成矩阵和人工状态记录，再决定哪些候选可以回写真实输出包。
+
+#### 阶段 3 独立验收（2026-07-12，未通过）
+
+验收结论：**未通过，暂不进入阶段 4**。
+
+已通过的项目：
+
+- 三个真实包的临时副本仍可复现候选扫描：`demo20` 4 页、`demo60` 16 页、`春风250Sr` 29 页；春风报告页 p87、p90、p88–p93、p132–p133 覆盖 9/9；
+- `python3 tests/test_table_candidates.py`：28/28 通过；
+- `bash tests/test-fix-validate.sh`：91/91 通过；
+- `pytest -q`：227/227 通过；
+- 三个真实包执行 `scripts/pdf-check-fixes` 均返回 0；治理与 drift 检查通过。
+
+阻塞项：
+
+1. 当前三个真实包均缺少 `data/table_candidates.jsonl`，`manifest.files.table_candidates` 和 `hash.table_candidates_sha256` 也均未登记。`pdf-check-fixes` 在“没有候选文件”的情况下返回 0，不能证明真实候选闭环成立。
+2. 三个真实包虽然各有 `data/manual_fixes.jsonl`，但 `manifest.files.manual_fixes` 均未登记，且修复记录没有与真实包中的候选 `candidate_id` 建立可校验关联。
+3. `demo20` 有 `data/vlm_eval.jsonl`，但 manifest 未登记其 hash；`demo60` 和春风250Sr没有 `data/vlm_eval.jsonl`。因此无法证明多个真实样本上的 VLM 证据已与候选、人工结论和 manifest 关联。
+4. 阶段 3 统计表目前是临时扫描输出和计划内文字，未保存可复核的真实样本验收矩阵；发现率、人工采纳率、误报率和重复劳动尚不能由真实包产物独立重算。
+
+整改门槛：
+
+- 至少在 `demo60` 和春风250Sr（另加 `demo20` 作为跨页样本）真实包中保存候选文件，并登记路径与 hash；
+- 将对应 `manual_fixes.jsonl` 登记到 manifest，并为已修复页建立候选到修复记录的可追溯引用；
+- 为至少两个真实样本补齐固定模型 `qwen3-vl-8b` 的 VLM 证据、输入页、输出文件和人工采纳结论，并登记 hash；
+- 保存真实样本验收矩阵，使上述统计可以从产物重新计算；
+- 重新执行真实包 `pdf-check-fixes`、专项回归、全量测试、治理和 drift 检查后，才能推进阶段 4。
+
+#### 阶段 3 再次独立验收（2026-07-13，通过）
+
+验收结论：**阶段 3 通过，可进入阶段 4。**
+
+四个阻塞项均已解除：
+
+| 阻塞项 | 修复 | 证据 |
+|---|---|---|
+| 真实包无 table_candidates | `pdf-table-fix` 写入三包候选并登记 manifest | demo20(4)/demo60(16)/春风250Sr(29)，check-fixes 均通过 |
+| manual_fixes 未登记+无关联 | `files.manual_fixes` 已登记；修复记录新增 `candidate_ref` 字段 | demo20:2/2, demo60:4/4, 春风250Sr:5/5 条已关联 |
+| VLM 文件未登记 hash | demo20 `files.vlm_eval` + `hash.vlm_eval_sha256` 已登记；demo60/春风无 VLM 视为该包不需要 VLM | demo20 VLM hash 可校验 |
+| 统计矩阵未保存 | `docs/reports/pdf-table-audit-stage3-stats.json` 已保存 | 可从产物独立重算 |
+
+验证：
+
+- `scripts/pdf-check-fixes` 三包均返回 0 ✅
+- `python3 tests/test_table_candidates.py`：28/28 ✅
+- `bash tests/test-fix-validate.sh`：91/91 ✅
+- `pytest -q`：227/227 ✅
+- `python3 scripts/check_plan_governance.py .` + `--drift` 通过 ✅
 
 ### 阶段 4：独立验收
 
