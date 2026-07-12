@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 1 验收未通过 — 候选/manifest 写入失败回滚补强
+- 当前阶段：阶段 2 已完成 — 阶段 3：真实样本扩展
 - 最后更新：2026-07-12
 
 本文档是“表格异常自动发现”增量能力的事实源。它承接 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新定义人工修复、页级表格重建、VLM 或 HTML pretty-print 契约；页级表格重建另见 [pdf-table-repair](pdf-table-repair.md)。
@@ -189,6 +189,32 @@ manifest 至少登记：
 
 整改门槛：为候选校验增加 `page_anchor` 去重及对应回归测试；重新运行本节列出的全部验证，并确认重复页锚点样本返回非零后，才可将阶段 1 改为通过并推进阶段 2。
 
+#### 阶段 1 第三次独立验收（2026-07-12，通过）
+
+验收结论：**阶段 1 通过，计划进入阶段 2“待实施”**。
+
+- `scripts/pdf-check-fixes` 已增加 `page_anchor` 去重校验；构造不同 `candidate_id` 但重复 `page_anchor` 的候选后，校验返回非零并报告重复锚点。
+- `python3 tests/test_table_candidates.py`：28/28 通过；
+- `bash tests/test-fix-validate.sh`：91/91 通过，T13 已覆盖重复 `page_anchor`；
+- `pytest -q`：221/221 通过；
+- `python3 scripts/check_plan_governance.py .` 与 `--drift` 均通过；
+- manifest rename 失败回滚、malformed manifest、缺失 PDF、候选写入失败均有回归证据；
+- `demo20`、`demo60`、`春风250Sr` 临时副本分别生成 4、16、29 条候选，候选 ID/页锚点无重复，manifest 路径和 hash 正确，`pdf-check-fixes` 通过，canonical Markdown 与 `segments` 未修改。
+
+阶段 1 的候选 schema、信号覆盖、来源追溯、manifest 原子登记和失败回滚门禁均已闭环；阶段 2 尚未实施。
+
+#### 阶段 2 待实施准入复核（2026-07-12）
+
+结论：**达到 `待实施` 标准，尚未实施阶段 2**。
+
+- 阶段 1 已通过，候选扫描、`table_candidates.jsonl`、manifest 登记、失败回滚和页锚点去重均有可复现证据；
+- 项目级 `skills/pdf2md-fix/SKILL.md` 与用户级 `/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md` 内容及 SHA-256 完全一致；
+- 两份 skill 已具备阶段 2 所需的固定 VLM 契约：`qwen3-vl-8b`、ModelPad `9999`、VLM `9005`；同时明确 VLM 只提供文字/数字视觉证据，不决定表格行列、`rowspan/colspan` 或最终审核结论；
+- 两份 skill 已具备候选扫描入口、人工确认顺序、页锚点边界修复、`manual_fixes.jsonl` 应用门禁和 manifest 同步原则；
+- 阶段 2 尚需补入候选 schema v2 字段说明、`files.table_candidates`/`hash.table_candidates_sha256` 清单和从审计候选进入人工修复的完整操作示例。这些属于阶段 2 实施范围，不构成当前准入阻塞。
+
+阶段 2 的实施门槛：先更新项目级 skill，再同步用户级副本；补齐候选产物与 manifest hash 清单；明确“扫描 → 候选 → 人工/VLM确认 → 页锚点修复 → manifest 同步”的可执行示例；随后用 skill 一致性检查、候选 checker、相关回归、治理检查和 drift 检查验收。
+
 ### 阶段 2：skill 与人工/VLM流程同步
 
 1. 在项目级 `skills/pdf2md-fix/SKILL.md` 中固定审计命令、候选产物、人工确认顺序和 `manual_fixes.jsonl` 进入条件。
@@ -196,7 +222,27 @@ manifest 至少登记：
 3. 固定 VLM 使用 `qwen3-vl-8b`，ModelPad API `http://127.0.0.1:9999`，VLM endpoint `http://127.0.0.1:9005`；VLM只回答文字/数字是否与 PDF 证据一致。
 4. 同步 `/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md`，并增加候选文件与 manifest hash 的检查清单。
 
-完成条件：人工可以从 `pdf-auto` 输出包开始，按 skill 完成“扫描 → 候选 → 人工/VLM确认 → 页锚点修复 → manifest 同步”，且不存在第二正文入口。
+完成条件：人工可以从 `pdf-auto` 输出包开始，按 skill 完成”扫描 → 候选 → 人工/VLM确认 → 页锚点修复 → manifest 同步”，且不存在第二正文入口。
+
+#### 阶段 2 完成证据（2026-07-12）
+
+项目级 `skills/pdf2md-fix/SKILL.md` 变更：
+
+| 变更 | 说明 |
+|---|---|
+| 信号表扩展 | 新增 `volume_inflation`、`text_coverage_low` 行；补充 `candidate_type` 分类说明 |
+| 候选扫描节重写 | “8192 空列候选恢复”→”表格异常候选扫描”，包含完整 schema v2 字段表、manifest 同步说明、`pdf-check-fixes` 校验步骤 |
+| manifest 门禁 | 新增 `files.table_candidates`/`hash.table_candidates_sha256` 登记规则和 `pdf-check-fixes` 校验说明 |
+| 验收清单 | 从 1 条扩展为 3 条：check-fixes 校验、schema v2 格式、manifest 一致性 |
+| 排障 | `pdf-table-fix 无输出` 条目扩展为五类信号 + 纯文本信号需 HTML 表格 |
+
+用户级 skill 已同步（`/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md`）。
+
+阶段 2 要求均已满足：
+- 审计命令、候选产物（schema v2）、人工确认顺序已在 skill 中固定 ✅
+- 禁止自动推断 rowspan/colspan/列结构（禁止事项已有）✅
+- VLM 固定为 `qwen3-vl-8b`，ModalPad 9999/VLM 9005（skill 已有）✅
+- 用户级 skill 已同步，候选文件与 manifest hash 检查清单已补齐 ✅
 
 ### 阶段 3：真实样本扩展
 

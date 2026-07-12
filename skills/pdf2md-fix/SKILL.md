@@ -93,22 +93,58 @@ grep -n '^<!-- pages' <package>/<stem>.md
 |---|---|---|
 | `excessive_empty_td` | 空单元格过多（如 8192） | 候选恢复 → PyMuPDF 提取页级原文 → 人工重建表格 |
 | `excessive_columns` | 列数异常 | 同上 |
-| `native_table_text_missing` | 原生文字缺失 | 确认缺失字段，人工填充 |
+| `native_table_text_missing` | 原生表格字段缺失 | 扫描候选 → 确认缺失字段 → 人工填充或重建 |
+| `volume_inflation` | Markdown 体积异常膨胀 | 标记为 `layout_or_visual_needs_review`，可能为图片表格或布局异常 |
+| `text_coverage_low` | 文本覆盖率低 | 同上；仅当页面有 HTML 表格时才作为候选 |
 | `toc_unassigned` | 目录条目归属不明确 | 人工确认物理目录页 |
 | **表格跨页** | 相邻页码各有一个 `<table>` | 确认是否同一逻辑表，记录 `table_id` |
 | `needs_review` | 人工复核 | 按 review.md 逐项判断 |
 | 字段异常/冲突 | 结构化草案异常 | 人工修正 key/value/unit |
 
-### 3. 8192 空列候选恢复（高频场景）
+候选按 `candidate_type` 分类：`native_missing`（表格字段缺失）、`structural`（空列/列数异常）、`text_omission`（仅文本相关信号）、`mixed`（多类信号并存）。`layout_or_visual_needs_review` 为 `true` 时表示需要视觉确认（图片/布局类页面）。
 
-1. 运行 `scripts/pdf-table-fix <package>` 扫描候选页，输出到 `data/table_candidates.jsonl`。
-2. 读取候选页的原生文本片段和信号摘要。
-3. 使用 PyMuPDF 或类似工具按页提取 PDF 原生文本（`pdf-table-fix` 已包含该步骤的输出）。
-4. 保留原始 HTML、fallback HTML（如有）、页锚点和 segment 来源。
-5. 输出"候选行"或候选 HTML 模板，明确标记 `needs_human`。
-6. **人工**对照 PDF 原页确认最终列数、标题行、跨页连续性。
-7. 不自动决定最终行列结构、rowspan/colspan。
-8. 修复必须通过 `manual_fixes.jsonl` 记录后方可应用。
+### 3. 表格异常候选扫描（`pdf-table-fix`）
+
+`scripts/pdf-table-fix <package>` 是统一的只读审计入口，扫描五类质量信号并生成候选记录。
+
+**执行**：
+
+```bash
+scripts/pdf-table-fix <package>
+```
+
+**输出**：`data/table_candidates.jsonl`（schema v2），每条记录至少包含：
+
+| 字段 | 说明 |
+|---|---|
+| `schema_version` | 固定为 `2` |
+| `candidate_id` | 稳定 ID，格式 `{pkg}_p{page:04d}` |
+| `page` / `page_anchor` / `segment` | 页码、Markdown 锚点、段路径 |
+| `candidate_type` | `native_missing` / `structural` / `text_omission` / `mixed` |
+| `layout_or_visual_needs_review` | `true` 时需视觉确认 |
+| `signals` / `original_metrics` / `missing_text` | 质量信号和原始指标 |
+| `table_stats` | `parse_table_html` 结构指标（无表格时为 `null`） |
+| `original_html` / `fallback_html` / `pdf_text` | 原始 HTML、fallback HTML（如有）、PyMuPDF 原生文本 |
+| `source` | `{pdf, markdown_sha256}` 来源追溯 |
+| `needs_human` | 始终为 `true`，不自动判定结构 |
+
+**manifest 同步**：`pdf-table-fix` 自动将以下字段写入 `manifest.json`：
+
+```json
+{
+  "files": { "table_candidates": "data/table_candidates.jsonl" },
+  "hash": { "table_candidates_sha256": "<sha256>" }
+}
+```
+
+写入为事务性：候选文件和 manifest 变更要么全部成功，要么全部回滚（不留下候选文件存在但 manifest 未登记的半成品）。
+
+**后续步骤**：
+
+1. 运行 `scripts/pdf-check-fixes <package>` 校验候选文件格式和 manifest 一致性。
+2. 读取候选记录，按 `candidate_type` 优先处理 `native_missing` 和 `structural` 候选。
+3. 对照 PDF 原页确认最终列数、标题行、跨页连续性——不自动决定。
+4. 修复必须通过 `manual_fixes.jsonl` 记录后方可应用。
 
 ### 4. 跨页表格逻辑确认
 
@@ -214,6 +250,8 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 - 当前 canonical Markdown 的 hash 必须登记在 `files.markdown_sha256` 和 `fixes.markdown_sha256`。
 - `fixes.status`：`none` → `pending` → `applied` → `verified`。
 - `formatting.status`：`none` → `applied` → `verified`。
+- `files.table_candidates` 指向 `data/table_candidates.jsonl`，由 `pdf-table-fix` 自动登记；`hash.table_candidates_sha256` 必须与文件内容一致。
+- `scripts/pdf-check-fixes` 会校验候选文件的 manifest 登记、hash、schema v2 格式、`candidate_id` 唯一性和 `page_anchor` 唯一性。
 - manifest 引用的每个派生文件都必须存在；hash 不匹配时 `pdf2md-fix` 必须失败。
 - 不得把人工修复状态伪装成 `parse_status`。
 
@@ -282,7 +320,9 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 - [ ] 应用修复时使用 `scripts/pdf-apply-fixes <package>`（含 `--dry-run` 预览）。
 - [ ] `scripts/pdf-apply-fixes` 不会因页块替换后长度变化产生页外内容误报。
 - [ ] 重复运行 `pdf-apply-fixes` 幂等跳过，不重复修改内容。
-- [ ] `data/table_candidates.jsonl`（如存在）中的候选标记为 `needs_human`。
+- [ ] `data/table_candidates.jsonl`（如存在）通过 `pdf-check-fixes` 校验（格式、hash、candidate_id/page_anchor 唯一性）。
+- [ ] 候选文件中每条记录的 `schema_version` 为 `2`，`needs_human` 为 `true`。
+- [ ] `manifest.json` 中 `files.table_candidates` 和 `hash.table_candidates_sha256` 已登记且一致。
 
 ## 排障
 
@@ -290,7 +330,7 @@ VLM 只生成候选证据，不直接产生最终事实或审核结论。
 |---|---|
 | `formatting.status` 不是 `verified` | 先执行或要求执行 HTML 表格 pretty-print |
 | `pdf-check-fixes` 返回非零 | 查看 stderr 的具体错误：`manual_fixes.jsonl` 格式、manifest 块 hash 或不匹配的派生路径 |
-| `pdf-table-fix` 无输出 | 确认 `manifest.json.page_fallback` 中 `quality_signals` 包含 `excessive_empty_td`/`excessive_columns` |
+| `pdf-table-fix` 无输出 | 确认 `manifest.json.page_fallback` 中存在五类信号之一（`excessive_empty_td`/`excessive_columns`/`native_table_text_missing`/`volume_inflation`/`text_coverage_low`）；纯文本信号页还需有 HTML 表格内容 |
 | `pdf-apply-fixes` 返回 1 | 查看 stderr：before 未找到（检查 `pages` 和目标页块）、页块外内容变化（检查 `before` 是否越界）、当前 MD hash 与 manifest 不一致（先运行 `pdf-check-fixes`） |
 | 页面锚点不唯一 | 修复必须失败，保留原始 Markdown |
 | 修复后页块 hash 不匹配 | 修复应用未命中目标；检查页锚点范围 |
