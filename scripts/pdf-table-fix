@@ -37,6 +37,11 @@ except ImportError:
 # ── 常量 ──
 SCHEMA_VERSION = 2
 
+
+class _ScanError(Exception):
+    """可恢复的扫描前置错误（manifest 损坏、PDF 缺失等）。"""
+    pass
+
 # 扫描的信号类型（与 page_quality.py 的 assess_page_quality 一致）
 _INTERESTING_SIGNALS = frozenset({
     "excessive_empty_td",
@@ -228,10 +233,13 @@ def scan_candidates(pkg_dir: Path) -> list[dict]:
     """扫描 package，返回候选页列表。"""
     manifest_path = pkg_dir / "manifest.json"
     if not manifest_path.exists():
-        print(f"错误：manifest.json 不存在：{manifest_path}", file=sys.stderr)
-        return []
+        raise _ScanError(f"manifest.json 不存在：{manifest_path}")
 
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        raise _ScanError(f"manifest.json 读取或解析失败：{e}") from e
+
     page_fallback = manifest.get("page_fallback", {})
     if not page_fallback:
         print("信息：manifest 中没有 page_fallback 记录", file=sys.stderr)
@@ -239,8 +247,7 @@ def scan_candidates(pkg_dir: Path) -> list[dict]:
 
     pdf_path = _get_pdf_path(pkg_dir, manifest)
     if pdf_path is None:
-        print("错误：无法从 manifest 定位 PDF 文件", file=sys.stderr)
-        return []
+        raise _ScanError("无法从 manifest 定位 PDF 文件")
 
     candidates = []
 
@@ -356,15 +363,20 @@ def _sync_manifest(pkg_dir: Path, candidates_relative: str,
         )
 
         # 4. 原子 rename：先 candidates，再 manifest
-        #    当前者失败时 manifest 不变；后者失败时 candidates 已就位可重试
+        #    当前者失败时 manifest 不变；后者失败时回滚已 rename 的 candidates
         tmp_candidates_path.rename(final_candidates_path)
         tmp_manifest_path.rename(manifest_path)
 
     except Exception:
-        # 清理所有临时文件
-        for p in (tmp_manifest_path, tmp_candidates_path):
-            if p.exists():
-                p.unlink(missing_ok=True)
+        # 回滚：分析失败点，确保不留下半成品
+        #   - candidates rename 成功 + manifest rename 失败 →
+        #       删除 final_candidates_path（已写入但未登记）
+        #   - candidates rename 失败 → 清理 tmp 文件即可
+        if not tmp_candidates_path.exists() and final_candidates_path.exists():
+            final_candidates_path.unlink(missing_ok=True)
+        else:
+            tmp_candidates_path.unlink(missing_ok=True)
+        tmp_manifest_path.unlink(missing_ok=True)
         raise
 
 
@@ -378,7 +390,11 @@ def main() -> None:
         print(f"错误：目录不存在：{pkg_dir}", file=sys.stderr)
         sys.exit(1)
 
-    candidates = scan_candidates(pkg_dir)
+    try:
+        candidates = scan_candidates(pkg_dir)
+    except _ScanError as e:
+        print(f"错误：{e}", file=sys.stderr)
+        sys.exit(1)
 
     if not candidates:
         print("信息：未发现需扫描的候选页"
@@ -390,7 +406,11 @@ def main() -> None:
     # 输出到 data/table_candidates.jsonl（先写 .tmp，再原子 rename + 同步 manifest）
     output_path = pkg_dir / "data" / "table_candidates.jsonl"
     tmp_path = write_candidates_jsonl(candidates, output_path)
-    _sync_manifest(pkg_dir, "data/table_candidates.jsonl", tmp_path, output_path)
+    try:
+        _sync_manifest(pkg_dir, "data/table_candidates.jsonl", tmp_path, output_path)
+    except Exception as e:
+        print(f"错误：候选文件写入或 manifest 同步失败：{e}", file=sys.stderr)
+        sys.exit(1)
 
     # 同时输出摘要到 stderr
     type_counts: dict[str, int] = {}

@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 1 已完成 — 阶段 2：skill 与人工/VLM流程同步
+- 当前阶段：阶段 1 验收未通过 — 候选/manifest 写入失败回滚补强
 - 最后更新：2026-07-12
 
 本文档是“表格异常自动发现”增量能力的事实源。它承接 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新定义人工修复、页级表格重建、VLM 或 HTML pretty-print 契约；页级表格重建另见 [pdf-table-repair](pdf-table-repair.md)。
@@ -146,6 +146,29 @@ manifest 至少登记：
 - 非表格页（仅有 `text_coverage_low`/`volume_inflation` 但无 HTML 表格）不再误入候选，降低噪音
 
 阻塞项已解除：阶段 0 的三个缺口（信号覆盖、manifest 登记、候选 schema）全部补齐。
+
+#### 阶段 1 独立验收（2026-07-12，未通过）
+
+验收结论：**未通过，暂不进入阶段 2**。
+
+已通过的可复现项目：
+
+- `python3 tests/test_table_candidates.py`：25/25 通过；
+- `bash tests/test-fix-validate.sh`：79/79 通过；
+- `pytest -q`：206/206 通过；
+- `python3 scripts/check_plan_governance.py .` 与 `--drift` 均通过；
+- 在 `demo20`、`demo60`、`春风250Sr` 三个临时副本运行扫描：候选数分别为 4、16、29；候选均有 schema、稳定 ID、页锚点、来源、`needs_human: true`；manifest 路径和 hash 一致；canonical Markdown 与 `segments` 均未改变；`pdf-check-fixes` 均通过。
+
+未通过项：
+
+1. 阶段 1 完成条件要求的 malformed manifest、缺失 PDF、重复页锚点和候选写入失败回归测试，当前测试集中没有这些覆盖；现有 25 个单测主要覆盖纯函数，79 个 shell 集成断言覆盖了无候选、manifest 登记缺失和重复 `candidate_id`，但不能替代上述失败路径测试。
+2. 对 `_sync_manifest` 注入 manifest rename 失败后，临时副本出现“`data/table_candidates.jsonl` 已存在、`manifest.files.table_candidates` 未登记”的半成品。当前异常清理只删除临时文件，没有删除已经 rename 到最终路径的候选文件，也没有恢复派生产物一致性。
+
+整改完成并重新验收前，不得推进阶段 2。整改门槛：
+
+- manifest rename 或候选 rename 任一步失败后，候选文件与 manifest 必须保持一致，且有可复现的失败回滚测试；
+- 补齐 malformed manifest、缺失 PDF、重复页锚点/候选 ID 以及候选写入失败的回归测试，并明确各自退出码和残留文件行为；
+- 重新运行三包临时副本、`pdf-check-fixes`、全量 pytest 和治理检查后，再记录阶段 1 通过结论。
 
 ### 阶段 2：skill 与人工/VLM流程同步
 

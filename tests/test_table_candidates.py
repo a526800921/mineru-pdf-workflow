@@ -7,6 +7,7 @@
 import importlib.util
 import os
 import unittest
+from pathlib import Path
 
 
 def _load_module(filepath: str):
@@ -185,6 +186,112 @@ class TestComputeTableStats(unittest.TestCase):
         self.assertIsNotNone(r)
         # parse_table_html 仍会解析出部分结果，parse_status 为 malformed
         self.assertIn(r["parse_status"], ("malformed", "ok"))
+
+
+# ── 阶段 1 回滚：同步失败清零测试 ──
+
+_HASH_FILE_FN = _table_fix._hash_file
+_SYNC_MANIFEST_FN = _table_fix._sync_manifest
+
+
+class TestSyncManifestRollback(unittest.TestCase):
+    """验证 _sync_manifest 在 rename 失败时不留下半成品。"""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.mkdtemp()
+        self.pkg = Path(self._tmp)
+        # 准备最小 manifest
+        self.manifest_path = self.pkg / "manifest.json"
+        self.manifest_path.write_text(
+            '{"model":"test","files":{"markdown":"test.md"}}', encoding="utf-8")
+        # 准备 data 目录
+        (self.pkg / "data").mkdir(exist_ok=True)
+        # 写一个候选临时文件
+        self.tmp_candidates = self.pkg / "data" / "table_candidates.jsonl.tmp"
+        self.tmp_candidates.write_text(
+            '{"schema_version":2,"candidate_id":"test_p0001","needs_human":true}\n',
+            encoding="utf-8")
+        self.final_candidates = self.pkg / "data" / "table_candidates.jsonl"
+        self.manifest_hash_before = _HASH_FILE_FN(self.manifest_path)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_candidates_rename_fails_no_half_state(self):
+        """candidates rename 失败后：无最终文件残留，manifest 不变。"""
+        # 让 final_candidates 为目录 → rename 失败
+        self.final_candidates.mkdir(exist_ok=True)
+
+        with self.assertRaises(OSError):
+            _SYNC_MANIFEST_FN(
+                self.pkg, "data/table_candidates.jsonl",
+                self.tmp_candidates, self.final_candidates,
+            )
+
+        # tmp 已清理
+        self.assertFalse(self.tmp_candidates.exists(),
+                         "tmp candidates 应被清理")
+        # manifest 未被修改（还是旧 hash）
+        self.assertEqual(_HASH_FILE_FN(self.manifest_path),
+                         self.manifest_hash_before)
+        # 半成品不存在：目录还在但里面的东西是我们创建的
+        self.assertTrue(self.final_candidates.is_dir(),
+                        "目录 target 仍然存在（非我们创建）")
+
+    def test_manifest_rename_fails_rolls_back_candidates(self):
+        """manifest rename 失败后：已写入的 candidates 被回滚删除。"""
+        import os as _os_module
+
+        # 用 mock 让第 2 次 os.rename 失败（manifest rename）
+        orig_rename = _os_module.rename
+        call_count = [0]
+
+        def _failing_rename(src, dst):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise OSError("Simulated manifest rename failure")
+            return orig_rename(src, dst)
+
+        # 直接替换 os.rename 来注入失败
+        try:
+            _os_module.rename = _failing_rename
+            with self.assertRaises(OSError):
+                _SYNC_MANIFEST_FN(
+                    self.pkg, "data/table_candidates.jsonl",
+                    self.tmp_candidates, self.final_candidates,
+                )
+        finally:
+            _os_module.rename = orig_rename
+
+        # tmp 已清理
+        self.assertFalse(self.tmp_candidates.exists(),
+                         "tmp candidates 应被清理")
+        # 已 rename 到最终路径的 candidates 被回滚删除
+        self.assertFalse(self.final_candidates.exists(),
+                         "final candidates 应被回滚删除")
+        # manifest 未被修改
+        self.assertEqual(_HASH_FILE_FN(self.manifest_path),
+                         self.manifest_hash_before)
+
+    def test_both_succeed_no_cleanup(self):
+        """正常路径：两者都成功，产物完整。"""
+        _SYNC_MANIFEST_FN(
+            self.pkg, "data/table_candidates.jsonl",
+            self.tmp_candidates, self.final_candidates,
+        )
+
+        # 临时文件已被 rename
+        self.assertFalse(self.tmp_candidates.exists())
+        # 最终文件存在
+        self.assertTrue(self.final_candidates.exists())
+        # manifest 已更新
+        import json as _json
+        m = _json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(m["files"]["table_candidates"],
+                         "data/table_candidates.jsonl")
+        self.assertTrue(m["hash"]["table_candidates_sha256"])
 
 
 if __name__ == "__main__":

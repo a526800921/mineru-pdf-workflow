@@ -299,6 +299,89 @@ out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
 _ck1 $rc "T8: 重复 candidate_id 被检测到"
 _grep "$out" "重复" "T8: 错误信息包含重复提示"
 
+# ── T9: malformed manifest → 优雅报错 ──
+echo ""
+echo "--- T9: malformed manifest ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+echo "this is not json" > "$t/manifest.json"
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "T9: malformed manifest 返回非零"
+_grep "$out" "错误" "T9: 包含错误信息"
+# 确保无半成品
+if [ -f "$t/data/table_candidates.jsonl" ]; then
+  _fail "T9: 残留了候选文件半成品"
+else
+  _pass "T9: 无半成品残留"
+fi
+
+# ── T10: 缺失 PDF → 优雅报错 ──
+echo ""
+echo "--- T10: 缺失 PDF ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+# 同时移除 files.pdf 和 source_pdf
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+# Remove pdf references
+m.get('files', {}).pop('pdf', None)
+m.pop('source_pdf', None)
+# Also remove any actual PDF files
+import pathlib
+for pdf_file in pathlib.Path('$t').glob('*.pdf'):
+    pdf_file.unlink()
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "T10: 缺失 PDF 返回非零"
+_grep "$out" "PDF" "T10: 错误信息包含 PDF"
+
+# ── T11: 候选写入目标为目录 → 报错无残留 ──
+echo ""
+echo "--- T11: 候选写入失败（目标为目录）---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+# 让 data/table_candidates.jsonl 为目录
+mkdir -p "$t/data/table_candidates.jsonl"
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "T11: 写入失败返回非零"
+# 删除目录以便检查
+rm -rf "$t/data/table_candidates.jsonl"
+# 检查 manifest 未被修改
+python3 -c "
+import json
+m = json.loads(open('$t/manifest.json', encoding='utf-8').read())
+assert 'table_candidates' not in m.get('files', {}), 'manifest 不应登记 table_candidates'
+assert 'table_candidates_sha256' not in m.get('hash', {}), 'hash 不应登记 table_candidates'
+" && _pass "T11: manifest 未修改（半成品已清理）" || _fail "T11: manifest 被意外修改"
+
+# ── T12: page_fallback 数据完整但无关注信号 → 返回 0 不写 ──
+echo ""
+echo "--- T12: page_fallback 但无关注信号 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+# 清空 page_fallback 中的 quality_signals
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+pf = m.get('page_fallback', {})
+for v in pf.values():
+    v['quality_signals'] = []
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
+"
+rm -f "$t/data/table_candidates.jsonl"
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "T12: 无关注信号时正常退出"
+_grep "$out" "未发现需扫描的候选页" "T12: 输出无候选信息"
+if [ -f "$t/data/table_candidates.jsonl" ]; then
+  _fail "T12: 不应写入候选文件"
+else
+  _pass "T12: 未产生任何候选文件"
+fi
+
 # ── A1: pdf-apply-fixes 简单修复应用 ──
 echo ""
 echo "--- A1: pdf-apply-fixes 简单修复应用 ---"
