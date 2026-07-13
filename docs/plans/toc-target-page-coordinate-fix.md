@@ -6,9 +6,11 @@
 - 当前阶段：全阶段（0-4）已完成，全计划闭环
 - 最后更新：2026-07-13
 
+## 背景
+
 本文档承接已完成的 [toc-page-physical-attribution-fix](toc-page-physical-attribution-fix.md)，只解决另一个独立问题：`toc_tree.json.target_page` 可能使用印刷页码，而下游和 Markdown 页锚点使用 PDF 物理页码。它不重新打开目录条目属于哪一张物理目录页的既有契约。
 
-## 背景与 Step 0 证据
+## Step 0 证据
 
 外部报告 `/Users/jafish/Documents/work/motofind/docs/reports/toc-target-page-offset-fix.md` 记录了春风250Sr/250Sr-R 的典型偏移：正文印刷页从 1 开始，而 PDF 物理页包含封面、版权页和目录等前件页，报告样本中物理页 = 印刷页 + 8。该偏移导致 `pdf-extract-data` 将“最大净功率”等数据映射到错误章节。
 
