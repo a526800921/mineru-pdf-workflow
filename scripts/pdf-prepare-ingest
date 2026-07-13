@@ -147,8 +147,8 @@ def _check_page_numbering_gate(pkg: Path, rows: list[dict]) -> list[dict]:
                 reason = "缺少 page_numbering 块（旧格式输出包或页码检测未运行）"
             else:
                 status = pn.get("status", "needs_review")
-                if status in ("verified", "proposed"):
-                    return rows  # 安全，放行
+                if status == "verified":
+                    return rows  # 安全，放行（需人工确认）
                 blocked = True
                 mapping_type = pn.get("mapping_type", "unknown")
                 if mapping_type == "unknown":

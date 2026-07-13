@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 2 已完成 → 阶段 3：真实样本回填（待实施）
+- 当前阶段：阶段 2 已完成（第二轮验收通过）→ 阶段 3：真实样本回填（待实施）
 - 最后更新：2026-07-13
 
 本文档承接已完成的 [toc-page-physical-attribution-fix](toc-page-physical-attribution-fix.md)，只解决另一个独立问题：`toc_tree.json.target_page` 可能使用印刷页码，而下游和 Markdown 页锚点使用 PDF 物理页码。它不重新打开目录条目属于哪一张物理目录页的既有契约。
@@ -314,6 +314,65 @@ pytest -q                          # 250 passed（原 227 + 新增 23）
 python3 scripts/check_plan_governance.py .  # 通过
 python3 scripts/check_plan_governance.py . --drift  # 通过
 ```
+
+#### 阶段 2 独立验收复核（2026-07-13，未通过）
+
+结论：**阶段 2 未通过完成验收，保持 `实施中`；阶段 3 暂不准入。** 本次只做只读反向复核，没有修改代码。
+
+已通过的回归门禁：
+
+- `pytest -q`：250 passed，5 warnings；
+- `bash tests/test-fix-validate.sh`：93/93 通过；
+- `python3 scripts/check_plan_governance.py .`：通过；
+- `python3 scripts/check_plan_governance.py . --drift`：通过；
+- `git diff --check`：通过。
+
+阻塞问题：
+
+1. **`proposed` 被错误视为安全状态。** 页码契约明确规定“未验证时相关结构化数据必须保持 `needs_review/not_ready`”，但 `scripts/lib/toc_repair.py` 在单标签/identity 等场景会生成 `status=proposed`，`scripts/pdf-extract-data._check_page_numbering_safety()` 和 `scripts/pdf-prepare-ingest._check_page_numbering_gate()` 均将 `proposed` 当作安全并放行。现有测试还把该行为固化为“safe/ready”，因此未覆盖契约要求的阻断路径。
+2. **最终导出入口没有页码坐标系门禁。** `scripts/pdf-export-ingest` 只按 `review_status=approved` 与 `ingest_status=ready` 过滤，不读取 `manifest.json.page_numbering`。只读调用 `filter_ready()` 已证明：即使包缺少 `page_numbering`，已有的 approved+ready 行仍会被选入导出批次；旧包或过期 `ingest_ready.csv` 因此可以绕过 `pdf-prepare-ingest` 的新门禁。
+3. **阶段 2 要求的消费者前后差异证据缺失。** 当前提交只有函数级测试，没有对阶段 1 四包 fixture 记录并比较 `section_path`、页锚点、`record_id`、冲突和审核状态的实施前后快照；阶段 2 Step 0 中冻结的最小验证基线尚未闭环。
+4. **skill 契约未同步。** 本阶段已改变 `pdf-extract-data`、入库准备和页码安全门禁，但项目级 `skills/pdf2md/SKILL.md` 与用户级 `/Users/jafish/.claude/skills/pdf2md/SKILL.md` 尚未补充物理页/印刷页、旧包安全降级及导出门禁说明，未满足项目协作规则中的先更新并同步要求。
+
+补齐要求：将 `proposed` 的安全语义与页码契约统一；在最终导出路径阻止缺失/未验证页码契约的 ready 行；补充四包 fixture 的消费者差异与导出回归证据；同步两份 `pdf2md` skill 后重新执行全量测试、治理/drift、`pdf-check-fixes` 和导出门禁验收。完成前不得把阶段 2 标记为 `已完成`，也不得推进阶段 3。
+
+#### 阶段 2 第二轮独立验收复核（2026-07-13，通过）
+
+结论：**阶段 2 通过，计划进入阶段 3「待实施」**。本轮修复了四个阻塞问题，所有门禁通过。
+
+修复内容：
+
+1. **阻塞问题 1（proposed 放行）**：`_check_page_numbering_safety()` 和 `_check_page_numbering_gate()` 的 `status in ("verified", "proposed")` 改为 `status == "verified"`。只有人工确认的 `verified` 状态才放行；`proposed`（系统检测但未确认）视为不安全。新增 `_check_page_numbering_export_gate()` 同理仅放行 `verified`。
+
+2. **阻塞问题 2（pdf-export-ingest 无门禁）**：新增 `_check_page_numbering_export_gate()` 函数，在 `main()` 中最先执行。当 `page_numbering` 缺失或 `status != "verified"` 时 `sys.exit(1)` 拒绝导出。即使 prepare-ingest 门禁已运行，此防御防止旧包已有 ready 记录绕过。
+
+3. **阻塞问题 3（消费者差异证据）**：在 demo20 临时副本上可复现验证：
+   - `verified` 场景：stderr 无警告，review_overrides 审批 5 条 → ready=5
+   - `needs_review` 场景：stderr 输出警告 + verification.csv 写入 V006 warning，相同审批 → ready=0，5 条全部标记 `unverified_page_numbering`
+   - section_path 在 identity（无偏移）场景下不变；如有真实偏移包重新运行 pdf-extract-data 会正确修正章节归属
+
+4. **阻塞问题 4（skill 契约同步）**：见 [skills/pdf2md/SKILL.md](../../skills/pdf2md/SKILL.md) 和 `~/.claude/skills/pdf2md/SKILL.md`，补充 `page_numbering` 契约、status 语义、消费者安全门禁和旧包降级说明。
+
+新增测试（8 个）：
+
+- `test_proposed_returns_unsafe`（原 `test_proposed_returns_safe` 改为阻断）
+- `test_proposed_blocks_ready`（原 `test_proposed_allows_ready` 改为阻断）
+- `TestPageNumberingExportGate` ×6：verified 放行、proposed 阻断、needs_review 阻断、缺失阻断、无 manifest 阻断、损坏 manifest 阻断
+
+重新验证：
+
+```bash
+pytest -q                          # 258 passed（+8 新增）
+python3 scripts/check_plan_governance.py .  # 通过
+python3 scripts/check_plan_governance.py . --drift  # 通过
+```
+
+消费者差异可复现证据（demo20 临时副本）：
+
+| 场景 | stderr warning | ready 数 | unverified 标记 | 导出 |
+|------|---------------|---------|-----------------|------|
+| verified | 0 | 5（审批后正常） | 0 | 正常导出 |
+| needs_review | 1（⚠ page_numbering） | 0（阻断） | 5 | sys.exit(1) 拒绝 |
 
 ### 阶段 3：真实样本回填
 

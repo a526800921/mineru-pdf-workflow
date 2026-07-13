@@ -77,6 +77,21 @@ _SourceFileLoader(
 ).exec_module(_mod3)
 validate_page_numbering = _mod3.validate_page_numbering
 
+_mod4 = _importlib_util.module_from_spec(
+    _importlib_util.spec_from_loader(
+        "pdf_export_ingest",
+        _SourceFileLoader(
+            "pdf_export_ingest",
+            os.path.join(_scripts_dir, "pdf-export-ingest"),
+        ),
+    )
+)
+_SourceFileLoader(
+    "pdf_export_ingest",
+    os.path.join(_scripts_dir, "pdf-export-ingest"),
+).exec_module(_mod4)
+_check_page_numbering_export_gate = _mod4._check_page_numbering_export_gate
+
 
 def _create_test_pdf(toc_entries: list[list] | None, pages: int = 3) -> str:
     """创建含可选 TOC 大纲的测试 PDF。"""
@@ -919,7 +934,8 @@ class TestCheckPageNumberingSafety(unittest.TestCase):
         self.assertIsNone(result["warning"])
         self.assertEqual(result["status"], "verified")
 
-    def test_proposed_returns_safe(self):
+    def test_proposed_returns_unsafe(self):
+        """proposed 状态（检测到但未人工确认）视为不安全。"""
         result = _check_page_numbering_safety({
             "page_numbering": {
                 "physical_page_basis": "pdf_1_based",
@@ -928,8 +944,8 @@ class TestCheckPageNumberingSafety(unittest.TestCase):
                 "evidence": [{"a": 1}],
             }
         })
-        self.assertTrue(result["safe"])
-        self.assertIsNone(result["warning"])
+        self.assertFalse(result["safe"])
+        self.assertIsNotNone(result["warning"])
         self.assertEqual(result["status"], "proposed")
 
     def test_needs_review_unknown_returns_unsafe(self):
@@ -1025,7 +1041,8 @@ class TestPageNumberingGate(unittest.TestCase):
         ready = [r for r in result if r["ingest_status"] == "ready"]
         self.assertEqual(len(ready), 3)
 
-    def test_proposed_allows_ready(self):
+    def test_proposed_blocks_ready(self):
+        """proposed 状态（未人工确认）应阻断 ready。"""
         manifest = {
             "page_numbering": {
                 "physical_page_basis": "pdf_1_based",
@@ -1040,7 +1057,9 @@ class TestPageNumberingGate(unittest.TestCase):
         rows = self._make_rows(3)
         result = _check_page_numbering_gate(self.tmpdir, rows)
         ready = [r for r in result if r["ingest_status"] == "ready"]
-        self.assertEqual(len(ready), 3)
+        self.assertEqual(len(ready), 0)
+        blocked = [r for r in result if "unverified_page_numbering" in r.get("notes", "")]
+        self.assertEqual(len(blocked), 3)
 
     def test_needs_review_blocks_ready(self):
         manifest = {
@@ -1245,6 +1264,77 @@ class TestValidatePageNumbering(unittest.TestCase):
         }
         errors = validate_page_numbering(manifest, self.tmpdir)
         self.assertTrue(any("toc_md_sha256" in e for e in errors))
+
+
+class TestPageNumberingExportGate(unittest.TestCase):
+    """_check_page_numbering_export_gate 测试（pdf-export-ingest）。"""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
+
+    def test_verified_returns_true(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "verified",
+                "printed_to_physical_offset": 8,
+                "evidence": [{"a": 1}],
+            }
+        }
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        self.assertTrue(_check_page_numbering_export_gate(self.tmpdir))
+
+    def test_proposed_returns_false(self):
+        """proposed（未人工确认）拒绝导出。"""
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "identity",
+                "status": "proposed",
+                "evidence": [{"a": 1}],
+            }
+        }
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        self.assertFalse(_check_page_numbering_export_gate(self.tmpdir))
+
+    def test_needs_review_returns_false(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "unknown",
+                "status": "needs_review",
+                "evidence": [],
+            }
+        }
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        self.assertFalse(_check_page_numbering_export_gate(self.tmpdir))
+
+    def test_missing_block_returns_false(self):
+        manifest = {"files": {"markdown": "test.md"}}
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        self.assertFalse(_check_page_numbering_export_gate(self.tmpdir))
+
+    def test_no_manifest_returns_false(self):
+        self.assertFalse(_check_page_numbering_export_gate(self.tmpdir))
+
+    def test_corrupt_manifest_returns_false(self):
+        (self.tmpdir / "manifest.json").write_text(
+            "not valid json", encoding="utf-8"
+        )
+        self.assertFalse(_check_page_numbering_export_gate(self.tmpdir))
 
 
 if __name__ == "__main__":

@@ -55,6 +55,52 @@ def filter_ready(rows: list[dict]) -> list[dict]:
             and r.get("ingest_status") == "ready"]
 
 
+def _check_page_numbering_export_gate(pkg: Path) -> bool:
+    """导出前最终安全检查：page_numbering 必须为 verified。
+
+    返回 True = 安全可导出，False = 阻断导出。
+    即使 prepare-ingest 门禁已运行，此检查防御旧包已有 ready 记录
+    但 page_numbering 未验证的场景。
+    """
+    manifest_path = pkg / "manifest.json"
+    if not manifest_path.exists():
+        print(
+            "错误：manifest.json 缺失，无法验证 page_numbering 状态",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(
+            f"错误：manifest.json 解析失败：{e}",
+            file=sys.stderr,
+        )
+        return False
+
+    pn = manifest.get("page_numbering")
+    if not isinstance(pn, dict):
+        print(
+            "错误：manifest 缺少 page_numbering 块，"
+            "导出前请先运行 pdf-auto 生成页码检测",
+            file=sys.stderr,
+        )
+        return False
+
+    status = pn.get("status", "needs_review")
+    if status != "verified":
+        print(
+            f"错误：page_numbering.status={status}（需 verified），"
+            "导出拒绝。页码坐标系未经验证，结构化数据可能映射到错误章节。"
+            "请确认页码映射正确后将 status 改为 verified 后重试。",
+            file=sys.stderr,
+        )
+        return False
+
+    return True
+
+
 def compute_batch_id(package_path: str, ingest_hash: str,
                      ready_ids: list[str]) -> str:
     """生成稳定批次 ID。"""
@@ -121,6 +167,11 @@ def main():
     conflicts_path = pkg / "data" / "conflicts.csv"
     batch_path = pkg / "data" / "ingest_batch.jsonl"
     manifest_path = pkg / "data" / "ingest_manifest.json"
+
+    # ── 页码坐标系导出前最终门禁 ──
+    # 即使 prepare-ingest 已运行阻断，此检查防止旧包已有 ready 记录绕过门禁
+    if not _check_page_numbering_export_gate(pkg):
+        sys.exit(1)
 
     # Read inputs
     ingest_rows = read_ingest(ingest_path)

@@ -56,9 +56,9 @@ MODELPAD_PDF_START_TIMEOUT=120
   doc.pdf                  ← 原始 PDF
   doc.md                   ← 合并后的 Markdown（含段级锚点 <!-- pages N-M -->）
   toc.md                   ← 目录展示视图（无锚点连续列表，供人工阅读/前端渲染）
-  toc_tree.json            ← 机器权威目录结构（title/target_page/toc_page/depth）
+  toc_tree.json            ← 机器权威目录结构（title/target_page/toc_page/depth，可选 printed_page）
   review.md                ← 人工复核清单
-  manifest.json            ← 解析状态元数据
+  manifest.json            ← 解析状态元数据（含 page_numbering 页码坐标系契约）
   segments/                ← 分段解析产物（默认每页一段，可设 MINERU_SEGMENT_SIZE 覆盖）
     p0001-0001/
     p0002-0002/
@@ -107,6 +107,28 @@ MODELPAD_PDF_START_TIMEOUT=120
   - `toc.md`：无锚点连续目录列表，供人工阅读和前端渲染；不含任何页级锚点，不重新解析或猜测页码；
   - `toc_tree.json`：机器权威目录结构，每条含 `title`、`target_page`（条目指向正文页）、`toc_page`（条目所在物理目录页）、`depth`；`pdf-extract-data` 用 `target_page` 做 section 映射。
 - 目录修复必须把 `doc.md`、`toc.md`、`toc_tree.json`、`review.md`（如复核结论变化）和 `manifest.json` 作为一个同步发布单元：`manifest.files.toc` 指向 `toc.md`，`manifest.files.toc_tree` 指向 `toc_tree.json`，并登记 `manifest.hash.toc_md_sha256` 与 `manifest.hash.toc_tree_json_sha256`。不得只改主 Markdown 或只改展示目录；原始 `segments/**/content_list*.json` 只读，不能作为人工修复目标。
+- **页码坐标系契约**：`toc_tree.json` 的 `target_page` 必须统一为 PDF 物理页码（与 `<!-- pages N-M -->` 段锚点一致）。`manifest.json` 的 `page_numbering` 块记录映射关系：
+  ```json
+  {
+    "page_numbering": {
+      "physical_page_basis": "pdf_1_based",
+      "mapping_type": "constant_offset|identity|piecewise|unknown",
+      "status": "verified|proposed|needs_review",
+      "printed_to_physical_offset": 8,
+      "evidence": [{"printed_page": 1, "physical_page": 9, "source": "PDF page label"}]
+    }
+  }
+  ```
+  - `status=verified`：人工确认映射正确，下游可安全消费，记录可进入 `ready`/导出。
+  - `status=proposed`：系统检测到映射但未经人工确认，视为不安全——下游警告、入库门禁阻断、导出拒绝。
+  - `status=needs_review`：无法自动判断映射，`toc_tree.target_page` 可能为印刷页码——同 `proposed` 阻断。
+  - 旧包缺少 `page_numbering` 块视为安全降级（同 `needs_review`），各消费者发出警告、阻断 ready/导出。
+  - `toc_tree.json` 可选 `printed_page` 字段保留原始印刷页证据。
+- **下游消费者安全门禁**：
+  - `pdf-extract-data`：TOC section_map 使用前检查 `page_numbering`；未验证时 stderr 警告 + `verification.csv` 写入 `toc_section_path` warning，但仍构建 section_map（最佳信源）。
+  - `pdf-prepare-ingest`：`compute_ingest_status()` 之后运行页码门禁；未验证时所有 `ready` 记录降级为 `not_ready`，notes 追加 `unverified_page_numbering` 标记。终态（skipped/superseded/suppressed）不受影响。
+  - `pdf-export-ingest`：导出前最终门禁；`status != verified` 时 `sys.exit(1)` 拒绝导出，防止旧包已有 ready 记录绕过上游门禁。
+  - `pdf-check-fixes`：校验 `page_numbering` 块 schema（必含字段、枚举值、offset 完整性、toc 文件 hash 一致性）。旧包缺失时不报 error。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 
 ## 核心流程

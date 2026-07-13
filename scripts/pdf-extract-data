@@ -238,7 +238,7 @@ def _check_page_numbering_safety(manifest: dict) -> dict:
         }
 
     status = pn.get("status", "needs_review")
-    if status in ("verified", "proposed"):
+    if status == "verified":
         return {"safe": True, "status": status, "warning": None}
 
     # needs_review 或未知状态
