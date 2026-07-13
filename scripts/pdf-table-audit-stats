@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""从真实输出包重建 pdf-table-audit 阶段 3 统计矩阵。
+
+只读取输出包及已有报告中的外部报告覆盖字段，不接受手工填写候选数、
+引用数或 hash 状态，避免统计报告与真实产物漂移。
+
+用法:
+  scripts/pdf-table-audit-stats [--output PATH] [PACKAGE ...]
+"""
+
+import argparse
+import hashlib
+import json
+from collections import Counter
+from pathlib import Path
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                rows.append(obj)
+    return rows
+
+
+def package_stats(pkg: Path, previous: dict) -> dict:
+    manifest = json.loads((pkg / "manifest.json").read_text(encoding="utf-8"))
+    candidates_path = pkg / manifest.get("files", {}).get(
+        "table_candidates", "data/table_candidates.jsonl"
+    )
+    fixes_path = pkg / manifest.get("files", {}).get(
+        "manual_fixes", "data/manual_fixes.jsonl"
+    )
+    vlm_rel = manifest.get("files", {}).get("vlm_eval")
+    vlm_path = pkg / vlm_rel if isinstance(vlm_rel, str) else pkg / "data/vlm_eval.jsonl"
+
+    candidates = read_jsonl(candidates_path)
+    fixes = read_jsonl(fixes_path)
+    vlm_rows = read_jsonl(vlm_path)
+    candidate_ids = {
+        row.get("candidate_id") for row in candidates if row.get("candidate_id")
+    }
+
+    refs = []
+    resolved_refs = []
+    ref_pages = set()
+    for fix in fixes:
+        value = fix.get("candidate_ref")
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            continue
+        refs.extend(value)
+        resolved_refs.extend(ref for ref in value if ref in candidate_ids)
+        for candidate in candidates:
+            if candidate.get("candidate_id") in value:
+                ref_pages.add(candidate.get("page"))
+
+    signal_counts = Counter(
+        signal
+        for row in candidates
+        for signal in row.get("signals", [])
+    )
+    type_counts = Counter(row.get("candidate_type") for row in candidates)
+    native_rows = [
+        row for row in candidates if row.get("candidate_type") == "native_missing"
+    ]
+    mf_hash = manifest.get("hash", {}).get("manual_fixes_sha256")
+    tc_hash = manifest.get("hash", {}).get("table_candidates_sha256")
+    vlm_hash = manifest.get("hash", {}).get("vlm_eval_sha256")
+
+    result = {
+        "page_fallback_pages": len(manifest.get("page_fallback", {})),
+        "candidates": len(candidates),
+        "type_distribution": dict(sorted(type_counts.items())),
+        "signal_distribution": dict(sorted(signal_counts.items())),
+        "native_missing_all_have_missing_text": all(
+            bool(row.get("missing_text")) for row in native_rows
+        ),
+        "manual_fixes_total": len(fixes),
+        "manual_fixes_with_candidate_ref": len(
+            [fix for fix in fixes if fix.get("candidate_ref")]
+        ),
+        "candidate_ref_total": len(refs),
+        "candidate_ref_resolved": len(resolved_refs),
+        "candidate_ref_pages": sorted(page for page in ref_pages if isinstance(page, int)),
+        "manual_fixes_hash_registered": bool(mf_hash and mf_hash == sha256(fixes_path))
+        if fixes_path.exists()
+        else False,
+        "candidate_hash_registered": bool(
+            tc_hash and candidates_path.exists() and tc_hash == sha256(candidates_path)
+        ),
+        "vlm_file_exists": vlm_path.exists(),
+        "vlm_hash_registered": bool(
+            vlm_hash and vlm_path.exists() and vlm_hash == sha256(vlm_path)
+        ),
+        "vlm_ok_rows": len([row for row in vlm_rows if row.get("parse_status") == "ok"]),
+        "vlm_failed_rows": len(
+            [row for row in vlm_rows if row.get("parse_status") == "failed"]
+        ),
+        "vlm_pages": sorted(
+            row.get("page") for row in vlm_rows if isinstance(row.get("page"), int)
+        ),
+    }
+    if isinstance(previous, dict) and previous.get("external_report_coverage") is not None:
+        result["external_report_coverage"] = previous["external_report_coverage"]
+    else:
+        result["external_report_coverage"] = None
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("packages", nargs="*", type=Path)
+    parser.add_argument(
+        "--output", type=Path,
+        default=Path("docs/reports/pdf-table-audit-stage3-stats.json"),
+    )
+    args = parser.parse_args()
+    packages = args.packages or [Path("pdf/demo20"), Path("pdf/demo60"), Path("pdf/春风250Sr")]
+
+    old = {}
+    if args.output.exists() and args.output.stat().st_size > 0:
+        try:
+            old_doc = json.loads(args.output.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            old_doc = {}
+        old = old_doc.get("packages", {})
+
+    document = {
+        "report": "pdf-table-audit 阶段 3 真实样本统计矩阵",
+        "date": __import__("datetime").date.today().isoformat(),
+        "generated_by": "scripts/pdf-table-audit-stats",
+        "packages": {
+            pkg.name: package_stats(pkg, old.get(pkg.name, {})) for pkg in packages
+        },
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"统计矩阵已生成：{args.output}")
+
+
+if __name__ == "__main__":
+    main()

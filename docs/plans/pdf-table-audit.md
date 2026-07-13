@@ -3,7 +3,7 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 3 已完成 — 阶段 4：独立验收
+- 当前阶段：阶段 4 已达到待实施标准
 - 最后更新：2026-07-13
 
 本文档是“表格异常自动发现”增量能力的事实源。它承接 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新定义人工修复、页级表格重建、VLM 或 HTML pretty-print 契约；页级表格重建另见 [pdf-table-repair](pdf-table-repair.md)。
@@ -377,7 +377,86 @@ p132 有双重异常：既是 8192 空列 bug（1 行 8192 列），又有 nativ
 - `pytest -q`：227/227 ✅
 - `python3 scripts/check_plan_governance.py .` + `--drift` 通过 ✅
 
-### 阶段 4：独立验收
+#### 阶段 3 再次独立验收复核（2026-07-13，仍未通过）
+
+本次复核不采信上一节的实施声明，直接检查当前真实包和统计矩阵。验收结论：**仍未通过，暂不进入阶段 4**。
+
+已通过：
+
+- `demo60` 和春风250Sr 的 `table_candidates.jsonl` 存在，分别有 16、29 条候选；候选与对应 `manual_fixes.jsonl` 的 `candidate_ref` 可解析；
+- 三包 `scripts/pdf-check-fixes` 均返回 0；专项回归 91/91、全量 pytest 227/227、治理和 drift 检查通过。
+
+仍存在阻塞：
+
+1. `demo20` 的 `data/table_candidates.jsonl` 不存在，但 `data/manual_fixes.jsonl` 的两条记录包含 `demo20_p0014`、`demo20_p0015`、`demo20_p0016` 等 `candidate_ref`；这些引用当前全部悬空。
+2. 三个真实包的 `manifest.hash.manual_fixes_sha256` 均为空，不能证明人工修复记录被 manifest hash 保护；当前 `pdf-check-fixes` 对此没有形成阶段 3 所需的真实包强制门禁。
+3. `demo60` 和春风250Sr没有 `data/vlm_eval.jsonl`；统计矩阵将其记为“不需要 VLM”，但没有逐候选的人工依据或可复核的“不需要 VLM”判定记录，不能替代阶段 3 要求的多样本 VLM/人工证据闭环。
+4. `docs/reports/pdf-table-audit-stage3-stats.json` 与真实包不一致：它把 demo20 记为 4 条候选、2 条已关联修复，但当前候选文件和对应 ID 均不存在。因此统计矩阵不能作为独立重算证据。
+
+整改门槛：恢复 demo20 候选文件并登记 manifest 路径/hash；为三个包补齐 `manual_fixes_sha256`；对“需要/不需要 VLM”逐候选记录依据并保证统计矩阵可由当前包重算；重新执行三包检查和全量门禁后，才能推进阶段 4。
+
+#### 阶段 3 整改实施记录（2026-07-13）
+
+已按上述阻塞项实施修复，但尚未把本节视为独立验收结论：
+
+- 对 demo20 重新运行 `scripts/pdf-table-fix`，恢复 4 条候选并登记 `files.table_candidates` 与 `hash.table_candidates_sha256`；demo60 为 16 条，春风250Sr 为 29 条。
+- 三包均登记 `files.manual_fixes`，并补齐顶层 `hash.manual_fixes_sha256`；`pdf-check-fixes` 新增 `candidate_ref` 解析门禁，引用必须指向当前候选文件中的真实 `candidate_id`。
+- 新增 `scripts/pdf-table-audit-stats`，统计矩阵从 manifest、候选、修复记录和 VLM JSONL 现场重建，不再手工维护候选数、引用数或 hash 状态。
+- 使用固定 `qwen3-vl-8b`、ModelPad `9999` / VLM `9005` 对 demo60 完成真实评测（33 页，32 页成功、1 页失败），并登记 `files.vlm_eval` 与 `hash.vlm_eval_sha256`；demo20 重新评测并对 manual 需要的 p15–p16 做显式证据补采，p14 的无效 JSON 结果保留为失败记录，不冒充成功证据。
+- demo20、demo60 的页级修复记录补充实际 VLM 输出引用和人工结论；结论明确 VLM 只确认文字/视觉证据，表格行列和页锚点仍由人工/PDF证据决定。春风250Sr 的修复记录继续以 PyMuPDF/PDF证据为依据，未伪造 VLM 文件。
+- 修复测试夹具：候选扫描测试使用临时副本，不再删除真实 demo20 产物；增加候选引用缺失回归；为入库导出门禁测试补齐已验证的 page_numbering 前置条件。
+
+当前产物可独立重算的关键结果记录在 [阶段 3 统计矩阵](../reports/pdf-table-audit-stage3-stats.json)。
+
+整改验证：
+
+- 三包 `scripts/pdf-check-fixes`：0；候选引用总计 15 条，解析成功 15 条；manual/candidate hash 均可校验。
+- `python3 tests/test_table_candidates.py`：28/28；`bash tests/test-fix-validate.sh`：93/93；`pytest -q`：250 passed。
+- `python3 scripts/check_plan_governance.py .` 与 `--drift`：均通过；`git diff --check` 待最终提交前再次执行。
+
+#### 阶段 3 独立验收（2026-07-13，通过）
+
+验收者基于当前工作区真实产物重新执行检查，不采信前述实施声明。结论：**阶段 3 通过，阶段 4 保持待实施**。
+
+验收证据：
+
+- `scripts/pdf-check-fixes` 对 demo20、demo60、春风250Sr 均返回 0；三包候选文件存在，candidate 引用 15/15 可解析，candidate/manual hash 均匹配 manifest。
+- 统计矩阵通过 `scripts/pdf-table-audit-stats` 重新生成后与报告一致；春风外部报告覆盖率字段仅作为既有外部报告元数据保留，不作为候选或修复闭环的唯一证据。
+- demo20 VLM 为 6 条成功、2 条失败（p14 失败记录保留，p15–p16 显式证据成功）；demo60 为 32 条成功、1 条失败；两个真实样本满足多样本 VLM 证据门槛。春风250Sr 使用已记录的 PyMuPDF/PDF 证据，未伪造 VLM 产物。
+- `python3 tests/test_table_candidates.py`：28/28；`bash tests/test-fix-validate.sh`：93/93；`pytest -q`：256 passed。
+- `python3 scripts/check_plan_governance.py .`、`--drift` 与 `git diff --check`：通过。
+
+非阻塞观察：VLM 对 demo20 p14 仍返回无效 JSON；`pdf-eval-vlm` 尚未提供通用的显式页码参数。两项不影响阶段 3 完成，但可作为后续体验改进。
+
+### 阶段 4：独立验收与交付准入
+
+#### 阶段 4 待实施准入（2026-07-13）
+
+阶段 3 已通过独立验收，阶段 4 满足待实施标准。阶段 4 的目标是把当前候选审计与修复证据闭环作为稳定交付能力复核，不再扩大表格解析范围。
+
+Step 0 证据：
+
+- 三包真实输出已具备候选文件、人工修复记录、manifest 路径/hash 和可解析的 candidate 引用；demo20/demo60 具备真实固定 VLM 证据；阶段 3 统计矩阵可从产物重建。
+- `tests/test_table_candidates.py`、`tests/test-fix-validate.sh` 和 `pytest -q` 已提供候选 schema、manifest 同步、候选引用、页锚点回滚和现有下游行为的失败/通过基线。
+- 真实样本中的历史全局 `replace()` 漂移已由页锚点回归覆盖；8192 空列候选已由 `pdf-table-fix` 复现并保留人工处理边界。
+
+阶段 4 实施范围：
+
+1. 复核项目级 `skills/pdf2md-fix/SKILL.md` 与用户级副本的一致性，确认扫描、人工确认、VLM边界、页锚点替换和 manifest 同步步骤可直接执行。
+2. 以三包真实产物运行最终交付检查：候选文件、manual 修复记录、VLM（如使用）和统计矩阵之间必须可反向关联。
+3. 检查失败回滚、重复执行幂等性和跨页表格不被单页误判；不自动把候选升级为最终表格结构。
+4. 验证阶段 4 完成证据并更新相关治理文档；如发现新的公共契约或范围变化，先暂停并更新计划。
+
+非目标：不修改 MinerU 主解析策略，不让 VLM 决定表格行列/`rowspan`/`colspan`，不在本阶段新增 OCR 或车型专用规则。
+
+验证方式：
+
+- `scripts/pdf-check-fixes` 三包返回 0；`scripts/pdf-table-audit-stats` 可重建当前报告；candidate/manual/VLM hash 与 manifest 一致；
+- `python3 tests/test_table_candidates.py`、`bash tests/test-fix-validate.sh`、`pytest -q` 全部通过；
+- `python3 scripts/check_plan_governance.py .`、`--drift`、`git diff --check` 通过；
+- 反向搜索同名计划、关键字段和 skill 契约，确认没有旧草案重新成为事实源。
+
+完成条件：阶段 4 的最终检查项全部有当前工作区证据，项目级和用户级 skill 契约一致，三包真实样本可重复验收，且没有未解决的阶段 4 阻塞项。完成后才将计划状态推进为 `已完成`。
 
 - 候选扫描命令回归通过，正常包、无候选包、缺失字段包和失败回滚包均有证据；
 - `table_candidates.jsonl` 的每条记录都有页码、页锚点、来源和 `needs_human`；

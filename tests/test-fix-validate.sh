@@ -34,6 +34,7 @@ m['formatting']={'schema_version':1,'mode':'merge_time','status':fm,'source_mark
 import pathlib
 data_dir = pathlib.Path(pkg) / 'data'
 data_dir.mkdir(parents=True, exist_ok=True)
+(m.setdefault('hash', {}))['manual_fixes_sha256'] = fh
 (data_dir / ('pre_format_md_' + mdh[:16] + '.md')).write_bytes([p for p in md if p.name != 'review.md'][0].read_bytes())
 open(pkg+'/manifest.json','w',encoding='utf-8').write(json.dumps(m,ensure_ascii=False,indent=2)+'\n')
 "
@@ -153,20 +154,12 @@ _grep "$out" "pages 必须是非空列表" "V7: 包含 pages 错误"
 # ── T1: demo20 8192 扫描 ──
 echo ""
 echo "--- T1: demo20 8192 扫描 ---"
-out="$("$_scripts"/pdf-table-fix "$_d20" 2>&1)" && rc=0 || rc=$?
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
 _ck0 $rc "T1: 扫描完成"
 _grep "$out" "候选扫描完成" "T1: 候选扫描成功"
 _grep "$out" "native_missing:2" "T1: 包含 native_missing 候选"
-rm -f "$_d20/data/table_candidates.jsonl"
-# 还原 manifest 登记（避免影响后续测试和真实包）
-python3 -c "
-import json
-p = '$_d20/manifest.json'
-m = json.loads(open(p, encoding='utf-8').read())
-m.get('files', {}).pop('table_candidates', None)
-m.get('hash', {}).pop('table_candidates_sha256', None)
-open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\n')
-"
 
 # ── T2: demo5 无 candidate ──
 echo ""
@@ -236,6 +229,18 @@ echo ""
 echo "--- T5: native_table_text_missing 检测 ---"
 t=$(_mk)
 cp -R "$_d60/"* "$t/" 2>/dev/null || true
+# 该临时包只验证候选产物；去掉真实包的 manual_fixes，避免真实
+# candidate_id（demo60_pXXXX）与临时目录名生成的 candidate_id 混用。
+rm -f "$t/data/manual_fixes.jsonl"
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+m.get('files', {}).pop('manual_fixes', None)
+m.get('hash', {}).pop('manual_fixes_sha256', None)
+m.pop('fixes', None)
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\\n')
+"
 out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
 # demo60 has native_table_text_missing pages (14,16,36,42,43,44,46,51,60)
 python3 -c "
@@ -304,6 +309,7 @@ echo ""
 echo "--- T9: malformed manifest ---"
 t=$(_mk)
 cp -R "$_d20/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/table_candidates.jsonl"
 echo "this is not json" > "$t/manifest.json"
 out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
 _ck1 $rc "T9: malformed manifest 返回非零"
@@ -344,6 +350,15 @@ echo "--- T11: 候选写入失败（目标为目录）---"
 t=$(_mk)
 cp -R "$_d20/"* "$t/" 2>/dev/null || true
 # 让 data/table_candidates.jsonl 为目录
+rm -f "$t/data/table_candidates.jsonl"
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+m.get('files', {}).pop('table_candidates', None)
+m.get('hash', {}).pop('table_candidates_sha256', None)
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\\n')
+"
 mkdir -p "$t/data/table_candidates.jsonl"
 out="$("$_scripts"/pdf-table-fix "$t" 2>&1)" && rc=0 || rc=$?
 _ck1 $rc "T11: 写入失败返回非零"
@@ -408,6 +423,24 @@ open('$t/manifest.json', 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii
 out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
 _ck1 $rc "T13: 重复 page_anchor 被检测到"
 _grep "$out" "page_anchor 重复" "T13: 错误信息包含 page_anchor 重复"
+
+# ── T14: candidate_ref 无候选文件必须失败 ──
+echo ""
+echo "--- T14: candidate_ref 闭环校验 ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+python3 -c "
+import json
+p = '$t/manifest.json'
+m = json.loads(open(p, encoding='utf-8').read())
+m.get('files', {}).pop('table_candidates', None)
+m.get('hash', {}).pop('table_candidates_sha256', None)
+open(p, 'w', encoding='utf-8').write(json.dumps(m, ensure_ascii=False, indent=2)+'\\n')
+"
+rm -f "$t/data/table_candidates.jsonl"
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "T14: candidate_ref 缺少候选文件返回非零"
+_grep "$out" "含 candidate_ref" "T14: 包含 candidate_ref 闭环错误"
 
 # ── A1: pdf-apply-fixes 简单修复应用 ──
 echo ""
@@ -653,7 +686,7 @@ source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,c
 demo20.pdf,demo20,引擎 / 性能,最大净功率,11.8 Kw,kg,14,14,test,medium,draft,html_table,html_table:1,1,1,,business_key
 EOFCSV
 cat > "$t/manifest.json" <<'EOFJSON'
-{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"page_numbering":{"mapping_type":"constant_offset","printed_to_physical_offset":0,"status":"verified"}}
 EOFJSON
 touch "$t/test.md"
 # 首次生成 ingest（F5）
@@ -781,7 +814,7 @@ source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,c
 demo20.pdf,demo20,规格,额定功率,10,kW,14,14,evidence ok,medium,draft,html_table,html_table:1,1,1,,business_key
 EOFCSV
 cat > "$t/manifest.json" <<'EOFJSON'
-{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+{"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"page_numbering":{"mapping_type":"constant_offset","printed_to_physical_offset":0,"status":"verified"}}
 EOFJSON
 touch "$t/test.md"
 "$_scripts"/pdf-prepare-ingest "$t" > /dev/null 2>&1
