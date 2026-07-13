@@ -283,14 +283,14 @@ git diff --check                   # 通过
 新增/修改内容：
 
 **`scripts/pdf-extract-data`**：
-- 新增 `_check_page_numbering_safety(manifest)` 函数（line 222），检查 `page_numbering.status` 返回安全评估 `{safe, status, warning}`；`verified/proposed` → safe=True，`needs_review/missing` → safe=False + warning
+- 新增 `_check_page_numbering_safety(manifest)` 函数（line 222），检查 `page_numbering.status` 返回安全评估 `{safe, status, warning}`；仅 `verified` → safe=True，`proposed/needs_review/missing` → safe=False + warning
 - `main()` 中加载 `toc_tree` 前调用安全评估，stderr 输出警告但保留 TOC section_map（最佳信源）
 - `generate_verification()` 新增 `toc_warning` 参数，当页码坐标系未验证时写入 `toc_section_path` warning 检查
 
 **`scripts/pdf-prepare-ingest`**：
 - 新增 `_check_page_numbering_gate(pkg, rows)` 函数，在 `compute_ingest_status()` 之后运行，作为最终安全门禁
-- 当 `page_numbering.status == "needs_review"` 或缺失时：所有 `ready` 记录降级为 `not_ready`，notes 追加 `unverified_page_numbering` 标记
-- `verified/proposed` 时放行；`superseded/suppressed/skipped` 终态不被覆盖
+- 当 `page_numbering.status != "verified"` 或缺失时：所有 `ready` 记录降级为 `not_ready`，notes 追加 `unverified_page_numbering` 标记
+- 仅 `verified` 时放行；`superseded/suppressed/skipped` 终态不被覆盖
 
 **`scripts/pdf-check-fixes`**：
 - 新增 `validate_page_numbering(manifest, pkg_dir)` 函数，校验：块存在性、必含字段、mapping_type/status 合法值、constant_offset 需 offset≥0、toc 文件 hash 一致性
@@ -304,13 +304,13 @@ git diff --check                   # 通过
 | 测试类 | 测试数 | 覆盖内容 |
 |--------|--------|----------|
 | `TestCheckPageNumberingSafety` | 6 | verified/proposed/needs_review/missing/非 dict 块 |
-| `TestPageNumberingGate` | 7 | verified 放行、proposed 放行、needs_review 阻断、缺失阻断、skipped 不覆盖、无 manifest、损坏 manifest |
+| `TestPageNumberingGate` | 7 | verified 放行、proposed 阻断、needs_review 阻断、缺失阻断、skipped 不覆盖、无 manifest、损坏 manifest |
 | `TestValidatePageNumbering` | 9 | 合法 constant_offset/identity、旧包缺失、非法 mapping_type/status、缺 offset、负数 offset、缺必含字段、toc_tree/toc.md hash 失配 |
 
 验证：
 
 ```bash
-pytest -q                          # 250 passed（原 227 + 新增 23）
+pytest -q                          # 250 passed（阶段 2 第一轮实现基线）
 python3 scripts/check_plan_governance.py .  # 通过
 python3 scripts/check_plan_governance.py . --drift  # 通过
 ```
@@ -353,16 +353,14 @@ python3 scripts/check_plan_governance.py . --drift  # 通过
 
 4. **阻塞问题 4（skill 契约同步）**：见 [skills/pdf2md/SKILL.md](../../skills/pdf2md/SKILL.md) 和 `~/.claude/skills/pdf2md/SKILL.md`，补充 `page_numbering` 契约、status 语义、消费者安全门禁和旧包降级说明。
 
-新增测试（8 个）：
+新增测试（6 个）：
 
-- `test_proposed_returns_unsafe`（原 `test_proposed_returns_safe` 改为阻断）
-- `test_proposed_blocks_ready`（原 `test_proposed_allows_ready` 改为阻断）
 - `TestPageNumberingExportGate` ×6：verified 放行、proposed 阻断、needs_review 阻断、缺失阻断、无 manifest 阻断、损坏 manifest 阻断
 
 重新验证：
 
 ```bash
-pytest -q                          # 258 passed（+8 新增）
+pytest -q                          # 256 passed（阶段 2 修复后）
 python3 scripts/check_plan_governance.py .  # 通过
 python3 scripts/check_plan_governance.py . --drift  # 通过
 ```
@@ -373,6 +371,41 @@ python3 scripts/check_plan_governance.py . --drift  # 通过
 |------|---------------|---------|-----------------|------|
 | verified | 0 | 5（审批后正常） | 0 | 正常导出 |
 | needs_review | 1（⚠ page_numbering） | 0（阻断） | 5 | sys.exit(1) 拒绝 |
+
+#### 阶段 3 待实施准入复核（2026-07-13）
+
+结论：**阶段 3 达到 `待实施` 标准；当前计划保持 `实施中`，尚未开始阶段 3 代码或真实包回填。** 首轮实施必须在临时副本中完成，不直接覆盖仓库内 canonical 输出包。
+
+Step 0 现状快照：
+
+| 样本 | PDF 页数 | PDF page labels | 阶段 1 已知基线 | 阶段 3 预期处理 |
+|---|---:|---:|---|---|
+| 春风250Sr | 138 | 2 段，正文从物理 p9 起 | `constant_offset/+8`，准确 TOC p2–p8 为 118/120 | 验证物理 `target_page`、118 条 `printed_page`、2 条 `toc_unassigned`，再比较抽取/入库/导出 |
+| 春风 150AURA | 191 | 2 段，正文从物理 p2 起 | `constant_offset/+1`，准确 TOC p2–p8 为 121/121 | 验证不同前件页数量的固定偏移，不复用 `+8` |
+| demo20 | 20 | 0 | `unknown/needs_review`，准确 TOC p2–p4 为 58 条 | 保留 review 证据；`ready=0`，导出必须拒绝 |
+| demo60 | 60 | 0 | `unknown/needs_review`，准确 TOC p2–p3 为 38 条 | 保留 review 证据；`ready=0`，导出必须拒绝 |
+| demo5 | 5 | 0 | 无页码标签的额外控制样本 | 验证无标签分支不被样本规模或车型规则绕过 |
+
+准入不变量与验证矩阵：
+
+1. 所有样本只在临时副本执行 `pdf-validate → repair/repair_merged → pdf-extract-data → pdf-prepare-ingest → pdf-export-ingest`；canonical PDF、segments、Markdown 和现有审核文件保持只读。
+2. 对每个样本保存并比较 `toc_tree.target_page/printed_page`、manifest `page_numbering`、TOC hash、section map、Markdown 页锚点、`record_id`、`conflicts.csv`、`review_status/ingest_status` 和导出批次计数；页码修正不得自动生成 `approved/ready`。
+3. `verified` 样本必须证明章节映射与物理页锚点一致；`unknown/needs_review` 样本必须证明 stderr/review/verification warning、`not_ready` 和导出拒绝均保持闭环。
+4. 固定偏移、无标签 unknown 和不同前件页数量三类结果必须分别记录，不能把外部报告的 `+8` 推广到其他 PDF；`piecewise` 若当前没有真实样本，只验证契约分支并保持 review，不声称已完成真实回填。
+
+实施前可复现命令模板：
+
+```bash
+# 在临时副本中分别执行；<package> 使用上述五个样本之一
+PDF_VALIDATE_JSON=1 scripts/pdf-validate <package>/<source>.pdf <package>/segments
+python3 -c 'from pathlib import Path; from scripts.lib.toc_repair import repair_merged; repair_merged(Path("<package>/<source>.pdf"), Path("<package>/<source>.md"), "<package>/data/validate.json")'
+scripts/pdf-extract-data <package>
+scripts/pdf-prepare-ingest <package>
+scripts/pdf-export-ingest <package>  # unknown/needs_review 必须以非零退出
+scripts/pdf-check-fixes <package>
+```
+
+准入门禁：阶段 2 已通过 256 项 pytest、93/93 修复回归、治理/drift 和 skill 同步检查；阶段 3 当前没有未决契约阻塞。阶段 3 完成前不得把真实包回填结果写回 canonical 样本，也不得把 `needs_review` 样本手动改成 `verified` 作为测试捷径。
 
 ### 阶段 3：真实样本回填
 

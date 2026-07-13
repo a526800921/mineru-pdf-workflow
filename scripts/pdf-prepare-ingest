@@ -122,7 +122,7 @@ def read_overrides(path: Path) -> dict[str, dict]:
 def _check_page_numbering_gate(pkg: Path, rows: list[dict]) -> list[dict]:
     """页码坐标系安全门禁。
 
-    当 manifest.page_numbering.status 为 needs_review 或 page_numbering 块缺失时，
+    当 manifest.page_numbering.status 不是 verified 或 page_numbering 块缺失时，
     阻止所有记录进入 ready 状态。原地修改 rows，返回 rows。
 
     不修改 review_status 或 record_id — 只阻止 ready 状态并追加 notes。

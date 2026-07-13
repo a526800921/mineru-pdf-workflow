@@ -223,8 +223,8 @@ def _check_page_numbering_safety(manifest: dict) -> dict:
     """检查页码坐标系状态，返回安全评估。
 
     返回 {"safe": bool, "status": str, "warning": str | None}
-    - verified/proposed → safe=True, warning=None
-    - needs_review/missing → safe=False, warning 含人类可读说明
+    - verified → safe=True, warning=None
+    - proposed/needs_review/missing → safe=False, warning 含人类可读说明
     """
     pn = manifest.get("page_numbering")
     if not isinstance(pn, dict):
