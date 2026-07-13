@@ -219,6 +219,46 @@ def load_toc_tree(pkg: Path) -> list | None:
         return json.load(f)
 
 
+def _check_page_numbering_safety(manifest: dict) -> dict:
+    """检查页码坐标系状态，返回安全评估。
+
+    返回 {"safe": bool, "status": str, "warning": str | None}
+    - verified/proposed → safe=True, warning=None
+    - needs_review/missing → safe=False, warning 含人类可读说明
+    """
+    pn = manifest.get("page_numbering")
+    if not isinstance(pn, dict):
+        return {
+            "safe": False,
+            "status": "missing",
+            "warning": (
+                "manifest 缺少 page_numbering 块；toc_tree.target_page 可能不是物理页码。"
+                "请重新运行 pdf-auto 以生成页码检测，或手动补充 manifest.page_numbering。"
+            ),
+        }
+
+    status = pn.get("status", "needs_review")
+    if status in ("verified", "proposed"):
+        return {"safe": True, "status": status, "warning": None}
+
+    # needs_review 或未知状态
+    mapping_type = pn.get("mapping_type", "unknown")
+    if mapping_type == "unknown":
+        msg = (
+            "page_numbering.status=needs_review（mapping_type=unknown）；"
+            "toc_tree.target_page 可能是印刷页码而非物理页码。"
+            "章节归属结果可能不准确。"
+        )
+    else:
+        offset = pn.get("printed_to_physical_offset", "?")
+        msg = (
+            f"page_numbering.status=needs_review（偏移={offset}）；"
+            "toc_tree.target_page 未经验证，章节归属结果可能不准确。"
+        )
+
+    return {"safe": False, "status": status, "warning": msg}
+
+
 def build_page_section_map(toc_tree: list) -> dict[int, str]:
     """构建 {page_num: section_path} 映射。
 
@@ -600,7 +640,8 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
 
 
 def generate_verification(pkg: Path, manifest: dict, cl_data: list,
-                          draft_rows: list, output_files: dict) -> list:
+                          draft_rows: list, output_files: dict,
+                          toc_warning: str | None = None) -> list:
     checks = []
     n = 1
 
@@ -640,6 +681,12 @@ def generate_verification(pkg: Path, manifest: dict, cl_data: list,
     if missing_path > 0:
         add("warning", "section_path", "needs_review",
             f"{missing_path} 行缺少章节路径", "pdf-extract-data section_path logic")
+
+    # Page numbering safety: TOC 章节路径可能基于未验证的页码映射
+    if toc_warning:
+        add("warning", "toc_section_path", "needs_review",
+            f"TOC 章节路径基于未经验证的页码映射: {toc_warning}",
+            "manifest.json page_numbering")
 
     draft_needs_review = sum(1 for r in draft_rows if r["status"] == "needs_review")
     draft_draft = sum(1 for r in draft_rows if r["status"] == "draft")
@@ -787,7 +834,6 @@ def main():
         v_path = pkg / "data" / "verification.csv"
         output_files = {"quick_lookup_draft.csv": str(draft_path)}
         verification = generate_verification(pkg, manifest, cl_data, draft_rows, output_files)
-        # 追加一条明确的缺失 markdown 信息
         verification.append({
             "check_id": f"V{len(verification)+1:03d}", "level": "error",
             "target": "markdown", "result": "failed",
@@ -825,7 +871,15 @@ def main():
 
     # TOC 树 section_path 二次修正（依赖精确定位后的 page_start）
     toc_tree = load_toc_tree(pkg)
+    toc_section_warning = None
     if toc_tree:
+        # 页码坐标系安全评估：仍构建 section_map（最佳信源），
+        # 但如果 page_numbering 未验证，记录 warning 以供 verification
+        safety = _check_page_numbering_safety(manifest)
+        if safety["warning"]:
+            print(f"  ⚠ page_numbering: {safety['warning']}", file=sys.stderr)
+            toc_section_warning = safety["warning"]
+
         page_section_map = build_page_section_map(toc_tree)
         updated = 0
         for row in draft_rows:
@@ -842,7 +896,8 @@ def main():
 
     v_path = pkg / "data" / "verification.csv"
     output_files = {"quick_lookup_draft.csv": str(draft_path)}
-    verification = generate_verification(pkg, manifest, cl_data, draft_rows, output_files)
+    verification = generate_verification(pkg, manifest, cl_data, draft_rows,
+                                         output_files, toc_warning=toc_section_warning)
     v_fields = ["check_id", "level", "target", "result", "details", "source"]
     write_csv(v_path, v_fields, verification)
     output_files["verification.csv"] = str(v_path)

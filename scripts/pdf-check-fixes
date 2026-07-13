@@ -472,6 +472,16 @@ def validate_manifest_files(manifest: dict, pkg_dir: Path) -> list[str]:
         mf_path = pkg_dir / mf_rel
         if not mf_path.exists():
             errors.append(f"files.manual_fixes 指向的文件不存在：{mf_path}")
+        else:
+            # 顶层 hash 是 data 文件的公开完整性登记；fixes 块中的 hash
+            # 仍保留为修复审计字段，二者都必须能独立校验。
+            expected_mf_hash = file_sha256(mf_path)
+            actual_mf_hash = manifest.get("hash", {}).get("manual_fixes_sha256")
+            if actual_mf_hash != expected_mf_hash:
+                errors.append(
+                    "hash.manual_fixes_sha256 不匹配"
+                    f"（期望：{expected_mf_hash[:16]}...，实际：{actual_mf_hash}" 
+                )
 
     # 校验其他 files.* 路径（不校验 data/ 目录本身、images/ 等目录类型条目）
     for key, rel in files.items():
@@ -840,6 +850,180 @@ def validate_table_candidates(manifest: dict, pkg_dir: Path) -> list[str]:
     return errors
 
 
+def validate_manual_fix_candidate_refs(
+    manifest: dict, pkg_dir: Path, fixes_path: Path
+) -> list[str]:
+    """校验 manual_fixes.jsonl 的 candidate_ref 是否指向真实候选。
+
+    candidate_ref 不是所有修复类型都必填（例如目录或章节归属修复），
+    但一旦出现，就必须是候选 ID 或候选 ID 列表，并且候选文件必须已在
+    manifest 登记、存在且包含这些 ID。这样可以阻止候选文件缺失后仍以
+    “修复记录存在”冒充闭环，也避免跨包/跨页的字符串替换漂移。
+    """
+    errors: list[str] = []
+    if not fixes_path.exists():
+        return errors
+
+    refs: list[tuple[int, list[str]]] = []
+    try:
+        with fixes_path.open(encoding="utf-8") as f:
+            for lineno, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict) or "candidate_ref" not in obj:
+                    continue
+                value = obj["candidate_ref"]
+                if isinstance(value, str) and value.strip():
+                    ids = [value.strip()]
+                elif isinstance(value, list) and value and all(
+                    isinstance(item, str) and item.strip() for item in value
+                ):
+                    ids = [item.strip() for item in value]
+                else:
+                    errors.append(
+                        f"manual_fixes 第 {lineno} 行 candidate_ref 必须是非空字符串或字符串列表"
+                    )
+                    continue
+                refs.append((lineno, ids))
+    except OSError as e:
+        errors.append(f"读取 manual_fixes candidate_ref 失败：{e}")
+        return errors
+
+    if not refs:
+        return errors
+
+    files = manifest.get("files", {})
+    tc_rel = files.get("table_candidates")
+    if not isinstance(tc_rel, str) or not tc_rel:
+        errors.append(
+            "manual_fixes 含 candidate_ref，但 manifest.files.table_candidates 未登记"
+        )
+        return errors
+
+    tc_path = pkg_dir / tc_rel
+    if not tc_path.exists():
+        errors.append(
+            f"manual_fixes 含 candidate_ref，但候选文件不存在：{tc_path}"
+        )
+        return errors
+
+    candidate_ids: set[str] = set()
+    try:
+        with tc_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and isinstance(obj.get("candidate_id"), str):
+                    candidate_ids.add(obj["candidate_id"])
+    except OSError as e:
+        errors.append(f"读取 table_candidates candidate_id 失败：{e}")
+        return errors
+
+    for lineno, ids in refs:
+        missing = [candidate_id for candidate_id in ids if candidate_id not in candidate_ids]
+        if missing:
+            errors.append(
+                f"manual_fixes 第 {lineno} 行 candidate_ref 不存在：{', '.join(missing)}"
+            )
+    return errors
+
+
+def validate_page_numbering(manifest: dict, pkg_dir: Path) -> list[str]:
+    """校验 manifest.json 中的 page_numbering 块。
+
+    校验项：
+    1. 块存在且为 dict（旧包缺失时 info，不报 error）
+    2. 必含字段: physical_page_basis, mapping_type, status
+    3. mapping_type 合法值
+    4. status 合法值
+    5. constant_offset 时 printed_to_physical_offset 必填且 >= 0
+    6. hash.toc_md_sha256 / hash.toc_tree_json_sha256 与文件一致
+    """
+    errors: list[str] = []
+    VALID_MAPPING_TYPES = {"identity", "constant_offset", "piecewise", "unknown"}
+    VALID_STATUSES = {"verified", "proposed", "needs_review"}
+
+    pn = manifest.get("page_numbering")
+
+    # 1. 块存在性：旧包没有 page_numbering 是预期情况（安全降级），不报 error
+    if pn is None:
+        return errors
+
+    if not isinstance(pn, dict):
+        errors.append("page_numbering 必须是 JSON 对象")
+        return errors
+
+    # 2. 必含字段
+    for field in ("physical_page_basis", "mapping_type", "status"):
+        if field not in pn:
+            errors.append(f"page_numbering 缺少必含字段：{field}")
+
+    # 3. mapping_type 合法值
+    mt = pn.get("mapping_type", "")
+    if mt not in VALID_MAPPING_TYPES:
+        errors.append(
+            f"page_numbering.mapping_type 不合法：{mt}"
+            f"（允许：{', '.join(sorted(VALID_MAPPING_TYPES))}）"
+        )
+
+    # 4. status 合法值
+    st = pn.get("status", "")
+    if st not in VALID_STATUSES:
+        errors.append(
+            f"page_numbering.status 不合法：{st}"
+            f"（允许：{', '.join(sorted(VALID_STATUSES))}）"
+        )
+
+    # 5. constant_offset 需要 printed_to_physical_offset
+    if mt == "constant_offset":
+        offset = pn.get("printed_to_physical_offset")
+        if not isinstance(offset, int):
+            errors.append(
+                "page_numbering.mapping_type=constant_offset 但 "
+                "printed_to_physical_offset 缺失或非整数"
+            )
+        elif offset < 0:
+            errors.append(
+                f"page_numbering.printed_to_physical_offset 为负数：{offset}"
+            )
+
+    # 6. hash 校验：toc 文件 hash 与 manifest 记录一致
+    hashes = manifest.get("hash", {})
+
+    toc_md_path = pkg_dir / "toc.md"
+    toc_tree_path = pkg_dir / "toc_tree.json"
+
+    if toc_md_path.exists():
+        expected_hash = file_sha256(toc_md_path)
+        recorded_hash = hashes.get("toc_md_sha256")
+        if recorded_hash and recorded_hash != expected_hash:
+            errors.append(
+                f"hash.toc_md_sha256 不匹配"
+                f"（期望：{expected_hash[:16]}...，实际：{recorded_hash[:16]}...）"
+            )
+
+    if toc_tree_path.exists():
+        expected_hash = file_sha256(toc_tree_path)
+        recorded_hash = hashes.get("toc_tree_json_sha256")
+        if recorded_hash and recorded_hash != expected_hash:
+            errors.append(
+                f"hash.toc_tree_json_sha256 不匹配"
+                f"（期望：{expected_hash[:16]}...，实际：{recorded_hash[:16]}...）"
+            )
+
+    return errors
+
+
 def main() -> None:
     verbose = False
     args = []
@@ -896,6 +1080,14 @@ def main() -> None:
     # -- table_candidates --
     tc_errors = validate_table_candidates(manifest, pkg_dir)
     all_errors.extend(tc_errors)
+
+    # -- manual_fixes candidate_ref --
+    ref_errors = validate_manual_fix_candidate_refs(manifest, pkg_dir, fixes_path)
+    all_errors.extend(ref_errors)
+
+    # -- page_numbering --
+    pn_errors = validate_page_numbering(manifest, pkg_dir)
+    all_errors.extend(pn_errors)
 
     # -- 幂等性 --
     idem_errors = check_idempotent(manifest, pkg_dir)

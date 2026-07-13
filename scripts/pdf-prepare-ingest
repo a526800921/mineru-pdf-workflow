@@ -119,6 +119,74 @@ def read_overrides(path: Path) -> dict[str, dict]:
         return overrides
 
 
+def _check_page_numbering_gate(pkg: Path, rows: list[dict]) -> list[dict]:
+    """页码坐标系安全门禁。
+
+    当 manifest.page_numbering.status 为 needs_review 或 page_numbering 块缺失时，
+    阻止所有记录进入 ready 状态。原地修改 rows，返回 rows。
+
+    不修改 review_status 或 record_id — 只阻止 ready 状态并追加 notes。
+    """
+    manifest_path = pkg / "manifest.json"
+    blocked = False
+    reason = ""
+
+    if not manifest_path.exists():
+        blocked = True
+        reason = "manifest.json 缺失"
+    else:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            blocked = True
+            reason = "manifest.json 解析失败"
+        else:
+            pn = manifest.get("page_numbering")
+            if not isinstance(pn, dict):
+                blocked = True
+                reason = "缺少 page_numbering 块（旧格式输出包或页码检测未运行）"
+            else:
+                status = pn.get("status", "needs_review")
+                if status in ("verified", "proposed"):
+                    return rows  # 安全，放行
+                blocked = True
+                mapping_type = pn.get("mapping_type", "unknown")
+                if mapping_type == "unknown":
+                    reason = "page_numbering.status=needs_review（mapping_type=unknown）"
+                else:
+                    offset = pn.get("printed_to_physical_offset", "?")
+                    reason = (
+                        f"page_numbering.status=needs_review（偏移={offset}，来源歧义）"
+                    )
+
+    if not blocked:
+        return rows
+
+    # 阻断：所有非终态记录 → not_ready
+    blocked_count = 0
+    for r in rows:
+        if r.get("ingest_status") in ("superseded", "suppressed", "skipped"):
+            continue
+        if r["ingest_status"] != "ready":
+            continue
+        r["ingest_status"] = "not_ready"
+        existing = r.get("notes", "")
+        r["notes"] = (existing + "; " if existing else "") + (
+            f"unverified_page_numbering: {reason}"
+        )
+        blocked_count += 1
+
+    if blocked_count > 0:
+        print(
+            f"  ⚠ 入库阻断: {reason}（{blocked_count} 条 ready 降级为 not_ready）",
+            file=sys.stderr,
+        )
+    else:
+        print(f"  ⚠ 入库阻断: {reason}（无 ready 记录受影响）", file=sys.stderr)
+
+    return rows
+
+
 def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
     rows = []
     for dr in draft_rows:
@@ -544,6 +612,10 @@ def main():
 
     # Compute ingest status
     compute_ingest_status(ingest_rows, conflicts)
+
+    # ── 页码坐标系安全门禁 ──
+    # 当 page_numbering 未验证时，阻止所有 ready 记录（最终安全检查）
+    ingest_rows = _check_page_numbering_gate(pkg, ingest_rows)
 
     # Write outputs
     write_csv(ingest_path, INGEST_FIELDS, ingest_rows)

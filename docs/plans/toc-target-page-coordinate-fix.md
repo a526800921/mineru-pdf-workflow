@@ -3,8 +3,8 @@
 ## 计划状态
 
 - 状态：实施中
-- 当前阶段：阶段 1 已完成（三次验收通过） → 阶段 2：下游消费者兼容
-- 最后更新：2026-07-12
+- 当前阶段：阶段 2 已完成 → 阶段 3：真实样本回填（待实施）
+- 最后更新：2026-07-13
 
 本文档承接已完成的 [toc-page-physical-attribution-fix](toc-page-physical-attribution-fix.md)，只解决另一个独立问题：`toc_tree.json.target_page` 可能使用印刷页码，而下游和 Markdown 页锚点使用 PDF 物理页码。它不重新打开目录条目属于哪一张物理目录页的既有契约。
 
@@ -232,6 +232,41 @@ git diff --check                   # 通过
 - `pytest -q`：227 passed；governance + drift pass
 - 春风250Sr 118/120 条目 = 2 条进入 toc_unassigned review（"仪表指示灯" ×2），与计划声明一致
 
+#### 阶段 1 验收者独立复核（2026-07-12，通过）
+
+结论：**阶段 1 通过，阶段 2 达到 `待实施` 标准**。本次按计划中的准确 TOC 页范围 fixture 独立运行最终链路并复核最终产物，没有修改代码。
+
+复核结果：
+
+- 春风250Sr（p2–p8）：118/120 条目归属，118 条 `printed_page`，2 条 `仪表指示灯` 进入 `toc_unassigned`；manifest 为 `constant_offset/verified/+8`。
+- 春风 150AURA（p2–p8）：121/121 条目归属，121 条 `printed_page`；manifest 为 `constant_offset/verified/+1`。
+- demo20（p2–p4）：58 条目录条目，manifest 为 `unknown/needs_review`，最终 `review.md` 保留“页码坐标系未验证”段落及 validate 证据。
+- demo60（p2–p3）：38 条目录条目，manifest 为 `unknown/needs_review`，最终 `review.md` 保留“页码坐标系未验证”段落及 validate 证据。
+- 四个临时输出包的 `toc.md`/`toc_tree.json` hash 一致，重复运行 `repair_merged()` 结果幂等。
+
+最终门禁：`pytest -q` 为 227 passed；`python3 scripts/check_plan_governance.py .`、`--drift` 和 `git diff --check` 均通过。
+
+范围说明：原始 `pdf-validate` 当前仍会把春风250Sr p135–p137、demo20/demo60 的部分页面误判为 TOC；本次使用计划冻结的准确 TOC 页范围 fixture 验收坐标系契约。该既有目录页类型/归属检测边界不改变本阶段结论，但后续不得把原始报告直接当作 118/58/38 的数量证据。
+
+#### 阶段 2 待实施准入复核（2026-07-13）
+
+结论：**阶段 2 达到 `待实施` 标准**；当前计划总体状态保持 `实施中`，尚未开始阶段 2 代码实施。
+
+准入证据与边界：
+
+- 阶段 1 已在四包准确 TOC 范围 fixture 上独立验收通过，物理页 `target_page`、`printed_page`、manifest `page_numbering`、unknown review 证据、TOC hash 和幂等性均有可复现结果。
+- 阶段 2 的消费者范围已冻结：`pdf-extract-data`、`pdf-read-page`、`pdf-table-fix`、`pdf-table-repair`、旧格式 `toc_tree.json` 兼容读取，以及 `approved/ready` 安全门禁；不扩展到 TOC 页类型检测或新的 MCP 契约。
+- 阶段 2 的完成条件、失败策略和回滚边界已记录在本计划；当前没有阻塞阶段 2 启动的未决契约问题。
+- 阶段 1 基线门禁保持通过：227 项 pytest、治理检查、drift 和 `git diff --check` 均通过。阶段 2 实施前仍必须对将修改的函数/方法执行 GitNexus upstream impact 分析。
+
+阶段 2 实施前固定的最小验证基线：
+
+1. 使用阶段 1 四包 fixture 的 `toc_tree.json`、manifest 和 review 结果，核对消费者只读取物理 `target_page`。
+2. 使用缺少 `page_numbering` 的旧 `toc_tree.json` fixture，验证兼容读取并进入安全降级，不静默标记为 verified/ready。
+3. 对 `pdf-extract-data`、`pdf-read-page`、`pdf-table-fix`、`pdf-table-repair` 和入库/导出门禁分别保留可复现命令；实施后比较 section map、页锚点、record_id、冲突和审核状态。
+
+阶段 2 状态推进不代表已实施或已完成；开始修改代码前需先补充本阶段具体 Step 0 运行快照，并按 GitNexus 规则完成影响分析。
+
 ### 阶段 2：下游消费者兼容
 
 1. `pdf-extract-data` 只消费物理 `target_page`，并验证章节映射与页锚点一致。
@@ -240,6 +275,45 @@ git diff --check                   # 通过
 4. 验证旧格式 `toc_tree.json` 的兼容读取和缺少 `page_numbering` 时的安全降级。
 
 完成条件：页码修正不破坏旧消费者；错误映射不会静默进入 `ready` 或导出批次。
+
+#### 阶段 2 实施证据（2026-07-13）
+
+实施文件：`scripts/pdf-extract-data`（+61 行）、`scripts/pdf-prepare-ingest`（+72 行）、`scripts/pdf-check-fixes`（+192 行）、`tests/test_toc_repair.py`（+397 行，3 个新测试类）。
+
+新增/修改内容：
+
+**`scripts/pdf-extract-data`**：
+- 新增 `_check_page_numbering_safety(manifest)` 函数（line 222），检查 `page_numbering.status` 返回安全评估 `{safe, status, warning}`；`verified/proposed` → safe=True，`needs_review/missing` → safe=False + warning
+- `main()` 中加载 `toc_tree` 前调用安全评估，stderr 输出警告但保留 TOC section_map（最佳信源）
+- `generate_verification()` 新增 `toc_warning` 参数，当页码坐标系未验证时写入 `toc_section_path` warning 检查
+
+**`scripts/pdf-prepare-ingest`**：
+- 新增 `_check_page_numbering_gate(pkg, rows)` 函数，在 `compute_ingest_status()` 之后运行，作为最终安全门禁
+- 当 `page_numbering.status == "needs_review"` 或缺失时：所有 `ready` 记录降级为 `not_ready`，notes 追加 `unverified_page_numbering` 标记
+- `verified/proposed` 时放行；`superseded/suppressed/skipped` 终态不被覆盖
+
+**`scripts/pdf-check-fixes`**：
+- 新增 `validate_page_numbering(manifest, pkg_dir)` 函数，校验：块存在性、必含字段、mapping_type/status 合法值、constant_offset 需 offset≥0、toc 文件 hash 一致性
+- 旧包缺失 `page_numbering` 时不报 error（安全降级兼容）
+- 在 `main()` 中 `validate_manual_fix_candidate_refs` 之后注册
+
+**无需修改文件**（均使用物理页码或不消费 TOC 数据）：`pdf-read-page`、`pdf-table-fix`、`pdf-table-repair`（不存在）、`pdf-export-ingest`、`toc_repair.py`、`review_report.py`
+
+**测试**：
+
+| 测试类 | 测试数 | 覆盖内容 |
+|--------|--------|----------|
+| `TestCheckPageNumberingSafety` | 6 | verified/proposed/needs_review/missing/非 dict 块 |
+| `TestPageNumberingGate` | 7 | verified 放行、proposed 放行、needs_review 阻断、缺失阻断、skipped 不覆盖、无 manifest、损坏 manifest |
+| `TestValidatePageNumbering` | 9 | 合法 constant_offset/identity、旧包缺失、非法 mapping_type/status、缺 offset、负数 offset、缺必含字段、toc_tree/toc.md hash 失配 |
+
+验证：
+
+```bash
+pytest -q                          # 250 passed（原 227 + 新增 23）
+python3 scripts/check_plan_governance.py .  # 通过
+python3 scripts/check_plan_governance.py . --drift  # 通过
+```
 
 ### 阶段 3：真实样本回填
 

@@ -25,6 +25,58 @@ from lib.toc_repair import (
     _write_toc_review_evidence,
 )
 
+# 下游消费者函数（通过 importlib 加载）
+from importlib.machinery import SourceFileLoader as _SourceFileLoader
+import importlib.util as _importlib_util
+
+_scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+
+_mod = _importlib_util.module_from_spec(
+    _importlib_util.spec_from_loader(
+        "pdf_extract_data",
+        _SourceFileLoader(
+            "pdf_extract_data",
+            os.path.join(_scripts_dir, "pdf-extract-data"),
+        ),
+    )
+)
+_SourceFileLoader(
+    "pdf_extract_data",
+    os.path.join(_scripts_dir, "pdf-extract-data"),
+).exec_module(_mod)
+_check_page_numbering_safety = _mod._check_page_numbering_safety
+build_page_section_map = _mod.build_page_section_map
+
+_mod2 = _importlib_util.module_from_spec(
+    _importlib_util.spec_from_loader(
+        "pdf_prepare_ingest",
+        _SourceFileLoader(
+            "pdf_prepare_ingest",
+            os.path.join(_scripts_dir, "pdf-prepare-ingest"),
+        ),
+    )
+)
+_SourceFileLoader(
+    "pdf_prepare_ingest",
+    os.path.join(_scripts_dir, "pdf-prepare-ingest"),
+).exec_module(_mod2)
+_check_page_numbering_gate = _mod2._check_page_numbering_gate
+
+_mod3 = _importlib_util.module_from_spec(
+    _importlib_util.spec_from_loader(
+        "pdf_check_fixes",
+        _SourceFileLoader(
+            "pdf_check_fixes",
+            os.path.join(_scripts_dir, "pdf-check-fixes"),
+        ),
+    )
+)
+_SourceFileLoader(
+    "pdf_check_fixes",
+    os.path.join(_scripts_dir, "pdf-check-fixes"),
+).exec_module(_mod3)
+validate_page_numbering = _mod3.validate_page_numbering
+
 
 def _create_test_pdf(toc_entries: list[list] | None, pages: int = 3) -> str:
     """创建含可选 TOC 大纲的测试 PDF。"""
@@ -848,6 +900,351 @@ class TestPageNumbering(unittest.TestCase):
             # 不应该抛出异常
             _write_toc_review_evidence(pkg, numbering, None)
             _write_toc_review_evidence(pkg, numbering, "/nonexistent/path.json")
+
+
+class TestCheckPageNumberingSafety(unittest.TestCase):
+    """_check_page_numbering_safety 测试（pdf-extract-data）。"""
+
+    def test_verified_returns_safe(self):
+        result = _check_page_numbering_safety({
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "verified",
+                "printed_to_physical_offset": 8,
+                "evidence": [{"a": 1}],
+            }
+        })
+        self.assertTrue(result["safe"])
+        self.assertIsNone(result["warning"])
+        self.assertEqual(result["status"], "verified")
+
+    def test_proposed_returns_safe(self):
+        result = _check_page_numbering_safety({
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "identity",
+                "status": "proposed",
+                "evidence": [{"a": 1}],
+            }
+        })
+        self.assertTrue(result["safe"])
+        self.assertIsNone(result["warning"])
+        self.assertEqual(result["status"], "proposed")
+
+    def test_needs_review_unknown_returns_unsafe(self):
+        result = _check_page_numbering_safety({
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "unknown",
+                "status": "needs_review",
+                "evidence": [],
+            }
+        })
+        self.assertFalse(result["safe"])
+        self.assertIsNotNone(result["warning"])
+        self.assertIn("unknown", result["warning"])
+
+    def test_needs_review_offset_returns_unsafe(self):
+        result = _check_page_numbering_safety({
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "needs_review",
+                "printed_to_physical_offset": 8,
+                "evidence": [],
+            }
+        })
+        self.assertFalse(result["safe"])
+        self.assertIsNotNone(result["warning"])
+        self.assertIn("偏移=8", result["warning"])
+
+    def test_missing_block_returns_missing(self):
+        result = _check_page_numbering_safety({})
+        self.assertFalse(result["safe"])
+        self.assertEqual(result["status"], "missing")
+        self.assertIn("缺少 page_numbering", result["warning"])
+
+    def test_non_dict_block_returns_missing(self):
+        result = _check_page_numbering_safety({"page_numbering": "string"})
+        self.assertFalse(result["safe"])
+        self.assertEqual(result["status"], "missing")
+
+
+class TestPageNumberingGate(unittest.TestCase):
+    """_check_page_numbering_gate 测试（pdf-prepare-ingest）。"""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
+
+    def _make_rows(self, ready_count=3):
+        """生成含 ready/not_ready/skipped 的 ingest rows。"""
+        rows = []
+        for i in range(ready_count):
+            rows.append({
+                "record_id": f"R{i:03d}",
+                "review_status": "approved",
+                "ingest_status": "ready",
+                "notes": "test",
+            })
+        for i in range(2):
+            rows.append({
+                "record_id": f"N{i:03d}",
+                "review_status": "needs_review",
+                "ingest_status": "not_ready",
+                "notes": "",
+            })
+        for i in range(2):
+            rows.append({
+                "record_id": f"S{i:03d}",
+                "review_status": "rejected",
+                "ingest_status": "skipped",
+                "notes": "",
+            })
+        return rows
+
+    def test_verified_allows_ready(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "verified",
+                "printed_to_physical_offset": 8,
+                "evidence": [{"a": 1}],
+            }
+        }
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        rows = self._make_rows(3)
+        result = _check_page_numbering_gate(self.tmpdir, rows)
+        ready = [r for r in result if r["ingest_status"] == "ready"]
+        self.assertEqual(len(ready), 3)
+
+    def test_proposed_allows_ready(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "identity",
+                "status": "proposed",
+                "evidence": [{"a": 1}],
+            }
+        }
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        rows = self._make_rows(3)
+        result = _check_page_numbering_gate(self.tmpdir, rows)
+        ready = [r for r in result if r["ingest_status"] == "ready"]
+        self.assertEqual(len(ready), 3)
+
+    def test_needs_review_blocks_ready(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "unknown",
+                "status": "needs_review",
+                "evidence": [],
+            }
+        }
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        rows = self._make_rows(3)
+        result = _check_page_numbering_gate(self.tmpdir, rows)
+        ready = [r for r in result if r["ingest_status"] == "ready"]
+        self.assertEqual(len(ready), 0)
+        # ready 记录应降级为 not_ready 并带 unverified_page_numbering 标记
+        blocked = [r for r in result if "unverified_page_numbering" in r.get("notes", "")]
+        self.assertEqual(len(blocked), 3)
+
+    def test_missing_page_numbering_blocks_ready(self):
+        manifest = {"files": {"markdown": "test.md"}}
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        rows = self._make_rows(3)
+        result = _check_page_numbering_gate(self.tmpdir, rows)
+        ready = [r for r in result if r["ingest_status"] == "ready"]
+        self.assertEqual(len(ready), 0)
+
+    def test_skipped_not_overwritten(self):
+        """skipeed 状态不被门禁覆盖。"""
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "unknown",
+                "status": "needs_review",
+                "evidence": [],
+            }
+        }
+        (self.tmpdir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+        )
+        rows = self._make_rows(3)
+        result = _check_page_numbering_gate(self.tmpdir, rows)
+        skipped = [r for r in result if r["ingest_status"] == "skipped"]
+        self.assertEqual(len(skipped), 2)
+        # rejected 记录不应有 unverified_page_numbering 标记
+        for s in skipped:
+            self.assertNotIn("unverified_page_numbering", s.get("notes", ""))
+
+    def test_no_manifest_blocks_ready(self):
+        rows = self._make_rows(2)
+        result = _check_page_numbering_gate(self.tmpdir, rows)
+        ready = [r for r in result if r["ingest_status"] == "ready"]
+        self.assertEqual(len(ready), 0)
+
+    def test_corrupt_manifest_blocks_ready(self):
+        (self.tmpdir / "manifest.json").write_text(
+            "not valid json", encoding="utf-8"
+        )
+        rows = self._make_rows(2)
+        result = _check_page_numbering_gate(self.tmpdir, rows)
+        ready = [r for r in result if r["ingest_status"] == "ready"]
+        self.assertEqual(len(ready), 0)
+
+
+class TestValidatePageNumbering(unittest.TestCase):
+    """validate_page_numbering 测试（pdf-check-fixes）。"""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
+
+    def test_valid_constant_offset_no_errors(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "verified",
+                "printed_to_physical_offset": 8,
+                "evidence": [{"a": 1}],
+            }
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertEqual(len(errors), 0)
+
+    def test_valid_identity_no_errors(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "identity",
+                "status": "proposed",
+                "evidence": [{"a": 1}],
+            }
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertEqual(len(errors), 0)
+
+    def test_missing_block_no_errors(self):
+        """旧包无 page_numbering 是兼容场景，不报错。"""
+        errors = validate_page_numbering({}, self.tmpdir)
+        self.assertEqual(len(errors), 0)
+
+    def test_invalid_mapping_type_error(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "bogus",
+                "status": "needs_review",
+                "evidence": [],
+            }
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertTrue(any("mapping_type" in e for e in errors))
+
+    def test_invalid_status_error(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "identity",
+                "status": "bogus",
+                "evidence": [],
+            }
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertTrue(any("status" in e for e in errors))
+
+    def test_constant_offset_missing_offset_error(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "verified",
+                "evidence": [],
+                # 缺少 printed_to_physical_offset
+            }
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertTrue(any("printed_to_physical_offset" in e for e in errors))
+
+    def test_negative_offset_error(self):
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "verified",
+                "printed_to_physical_offset": -5,
+                "evidence": [],
+            }
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertTrue(any("负数" in e for e in errors))
+
+    def test_missing_required_field_error(self):
+        manifest = {
+            "page_numbering": {
+                "mapping_type": "identity",
+                "status": "proposed",
+                # 缺少 physical_page_basis
+            }
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertTrue(any("physical_page_basis" in e for e in errors))
+
+    def test_toc_tree_hash_mismatch(self):
+        """当 toc_tree.json 存在且 manifest hash 不匹配时报错。"""
+        tree_path = self.tmpdir / "toc_tree.json"
+        tree_path.write_text("[{}]", encoding="utf-8")
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "constant_offset",
+                "status": "verified",
+                "printed_to_physical_offset": 1,
+                "evidence": [{"a": 1}],
+            },
+            "hash": {
+                "toc_tree_json_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            },
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertTrue(any("toc_tree_json_sha256" in e for e in errors))
+
+    def test_toc_md_hash_mismatch(self):
+        """当 toc.md 存在且 manifest hash 不匹配时报错。"""
+        (self.tmpdir / "toc.md").write_text("# TOC\n", encoding="utf-8")
+        manifest = {
+            "page_numbering": {
+                "physical_page_basis": "pdf_1_based",
+                "mapping_type": "identity",
+                "status": "verified",
+                "evidence": [{"a": 1}],
+            },
+            "hash": {
+                "toc_md_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            },
+        }
+        errors = validate_page_numbering(manifest, self.tmpdir)
+        self.assertTrue(any("toc_md_sha256" in e for e in errors))
 
 
 if __name__ == "__main__":
