@@ -510,8 +510,15 @@ def _generate_draft_for_repair_type(
     else:
         missing_text = []
 
-    # 根据 repair_type 执行不同逻辑
-    draft_html = original_html
+    # 从当前 Markdown 提取 before_html（Markdown 可能已被 formatting 处理过）
+    before_html = original_html
+    if md_text:
+        current_html = _extract_table_html_from_md(md_text, page_anchor)
+        if current_html:
+            before_html = current_html
+
+    # 根据 repair_type 执行不同逻辑（基于 before_html 操作）
+    draft_html = before_html
     warnings: list[str] = []
     alignment_candidates: list[dict] = []
     extra_missing_text: list[str] = list(missing_text)
@@ -530,12 +537,12 @@ def _generate_draft_for_repair_type(
 
     if repair_type == "pretty_print":
         if col_count > 20:
-            draft_html, pw = _compress_excessive_columns(original_html)
+            draft_html, pw = _compress_excessive_columns(before_html)
             warnings.extend(pw)
 
     elif repair_type == "fill_missing_text":
         # 额外检测 PDF 文本中的缺失
-        html_texts = _extract_html_cell_texts(original_html)
+        html_texts = _extract_html_cell_texts(before_html)
         extra_missing = _detect_missing_text(pdf_text, html_texts)
         if extra_missing:
             extra_missing_text.extend(extra_missing)
@@ -563,7 +570,7 @@ def _generate_draft_for_repair_type(
     expected_hit_count = 0
     if md_text:
         expected_hit_count = _compute_expected_hit_count(
-            md_text, page_anchor, original_html)
+            md_text, page_anchor, before_html)
 
     # 去重 warnings
     seen_warnings: set[str] = set()
@@ -586,9 +593,10 @@ def _generate_draft_for_repair_type(
         "source_candidate_id": candidate_id,
         "source_pdf_sha256": source_shas.get("pdf_sha256", ""),
         "source_markdown_sha256": source_shas.get("markdown_sha256", ""),
-        "before_html": original_html,
+        "before_html": before_html,
         "draft_html": draft_html,
         "fallback_html": fallback_html,
+        "source_original_html": original_html,
         "pdf_text": pdf_text,
         "page_words": page_words or [],
         "missing_text": extra_missing_text,
@@ -932,6 +940,46 @@ def _draft_to_manual_fix(draft: dict, status: str,
         fix_obj["operator_note"] = reason
 
     return fix_obj
+
+
+def _extract_table_html_from_md(md_text: str, page_anchor: str) -> str | None:
+    """从当前 Markdown 的页锚点块中提取 <table>...</table> 内容。
+
+    候选的 original_html 可能来自 MinerU 原始输出（预格式化前），
+    如果 Markdown 已被 pdf-merge / formatting 处理过，HTML 结构可能不同。
+    本函数从当前 Markdown 提取真实 HTML 作为 before_html。
+    """
+    anchor_pattern = re.compile(
+        r'^<!-- pages (\d+)-(\d+) -->\s*$', re.MULTILINE)
+    matches = list(anchor_pattern.finditer(md_text))
+
+    pa_match = re.match(r'<!-- pages (\d+)-(\d+) -->', page_anchor)
+    if not pa_match:
+        return None
+    target_page = int(pa_match.group(1))
+
+    for m in matches:
+        start_page = int(m.group(1))
+        end_page = int(m.group(2))
+        if start_page <= target_page <= end_page:
+            block_start = m.start()
+            next_anchor = None
+            for nm in matches:
+                if nm.start() > m.start():
+                    next_anchor = nm
+                    break
+            block_end = next_anchor.start() if next_anchor else len(md_text)
+            block_text = md_text[block_start:block_end]
+
+            table_start = block_text.find("<table")
+            if table_start < 0:
+                return None
+            table_end = block_text.find("</table>", table_start)
+            if table_end < 0:
+                return None
+            table_end += len("</table>")
+            return block_text[table_start:table_end]
+    return None
 
 
 def _find_page_block(md_text: str, page: int) -> tuple[int, int, str] | None:

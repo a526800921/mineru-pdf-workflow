@@ -8,6 +8,8 @@
 
 本文档是 `pdf-extract-data` 表格覆盖修复的事实源。它承接已完成的 [structured-data-extraction](structured-data-extraction.md)、[data-ingestion-pipeline](data-ingestion-pipeline.md) 和 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新打开 `pdf-merge` 的格式化契约，也不把抽取草案直接当成最终事实。
 
+依赖计划：[pdf-table-audit](pdf-table-audit.md)、[pdf-table-repair](pdf-table-repair.md)。
+
 ## 背景与 Step 0 证据
 
 外部复盘报告 `/Users/jafish/Documents/work/motofind/docs/reports/pdf-extract-data-250sr-summary.md` 显示：表格人工修复已经完成，但 `pdf-extract-data` 只抽取了部分高价值表格，右手把、仪表指示灯、仪表调节、发动机转速、仪表专用开关、导航界面、日常检查和部分保养表没有进入结构化草案。
@@ -43,7 +45,7 @@ Step 0 必须把外部报告中的 250Sr 页码映射到当前项目真实输出
 - `scripts/pdf-extract-data`：表头网格、列语义候选、两列简表候选和漏抽报告。
 - `scripts/pdf-prepare-ingest`：只做兼容性验证；除非 Step 0 证明状态门禁需要修改，否则不改变审核流转。
 - `scripts/pdf-check-fixes`：验证抽取候选的来源字段或 manifest 派生产物登记，具体是否扩展由 Step 0 决定。
-- `scripts/pdf-table-fix`、`scripts/pdf-table-repair`：提供异常页、修复表格和来源证据，不承担结构化放行。
+- `scripts/pdf-table-fix`：提供异常页和来源证据；页级修复由依赖计划 `pdf-table-repair` 承接，本计划不修改其实现。
 - `tests/`：新增多层表头、两列简表、无关键词表头、歧义表格和漏抽覆盖回归。
 - `skills/pdf2md-fix/SKILL.md`：补充“抽取覆盖缺口 → 候选 → 人工审核”的入口说明；只有公共契约变化时才同步用户级 skill。
 - `docs/PLAN_MAP.md`：登记状态、依赖和验收证据。
