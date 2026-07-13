@@ -1,0 +1,1398 @@
+#!/usr/bin/env python3
+"""pdf-table-repair 页级表格修复 draft 生成器。
+
+从 data/table_candidates.jsonl 读取候选，为指定单页或页码范围生成
+页级修复 draft（pretty-print 列压缩、文本填补候选、结构警告）。
+
+所有 draft 标记 status=proposed, needs_human=true，不修改 canonical Markdown。
+
+输出:
+  data/table_repair_draft.jsonl  ← 修复候选 draft（每行一个 JSON 对象，schema v1）
+
+用法:
+  scripts/pdf-table-repair <package_dir>               # 所有候选页
+  scripts/pdf-table-repair <package_dir> --page N      # 单页
+  scripts/pdf-table-repair <package_dir> --pages N,M   # 多页（逗号分隔）
+  scripts/pdf-table-repair <package_dir> --help
+"""
+
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+# ── 导入 table_eval（兼容 pdf-table-fix 模式） ──
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+try:
+    from table_eval import parse_table_html
+except ImportError:
+    parse_table_html = None  # 降级
+
+# PyMuPDF
+try:
+    import fitz
+except ImportError:
+    fitz = None  # 降级：不提取 words/bbox
+
+# ── 常量 ──
+SCHEMA_VERSION = 1
+REPAIR_TYPES = frozenset({"pretty_print", "fill_missing_text", "structure_warning"})
+
+
+class _RepairError(Exception):
+    """可恢复的修复前置错误。"""
+    pass
+
+
+# ── 纯函数：ID 生成 ──────────────────────────────────────
+
+
+def _build_fix_id(pkg_name: str, page_num: int) -> str:
+    """生成修复 draft 的 fix_id。"""
+    return f"repair-{pkg_name}_p{page_num:04d}"
+
+
+def _build_table_id(pkg_name: str, page_nums: list[int]) -> str:
+    """生成 table_id。
+
+    单页：{pkg_name}_table_p{page:04d}
+    跨页：{pkg_name}_table_p{first:04d}-p{last:04d}
+    """
+    if not page_nums:
+        return f"{pkg_name}_table_unknown"
+    if len(page_nums) == 1:
+        return f"{pkg_name}_table_p{page_nums[0]:04d}"
+    return f"{pkg_name}_table_p{page_nums[0]:04d}-p{page_nums[-1]:04d}"
+
+
+# ── 纯函数：repair_type 分类 ──────────────────────────────
+
+
+def _classify_repair_types(signals: list[str],
+                           candidate_type: str,
+                           layout_flag: bool) -> list[str]:
+    """根据信号和候选类型，返回适用的 repair_type 列表。
+
+    规则：
+    - native_table_text_missing → fill_missing_text
+    - excessive_columns / excessive_empty_td → pretty_print（需外部过滤 col_count > 20）
+    - volume_inflation / text_coverage_low → structure_warning
+    """
+    types: list[str] = []
+    sig_set = frozenset(signals)
+
+    # pretty_print: 列数异常（由调用方检查 col_count，这里只判断信号）
+    if {"excessive_columns", "excessive_empty_td"} & sig_set:
+        types.append("pretty_print")
+
+    # fill_missing_text: 文本缺失
+    if "native_table_text_missing" in sig_set:
+        types.append("fill_missing_text")
+
+    # structure_warning: 布局/视觉检查
+    if layout_flag or {"volume_inflation", "text_coverage_low"} & sig_set:
+        types.append("structure_warning")
+
+    return types
+
+
+# ── 纯函数：HTML 解析与列压缩 ────────────────────────────
+
+
+def _extract_html_cell_texts(html: str) -> list[str]:
+    """从 HTML <td> 或 <th> 提取所有文本内容。"""
+    if not html:
+        return []
+    texts: list[str] = []
+    for m in re.finditer(r"<t[dh][^>]*>(.*?)</t[dh]>", html, re.IGNORECASE | re.DOTALL):
+        text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+        texts.append(text)
+    return texts
+
+
+def _detect_missing_text(pdf_text: str, html_texts: list[str]) -> list[str]:
+    """检测 PDF 原生文本中缺失的表格内容。
+
+    返回 pdf_text 中有但 html_texts 中没有的文本片段。
+    """
+    if not pdf_text:
+        return []
+
+    # 将所有 HTML 文本拼接为一个字符串做检测
+    combined_html = " ".join(html_texts)
+
+    missing: list[str] = []
+    # 按空格和换行切分 PDF 文本
+    pdf_words = pdf_text.replace("\n", " ").split()
+    seen_words = set()
+
+    for word in pdf_words:
+        word = word.strip()
+        if not word or len(word) < 2:
+            continue
+        if word in seen_words:
+            continue
+        if word not in combined_html:
+            missing.append(word)
+            seen_words.add(word)
+
+    return missing
+
+
+def _parse_simple_html(html: str) -> list[list[dict]]:
+    """简易 HTML 表格解析，返回 rows = [[{text, colspan}, ...], ...]。
+
+    不处理嵌套表格，不展开 rowspan/colspan。
+    """
+    if not html:
+        return []
+
+    rows: list[list[dict]] = []
+    # 找所有 <tr> 块
+    for tr_m in re.finditer(r"<tr[^>]*>(.*?)</tr>", html, re.IGNORECASE | re.DOTALL):
+        cells: list[dict] = []
+        tr_content = tr_m.group(1)
+        for td_m in re.finditer(
+            r"<t[dh][^>]*>(.*?)</t[dh]>", tr_content, re.IGNORECASE | re.DOTALL
+        ):
+            tag = td_m.group(0)
+            text = re.sub(r"<[^>]+>", "", td_m.group(1)).strip()
+            colspan = 1
+            cs_m = re.search(r"colspan\s*=\s*[\"']?(\d+)[\"']?", tag, re.IGNORECASE)
+            if cs_m:
+                colspan = int(cs_m.group(1))
+            cells.append({"text": text, "colspan": colspan})
+        if cells:
+            rows.append(cells)
+
+    return rows
+
+
+def _compress_excessive_columns(html: str) -> tuple[str, list[str]]:
+    """对列数过多的 HTML 表格做去重压缩。
+
+    返回 (compressed_html, warnings)。
+    """
+    warnings: list[str] = []
+    if not html:
+        return html, warnings
+
+    rows = _parse_simple_html(html)
+    if not rows:
+        return html, warnings
+
+    # 计算列数（用 colspan 补偿）
+    col_counts = []
+    for row in rows:
+        total = sum(c.get("colspan", 1) for c in row)
+        col_counts.append(total)
+
+    if not col_counts:
+        return html, warnings
+
+    max_cols = max(col_counts)
+
+    # 列数 <=20，不做压缩
+    if max_cols <= 20:
+        return html, warnings
+
+    warnings.append(f"可疑列数：{max_cols}，建议人工确认实际列数")
+
+    # 对每行去重相邻重复单元格
+    compressed_rows: list[list[str]] = []
+    for row in rows:
+        compressed: list[str] = []
+        prev_text = None
+        for cell in row:
+            text = cell["text"]
+            if text != prev_text:
+                compressed.append(text)
+                prev_text = text
+        if not compressed:
+            compressed.append("")
+        compressed_rows.append(compressed)
+
+    # 如果压缩后还太多，只保留前 N 个唯一个
+    MAX_COLS = 12
+    for i, row in enumerate(compressed_rows):
+        if len(row) > MAX_COLS:
+            unique = list(dict.fromkeys(row))  # 保持顺序的去重
+            compressed_rows[i] = unique[:MAX_COLS]
+            if len(unique) > MAX_COLS:
+                warnings.append(f"第 {i+1} 行压缩到 {MAX_COLS} 列"
+                                f"（原始 {max_cols} 列中有 {len(unique)} 个唯一个）")
+
+    # 生成压缩后的 HTML
+    out_lines = ["<table>"]
+    for row in compressed_rows:
+        out_lines.append("  <tr>")
+        for cell_text in row:
+            out_lines.append(f"    <td>{cell_text}</td>")
+        out_lines.append("  </tr>")
+    out_lines.append("</table>")
+
+    return "\n".join(out_lines), warnings
+
+
+# ── 源 hash 计算 ────────────────────────────────────────
+
+
+def _compute_source_shas(pkg_dir: Path, manifest: dict) -> dict:
+    """从 manifest 和文件计算 source hash。"""
+    result: dict = {"pdf_sha256": "", "markdown_sha256": ""}
+    # PDF hash
+    pdf_rel = manifest.get("files", {}).get("pdf", "")
+    if pdf_rel:
+        pdf_path = pkg_dir / pdf_rel
+        if pdf_path.exists():
+            result["pdf_sha256"] = hashlib.sha256(
+                pdf_path.read_bytes()).hexdigest()
+    # Markdown hash
+    md_rel = manifest.get("files", {}).get("markdown", "")
+    if md_rel:
+        md_path = pkg_dir / md_rel
+        if md_path.exists():
+            result["markdown_sha256"] = hashlib.sha256(
+                md_path.read_bytes()).hexdigest()
+    return result
+
+
+# ── 页锚点唯一性校验 ──────────────────────────────────
+
+
+def _verify_anchor_uniqueness(md_text: str) -> list[str]:
+    """校验页锚点是否唯一，返回错误列表。
+
+    复用 pdf-apply-fixes 相同的锚点检测逻辑。
+    """
+    errors: list[str] = []
+    seen: dict[tuple[int, int], int] = {}
+    for m in re.finditer(r'^<!-- pages (\d+)-(\d+) -->\s*$', md_text, re.MULTILINE):
+        key = (int(m.group(1)), int(m.group(2)))
+        line_num = md_text[:m.start()].count('\n') + 1
+        prev = seen.get(key)
+        if prev is not None:
+            errors.append(
+                f"页锚点 <!-- pages {key[0]}-{key[1]} --> 重复"
+                f"（行 {prev} 和行 {line_num}）"
+            )
+        seen[key] = line_num
+    return errors
+
+
+def _compute_expected_hit_count(md_text: str, page_anchor: str,
+                                 before_html: str) -> int:
+    """计算预期命中次数：页锚点内 <table> 标签的出现次数。
+
+    这是应用前对替换目标的粗略计数，确保替换目标仍在当前 Markdown 中。
+    使用 <table 匹配而不是精确的 before_html，因为 Markdown 中的 HTML 可能有空白格式化差异。
+    """
+    # 找到页锚点块
+    anchor_pattern = re.compile(
+        r'^<!-- pages (\d+)-(\d+) -->\s*$', re.MULTILINE)
+    matches = list(anchor_pattern.finditer(md_text))
+
+    for m in matches:
+        start_page = int(m.group(1))
+        end_page = int(m.group(2))
+        # 从锚点解析页码
+        pa_match = re.match(r'<!-- pages (\d+)-\d+ -->', page_anchor)
+        if not pa_match:
+            continue
+        target_page = int(pa_match.group(1))
+        if start_page <= target_page <= end_page:
+            block_start = m.start()
+            # 找到下一个锚点
+            next_anchor = None
+            for nm in matches:
+                if nm.start() > m.start():
+                    next_anchor = nm
+                    break
+            block_end = next_anchor.start() if next_anchor else len(md_text)
+            block_text = md_text[block_start:block_end]
+            return block_text.count("<table")
+    return 0
+
+
+# ── PDF 原生 words/bbox 提取 ───────────────────────────
+
+
+def _get_pdf_path(pkg_dir: Path, manifest: dict) -> Path | None:
+    """从 manifest 获取 PDF 路径。"""
+    pdf_rel = manifest.get("files", {}).get("pdf")
+    if pdf_rel:
+        pdf_path = pkg_dir / pdf_rel
+        if pdf_path.exists():
+            return pdf_path.resolve()
+    source_pdf = manifest.get("source_pdf")
+    if source_pdf:
+        pdf_path = Path(source_pdf)
+        if pdf_path.exists():
+            return pdf_path.resolve()
+    return None
+
+
+def _extract_page_words(pdf_path: Path, page_num: int) -> list[dict]:
+    """用 PyMuPDF 提取单页 words/bbox 证据。
+
+    返回 [{"text": str, "x0": float, "y0": float, "x1": float, "y1": float}, ...]
+    """
+    if fitz is None:
+        return []
+    try:
+        doc = fitz.open(str(pdf_path))
+        if page_num < 1 or page_num > len(doc):
+            doc.close()
+            return []
+        page = doc[page_num - 1]
+        words = page.get_text("words")
+        doc.close()
+        result: list[dict] = []
+        for w in words:
+            if len(w) >= 5:
+                result.append({
+                    "text": str(w[4]),
+                    "x0": float(w[0]),
+                    "y0": float(w[1]),
+                    "x1": float(w[2]),
+                    "y1": float(w[3]),
+                })
+        return result
+    except Exception:
+        return []
+
+
+# ── Draft 生成 ───────────
+
+
+def _detect_cross_page_candidates(
+    candidates: list[dict],
+) -> dict[str, list[int]]:
+    """检测连续页码的候选，返回 {shared_id: [pages]}。
+
+    只有完全连续（N, N+1, ...）的页码才共享 table_id。
+    """
+    if not candidates:
+        return {}
+
+    # 按页码排序
+    sorted_pages = sorted(
+        {c["page"] for c in candidates if isinstance(c.get("page"), int)}
+    )
+
+    # 分组连续页码
+    groups: list[list[int]] = []
+    current: list[int] = []
+    for p in sorted_pages:
+        if not current:
+            current = [p]
+        elif p == current[-1] + 1:
+            current.append(p)
+        else:
+            if len(current) > 1:
+                groups.append(current)
+            current = [p]
+    if len(current) > 1:
+        groups.append(current)
+
+    # 生成 shared_id → pages 映射
+    result: dict[str, list[int]] = {}
+    pkg_name = candidates[0].get("candidate_id", "").rsplit("_", 1)[0]
+    for group in groups:
+        sid = _build_table_id(pkg_name, group)
+        result[sid] = group
+
+    return result
+
+
+def _compute_table_stats_from_candidate(
+    candidate: dict,
+) -> dict | None:
+    """从候选的 table_stats 提取字段。"""
+    ts = candidate.get("table_stats")
+    if isinstance(ts, dict):
+        return {
+            "row_count": ts.get("row_count", 0),
+            "col_count": ts.get("col_count", 0),
+            "cell_count": ts.get("cell_count", 0),
+        }
+    return None
+
+
+def _generate_alignment_from_bbox(
+    missing_words: list[str],
+    page_words: list[dict],
+    col_count: int,
+) -> list[dict]:
+    """根据 bbox x 坐标为缺失文本生成列位置候选。
+
+    对每个缺失词，查找其在 page_words 中的 bbox，
+    根据 x0 相对位置分配候选列（页面左→中→右映射为列 1→col_count）。
+    词未在 page_words 中找到时按序分配到剩余列。
+    """
+    candidates: list[dict] = []
+    if not page_words or col_count < 1:
+        col_count = max(col_count, 1)
+
+    # 建立 text → bbox 查找表（取第一个匹配）
+    word_map: dict[str, dict] = {}
+    for pw in page_words:
+        text = pw.get("text", "").strip()
+        if text and text not in word_map:
+            word_map[text] = pw
+
+    # 获取页面宽度估计（从 bbox 最大 x1）
+    page_width = max((pw.get("x1", 0) for pw in page_words), default=600)
+
+    # 找出所有 bbox 的 x 范围，用于列分割
+    all_x0 = sorted([pw.get("x0", 0) for pw in page_words])
+    if not all_x0 or page_width <= 0:
+        page_width = 600
+
+    assigned = 0
+    for mt in missing_words:
+        bw = word_map.get(mt)
+        if bw and page_width > 0:
+            x0 = bw.get("x0", 0)
+            # x0 / page_width → [0, 1] → 列号 [1, col_count]
+            col = min(int(x0 / page_width * col_count) + 1, col_count)
+            candidates.append({
+                "text": mt,
+                "candidate_column": col,
+                "candidate_row": 1,
+                "confidence": "low",
+                "reason": f"缺失文本 \"{mt}\" bbox x0={x0:.1f}/page_width={page_width:.1f}"
+                          f"，映射到列 {col}（待人工确认）",
+            })
+        else:
+            # 无 bbox 时按序分配
+            col = (assigned % max(col_count, 1)) + 1
+            candidates.append({
+                "text": mt,
+                "candidate_column": col,
+                "candidate_row": 1,
+                "confidence": "low",
+                "reason": f"缺失文本 \"{mt}\" 未找到 bbox，按序分配到列 {col}（待人工确认）",
+            })
+        assigned += 1
+
+    return candidates
+
+
+def _generate_draft_for_repair_type(
+    candidate: dict,
+    repair_type: str,
+    pkg_name: str,
+    source_shas: dict,
+    cross_table_ids: dict[str, list[int]],
+    page_words: list[dict] | None = None,
+    md_text: str | None = None,
+) -> dict:
+    """为单个候选和 repair_type 生成 draft 记录。"""
+    page = candidate.get("page", 0)
+    page_anchor = candidate.get("page_anchor", "")
+    signals = candidate.get("signals", [])
+    segment = candidate.get("segment", "")
+    candidate_id = candidate.get("candidate_id", "")
+    original_html = candidate.get("original_html", "")
+    fallback_html = candidate.get("fallback_html", "")
+    pdf_text = candidate.get("pdf_text", "")
+
+    # 列统计
+    table_stats = _compute_table_stats_from_candidate(candidate)
+    col_count = table_stats["col_count"] if table_stats else 0
+
+    # 获取 missing_text
+    missing_text = candidate.get("missing_text", [])
+    if isinstance(missing_text, list):
+        missing_text = list(missing_text)
+    else:
+        missing_text = []
+
+    # 根据 repair_type 执行不同逻辑
+    draft_html = original_html
+    warnings: list[str] = []
+    alignment_candidates: list[dict] = []
+    extra_missing_text: list[str] = list(missing_text)
+
+    # 跨页 table_id
+    table_id = _build_table_id(pkg_name, [page])
+    for sid, pages in cross_table_ids.items():
+        if page in pages:
+            table_id = sid
+            if len(pages) > 1:
+                warnings.append(
+                    f"跨页关联：该页与 p{pages[0]}-p{pages[-1]} 共享 table_id，"
+                    f"建议一起审核确认"
+                )
+            break
+
+    if repair_type == "pretty_print":
+        if col_count > 20:
+            draft_html, pw = _compress_excessive_columns(original_html)
+            warnings.extend(pw)
+
+    elif repair_type == "fill_missing_text":
+        # 额外检测 PDF 文本中的缺失
+        html_texts = _extract_html_cell_texts(original_html)
+        extra_missing = _detect_missing_text(pdf_text, html_texts)
+        if extra_missing:
+            extra_missing_text.extend(extra_missing)
+        # 基于 bbox 生成 alignment 候选（替代之前的按序取模）
+        alignment_candidates = _generate_alignment_from_bbox(
+            extra_missing_text, page_words or [], col_count)
+        if not extra_missing_text:
+            warnings.append("候选标记 native_table_text_missing 但未检测到具体缺失文本，"
+                            "请人工核对 PDF 原文")
+
+    elif repair_type == "structure_warning":
+        if candidate.get("layout_or_visual_needs_review"):
+            warnings.append("布局/图片类表格，当前扫描不能保证列结构正确，"
+                            "建议比对 PDF 原生文本和 bbox 确认")
+        else:
+            warnings.append("文本覆盖率或体积波动异常，建议人工确认表格完整性")
+
+    # 页锚点唯一性校验
+    if md_text:
+        anchor_errors = _verify_anchor_uniqueness(md_text)
+        if anchor_errors:
+            warnings.extend(anchor_errors)
+
+    # 预期命中次数（从当前 Markdown 中计算 draft 在页锚点内的出现次数）
+    expected_hit_count = 0
+    if md_text:
+        expected_hit_count = _compute_expected_hit_count(
+            md_text, page_anchor, original_html)
+
+    # 去重 warnings
+    seen_warnings: set[str] = set()
+    unique_warnings: list[str] = []
+    for w in warnings:
+        if w not in seen_warnings:
+            seen_warnings.add(w)
+            unique_warnings.append(w)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "fix_id": _build_fix_id(pkg_name, page),
+        "status": "proposed",
+        "needs_human": True,
+        "pages": [page],
+        "page_anchor": page_anchor,
+        "table_id": table_id,
+        "repair_type": repair_type,
+        "source_segment": segment,
+        "source_candidate_id": candidate_id,
+        "source_pdf_sha256": source_shas.get("pdf_sha256", ""),
+        "source_markdown_sha256": source_shas.get("markdown_sha256", ""),
+        "before_html": original_html,
+        "draft_html": draft_html,
+        "fallback_html": fallback_html,
+        "pdf_text": pdf_text,
+        "page_words": page_words or [],
+        "missing_text": extra_missing_text,
+        "expected_hit_count": expected_hit_count,
+        "alignment_candidates": alignment_candidates,
+        "warnings": unique_warnings,
+    }
+
+
+def _generate_drafts(
+    pkg_dir: Path,
+    manifest: dict,
+    candidates: list[dict],
+    pages_filter: set[int] | None,
+) -> list[dict]:
+    """主 draft 生成编排。
+
+    1. 按 pages_filter 过滤候选
+    2. 检测跨页关联
+    3. 逐个候选生成 draft（可能多条）
+    """
+    if not candidates:
+        return []
+
+    pkg_name = candidates[0].get("candidate_id", "").rsplit("_", 1)[0]
+    if not pkg_name:
+        pkg_name = pkg_dir.name
+
+    # 计算 source hash
+    source_shas = _compute_source_shas(pkg_dir, manifest)
+
+    # 获取 PDF 路径（用于 bbox 提取）
+    pdf_path = _get_pdf_path(pkg_dir, manifest)
+
+    # 读取当前 canonical Markdown（用于锚点校验和命中次数）
+    md_text: str | None = None
+    md_rel = manifest.get("files", {}).get("markdown", "")
+    if md_rel:
+        md_path = pkg_dir / md_rel
+        if md_path.exists():
+            md_text = md_path.read_text(encoding="utf-8")
+
+    # 过滤候选
+    filtered = candidates
+    if pages_filter is not None:
+        filtered = [c for c in candidates
+                    if isinstance(c.get("page"), int)
+                    and c["page"] in pages_filter]
+        if not filtered:
+            return []
+
+    # 检测跨页关联
+    cross_table_ids = _detect_cross_page_candidates(filtered)
+
+    # 预提取每页的 words/bbox
+    all_words: dict[int, list[dict]] = {}
+    if pdf_path:
+        for c in filtered:
+            page = c.get("page", 0)
+            if isinstance(page, int) and page > 0:
+                all_words[page] = _extract_page_words(pdf_path, page)
+
+    # 生成 draft
+    drafts: list[dict] = []
+    for candidate in filtered:
+        page = candidate.get("page", 0)
+        signals = candidate.get("signals", [])
+        candidate_type = candidate.get("candidate_type", "")
+        layout_flag = candidate.get("layout_or_visual_needs_review", False)
+
+        types = _classify_repair_types(signals, candidate_type, layout_flag)
+
+        # 对于 pretty_print，需要确认列数 >20 才生成
+        if "pretty_print" in types:
+            ts = _compute_table_stats_from_candidate(candidate)
+            col_count = ts["col_count"] if ts else 0
+            if col_count <= 20:
+                types = [t for t in types if t != "pretty_print"]
+
+        # 对于 fill_missing_text，没有 missing_text 也生成（可能 PDF 检测到更多）
+        # 但完全空信号的跳过
+        if not types:
+            # 兜底：至少给一个 structure_warning
+            types = ["structure_warning"]
+
+        page_words = all_words.get(page, []) if isinstance(page, int) else []
+
+        for rt in types:
+            draft = _generate_draft_for_repair_type(
+                candidate, rt, pkg_name, source_shas, cross_table_ids,
+                page_words=page_words, md_text=md_text,
+            )
+            drafts.append(draft)
+
+    return drafts
+
+
+# ── JSONL 写入 ──────────────────────────────────────────
+
+
+def _hash_file(path: Path) -> str:
+    """计算文件 SHA-256 hex。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_draft_jsonl(drafts: list[dict], output_path: Path) -> Path:
+    """写入 draft 到 JSONL 临时文件。
+
+    返回临时文件路径，调用方负责 rename 到最终路径 + manifest 同步。
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        for d in drafts:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+    return tmp_path
+
+
+def _sync_manifest(
+    pkg_dir: Path,
+    drafts_relative: str,
+    tmp_drafts_path: Path,
+    final_drafts_path: Path,
+) -> None:
+    """原子更新 manifest：登记 table_repair_draft 路径和 hash。"""
+    manifest_path = pkg_dir / "manifest.json"
+    tmp_manifest_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+
+    try:
+        drafts_hash = _hash_file(tmp_drafts_path)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.setdefault("files", {})["table_repair_draft"] = drafts_relative
+        manifest.setdefault("hash", {})["table_repair_draft_sha256"] = drafts_hash
+        tmp_manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        # 先 rename drafts，再 rename manifest
+        tmp_drafts_path.rename(final_drafts_path)
+        tmp_manifest_path.rename(manifest_path)
+    except Exception:
+        # 回滚
+        if not tmp_drafts_path.exists() and final_drafts_path.exists():
+            final_drafts_path.unlink(missing_ok=True)
+        else:
+            tmp_drafts_path.unlink(missing_ok=True)
+        tmp_manifest_path.unlink(missing_ok=True)
+        raise
+
+
+# ── 候选读取 ────────────────────────────────────────────
+
+
+def _read_candidates(pkg_dir: Path) -> list[dict]:
+    """读取 data/table_candidates.jsonl。"""
+    cand_path = pkg_dir / "data" / "table_candidates.jsonl"
+    if not cand_path.exists():
+        return []
+    candidates: list[dict] = []
+    with cand_path.open(encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise _RepairError(
+                    f"table_candidates.jsonl 第 {lineno} 行 JSON 解析失败：{e}"
+                ) from e
+            candidates.append(obj)
+    return candidates
+
+
+# ── 页过滤解析 ──────────────────────────────────────────
+
+
+def _parse_page_arg(pages_str: str | None) -> set[int] | None:
+    """解析 --page N 或 --pages N,M 参数。
+
+    返回页号集合，None 表示不过滤。
+    """
+    if not pages_str:
+        return None
+    pages: set[int] = set()
+    parts = pages_str.split(",")
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            page = int(part)
+            if page < 1:
+                raise _RepairError(f"无效页码：{page}")
+            pages.add(page)
+        except ValueError as e:
+            raise _RepairError(f"无法解析页码：{part}") from e
+    return pages if pages else None
+
+
+# ── Draft 读取 ──────────────────────────────────────────
+
+
+def _read_drafts(pkg_dir: Path) -> list[dict]:
+    """读取 data/table_repair_draft.jsonl。"""
+    draft_path = pkg_dir / "data" / "table_repair_draft.jsonl"
+    if not draft_path.exists():
+        return []
+    drafts: list[dict] = []
+    with draft_path.open(encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise _RepairError(
+                    f"table_repair_draft.jsonl 第 {lineno} 行 JSON 解析失败：{e}"
+                ) from e
+            drafts.append(obj)
+    return drafts
+
+
+def _find_draft_by_fix_id(drafts: list[dict], fix_id: str) -> dict | None:
+    """按 fix_id 查找 draft 记录。"""
+    for d in drafts:
+        if d.get("fix_id") == fix_id:
+            return d
+    return None
+
+
+# ── Apply/Reject 前置校验 ──────────────────────────────
+
+
+def _verify_draft_apply_preconditions(
+    draft: dict, pkg_dir: Path, manifest: dict
+) -> list[str]:
+    """校验 draft 应用前置条件，返回错误列表。"""
+    errors: list[str] = []
+    fix_id = draft.get("fix_id", "?")
+
+    if draft.get("status") != "proposed":
+        errors.append(f"draft {fix_id}: status 应为 proposed，"
+                      f"实际为 {draft.get('status')}")
+    if draft.get("needs_human") is not True:
+        errors.append(f"draft {fix_id}: needs_human 必须为 true")
+
+    # 校验 source_markdown_sha256
+    expected_md_sha = draft.get("source_markdown_sha256", "")
+    if expected_md_sha:
+        md_rel = manifest.get("files", {}).get("markdown", "")
+        if md_rel:
+            md_path = pkg_dir / md_rel
+            if md_path.exists():
+                actual_md_sha = hashlib.sha256(
+                    md_path.read_bytes()).hexdigest()
+                if actual_md_sha != expected_md_sha:
+                    errors.append(
+                        f"draft {fix_id}: canonical Markdown hash 不匹配"
+                        f"（draft={expected_md_sha[:12]}..., "
+                        f"当前={actual_md_sha[:12]}...），"
+                        "Markdown 已被中间修改")
+            else:
+                errors.append(f"draft {fix_id}: canonical Markdown 文件不存在")
+
+    # 校验 expected_hit_count > 0（before_html 仍在 Markdown 中）
+    ehc = draft.get("expected_hit_count", 0)
+    if not isinstance(ehc, int) or ehc < 1:
+        errors.append(f"draft {fix_id}: expected_hit_count={ehc}，"
+                      "before_html 不在 Markdown 页锚点范围内")
+
+    return errors
+
+
+# ── Apply/Reject 核心逻辑 ──────────────────────────────
+
+
+def _draft_to_manual_fix(draft: dict, status: str,
+                         pkg_dir: Path | None = None,
+                         manifest: dict | None = None,
+                         reason: str = "") -> dict:
+    """将 draft 记录转换为 manual_fixes.jsonl 格式。
+
+    对 applied 状态，从当前 Markdown 页锚点中提取精确的 before 文本，
+    确保与 Markdown 中实际的空白格式化一致。
+    """
+    prefix = "reject" if status == "rejected" else "fix"
+    fix_id = f"{prefix}-{draft.get('fix_id', 'unknown')}"
+
+    # 默认用 draft 中的 before_html
+    before = draft.get("before_html", "")
+    after = draft.get("draft_html", "")
+
+    # applied 时：从当前 Markdown 中精确提取 before 文本
+    if status == "applied" and pkg_dir is not None and manifest is not None:
+        md_rel = manifest.get("files", {}).get("markdown", "")
+        if md_rel:
+            md_path = pkg_dir / md_rel
+            if md_path.exists():
+                md_text = md_path.read_text(encoding="utf-8")
+                pages = draft.get("pages", [])
+                pa = draft.get("page_anchor", "")
+                pa_match = re.match(r'<!-- pages (\d+)-\d+ -->', pa)
+                if pa_match and pages:
+                    page = pages[0]
+                    block = _find_page_block(md_text, page)
+                    if block:
+                        _, _, block_text = block
+                        # 在页块中找第一个 <table ...>...</table> 块
+                        tm = re.search(
+                            r"<table[^>]*>.*?</table>",
+                            block_text, re.IGNORECASE | re.DOTALL)
+                        if tm:
+                            before = tm.group()
+
+    fix_obj: dict = {
+        "fix_id": fix_id,
+        "fix_type": "rebuild_table",
+        "review_action": "fix_md",
+        "status": status,
+        "pages": draft.get("pages", []),
+        "before": before,
+        "after": after,
+        "candidate_ref": [draft.get("source_candidate_id", "")]
+                            if draft.get("source_candidate_id") else [],
+        "source_repair_fix_id": draft.get("fix_id", ""),
+    }
+
+    if status == "applied":
+        fix_obj["evidence"] = (
+            "Confirmed from repair draft — see table_repair_draft.jsonl")
+        ehc = draft.get("expected_hit_count", 0)
+        if isinstance(ehc, int) and ehc > 0:
+            fix_obj["expected_hit_count"] = ehc
+    else:
+        fix_obj["evidence"] = (
+            "Rejected — see table_repair_draft.jsonl")
+
+    if reason:
+        fix_obj["operator_note"] = reason
+
+    return fix_obj
+
+
+def _find_page_block(md_text: str, page: int) -> tuple[int, int, str] | None:
+    """在 Markdown 文本中查找页锚点块。复用 pdf-apply-fixes 相同逻辑。"""
+    anchor_pattern = re.compile(
+        r'^<!-- pages (\d+)-(\d+) -->\s*$', re.MULTILINE)
+    matches = list(anchor_pattern.finditer(md_text))
+
+    target = None
+    for m in matches:
+        start_page = int(m.group(1))
+        end_page = int(m.group(2))
+        if start_page <= page <= end_page:
+            target = m
+            break
+
+    if target is None:
+        return None
+
+    block_start = target.start()
+    next_anchor = None
+    for m in matches:
+        if m.start() > target.start():
+            next_anchor = m
+            break
+    block_end = next_anchor.start() if next_anchor else len(md_text)
+    return (block_start, block_end, md_text[block_start:block_end])
+
+
+def _write_manual_fix_entry(pkg_dir: Path, fix_obj: dict) -> Path:
+    """追加写入 manual_fixes.jsonl，如果文件不存在则创建。"""
+    fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    fixes_path.parent.mkdir(parents=True, exist_ok=True)
+    with fixes_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(fix_obj, ensure_ascii=False) + "\n")
+    return fixes_path
+
+
+def _sync_manual_fixes_manifest(pkg_dir: Path, fixes_path: Path) -> None:
+    """同步 manual_fixes 的路径和 hash 到 manifest 的各个契约位置。"""
+    manifest_path = pkg_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manual_hash = hashlib.sha256(fixes_path.read_bytes()).hexdigest()
+    manifest.setdefault("files", {})["manual_fixes"] = "data/manual_fixes.jsonl"
+    manifest.setdefault("hash", {})["manual_fixes_sha256"] = manual_hash
+    manifest.setdefault("fixes", {})["manual_fixes_sha256"] = manual_hash
+    _write_manifest_atomic(manifest_path, manifest)
+
+
+def _ensure_inject_manifest_state(pkg_dir: Path) -> dict:
+    """确保 manifest 有修复和格式化记录（以便 pdf-apply-fixes 通过前置校验）。
+
+    仅当 manifest 的 files.table_repair_draft 已存在但 manifest.fixes/
+    manifest.formatting 不存在时才补充最小记录。不做幂等覆盖。
+    """
+    manifest_path = pkg_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # 只在缺少 fixes/formatting 且 table_repair_draft 已登记时补
+    if "table_repair_draft" not in manifest.get("files", {}):
+        return manifest
+    if "fixes" in manifest or "formatting" in manifest:
+        return manifest
+
+    import hashlib as _hlib
+    md_rel = manifest.get("files", {}).get("markdown", "")
+    md_hash = ""
+    if md_rel:
+        md_path = pkg_dir / md_rel
+        if md_path.exists():
+            md_hash = _hlib.sha256(md_path.read_bytes()).hexdigest()
+
+    manifest["fixes"] = {
+        "schema_version": 1,
+        "status": "pending",
+        "markdown_sha256": md_hash,
+        "manual_fixes_sha256": "",
+        "source_manifest_sha256": _hlib.sha256(
+            manifest_path.read_bytes()).hexdigest(),
+    }
+    manifest["formatting"] = {
+        "schema_version": 1,
+        "mode": "merge_time",
+        "status": "none",
+        "source_markdown_sha256": md_hash,
+        "formatted_markdown_sha256": md_hash,
+    }
+    # 备份当前 md
+    if md_hash and md_rel:
+        backup_name = f"pre_format_md_{md_hash[:16]}.md"
+        backup_path = pkg_dir / "data" / backup_name
+        if not backup_path.exists() and md_rel:
+            md_path = pkg_dir / md_rel
+            if md_path.exists():
+                backup_path.write_bytes(md_path.read_bytes())
+
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def _write_manifest_atomic(manifest_path: Path, manifest: dict) -> None:
+    """原子写入 manifest，避免同步过程中留下半份 JSON。"""
+    tmp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    tmp_path.replace(manifest_path)
+
+
+def _file_snapshot(path: Path) -> bytes | None:
+    """读取文件快照；文件不存在时返回 None。"""
+    return path.read_bytes() if path.exists() else None
+
+
+def _restore_file_snapshot(path: Path, snapshot: bytes | None) -> None:
+    """按字节恢复文件快照。"""
+    if snapshot is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(snapshot)
+
+
+def _snapshot_backup_files(pkg_dir: Path) -> dict[Path, bytes]:
+    """记录 apply 可能创建的临时备份文件。"""
+    data_dir = pkg_dir / "data"
+    result: dict[Path, bytes] = {}
+    for pattern in ("pre_fix_*.md", "pre_format_md_*.md"):
+        for path in data_dir.glob(pattern):
+            if path.is_file():
+                result[path] = path.read_bytes()
+    return result
+
+
+def _restore_backup_files(pkg_dir: Path, snapshot: dict[Path, bytes]) -> None:
+    """删除 apply 新建的备份，并恢复已有备份的原始字节。"""
+    data_dir = pkg_dir / "data"
+    current: set[Path] = set()
+    for pattern in ("pre_fix_*.md", "pre_format_md_*.md"):
+        current.update(path for path in data_dir.glob(pattern) if path.is_file())
+    for path in current - snapshot.keys():
+        path.unlink(missing_ok=True)
+    for path, content in snapshot.items():
+        path.write_bytes(content)
+
+
+def _handle_apply(pkg_dir: Path, fix_id: str) -> None:
+    """处理 --apply 子命令。"""
+    # 读取 draft
+    try:
+        drafts = _read_drafts(pkg_dir)
+    except _RepairError as e:
+        print(f"错误：{e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not drafts:
+        print(f"错误：fix_id '{fix_id}' 未找到（draft 文件为空）",
+              file=sys.stderr)
+        sys.exit(1)
+
+    draft = _find_draft_by_fix_id(drafts, fix_id)
+    if draft is None:
+        print(f"错误：fix_id '{fix_id}' 未找到", file=sys.stderr)
+        sys.exit(1)
+
+    # 读 manifest
+    manifest_path = pkg_dir / "manifest.json"
+    if not manifest_path.exists():
+        print(f"错误：manifest.json 不存在：{manifest_path}", file=sys.stderr)
+        sys.exit(1)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # 前置校验
+    errors = _verify_draft_apply_preconditions(draft, pkg_dir, manifest)
+    if errors:
+        for e in errors:
+            print(f"错误：{e}", file=sys.stderr)
+        sys.exit(1)
+
+    # ── 记录整组发布单元的字节快照（用于失败回滚） ──
+    fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    manifest_before = _file_snapshot(manifest_path)
+    manual_before = _file_snapshot(fixes_path)
+    md_rel_before = manifest.get("files", {}).get("markdown", "")
+    md_path_before = pkg_dir / md_rel_before if md_rel_before else None
+    markdown_before = (_file_snapshot(md_path_before)
+                       if md_path_before is not None else None)
+    backup_before = _snapshot_backup_files(pkg_dir)
+
+    def rollback_transaction() -> None:
+        """恢复 Markdown、manual_fixes、manifest 和 apply 产生的备份。"""
+        if md_path_before is not None:
+            _restore_file_snapshot(md_path_before, markdown_before)
+        _restore_file_snapshot(fixes_path, manual_before)
+        _restore_file_snapshot(manifest_path, manifest_before)
+        _restore_backup_files(pkg_dir, backup_before)
+
+    # 转换成 manual_fixes 记录
+    fix_obj = _draft_to_manual_fix(draft, "applied",
+                                    pkg_dir=pkg_dir, manifest=manifest)
+
+    # 确保 manifest 有 fixes/formatting（给 pdf-apply-fixes 用）
+    manifest = _ensure_inject_manifest_state(pkg_dir)
+
+    # 写入 manual_fixes.jsonl
+    _write_manual_fix_entry(pkg_dir, fix_obj)
+
+    # 确认后，当前 md hash 写入 manifest fixes（apply-fixes 会校验）
+    md_rel = manifest.get("files", {}).get("markdown", "")
+    if md_rel:
+        md_path = pkg_dir / md_rel
+        if md_path.exists():
+            from hashlib import sha256 as _sha256
+            current_hash = _sha256(md_path.read_bytes()).hexdigest()
+            manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8"))
+            manifest.setdefault("fixes", {})
+            manifest["fixes"]["markdown_sha256"] = current_hash
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+    # 调用 pdf-apply-fixes
+    import subprocess as _sp
+    apply_script = str(Path(__file__).resolve().parent / "pdf-apply-fixes")
+    result = _sp.run(
+        [sys.executable, apply_script, str(pkg_dir)],
+        capture_output=True, text=True,
+    )
+
+    if result.returncode != 0:
+        rollback_transaction()
+        print(f"错误：pdf-apply-fixes 返回非零（{result.returncode}）："
+              f"{result.stderr.strip()}"
+              f"\n已回滚 Markdown、manual_fixes.jsonl、manifest 和临时备份",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # 成功后统一登记派生文件和 hash。语义表格修复会改变 canonical Markdown，
+    # 因此 formatting 的当前产物 hash 也必须推进到新 Markdown。
+    try:
+        final_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        final_md_rel = final_manifest.get("files", {}).get("markdown", "")
+        final_md_path = pkg_dir / final_md_rel
+        final_md_hash = hashlib.sha256(final_md_path.read_bytes()).hexdigest()
+        final_manual_hash = hashlib.sha256(fixes_path.read_bytes()).hexdigest()
+        final_manifest.setdefault("files", {})[
+            "manual_fixes"] = "data/manual_fixes.jsonl"
+        final_manifest.setdefault("hash", {})[
+            "manual_fixes_sha256"] = final_manual_hash
+        final_manifest.setdefault("fixes", {})[
+            "manual_fixes_sha256"] = final_manual_hash
+        formatting = final_manifest.get("formatting")
+        if isinstance(formatting, dict):
+            formatting["formatted_markdown_sha256"] = final_md_hash
+        _write_manifest_atomic(manifest_path, final_manifest)
+    except Exception as exc:
+        rollback_transaction()
+        print(f"错误：修复发布单元同步失败：{exc}"
+              "\n已回滚 Markdown、manual_fixes.jsonl、manifest 和临时备份",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # 成功
+    print(f"修复已应用：{fix_id}", file=sys.stderr)
+    print(json.dumps({
+        "status": "applied",
+        "fix_id": fix_obj["fix_id"],
+        "source_repair_fix_id": fix_id,
+        "output": str(manifest_path),
+    }))
+    sys.exit(0)
+
+    # 成功
+    print(f"修复已应用：{fix_id}", file=sys.stderr)
+    print(json.dumps({
+        "status": "applied",
+        "fix_id": fix_obj["fix_id"],
+        "source_repair_fix_id": fix_id,
+        "output": str(manifest_path),
+    }))
+    sys.exit(0)
+
+
+def _handle_reject(pkg_dir: Path, fix_id: str, reason: str) -> None:
+    """处理 --reject 子命令。"""
+    try:
+        drafts = _read_drafts(pkg_dir)
+    except _RepairError as e:
+        print(f"错误：{e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not drafts:
+        print(f"错误：fix_id '{fix_id}' 未找到（draft 文件为空）",
+              file=sys.stderr)
+        sys.exit(1)
+
+    draft = _find_draft_by_fix_id(drafts, fix_id)
+    if draft is None:
+        print(f"错误：fix_id '{fix_id}' 未找到", file=sys.stderr)
+        sys.exit(1)
+
+    # 只校验 status
+    if draft.get("status") != "proposed":
+        print(f"错误：draft {fix_id} status 应为 proposed，"
+              f"实际为 {draft.get('status')}", file=sys.stderr)
+        sys.exit(1)
+
+    manifest_path = pkg_dir / "manifest.json"
+    if not manifest_path.exists():
+        print(f"错误：manifest.json 不存在：{manifest_path}", file=sys.stderr)
+        sys.exit(1)
+
+    fixes_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    manifest_before = _file_snapshot(manifest_path)
+    manual_before = _file_snapshot(fixes_path)
+    backup_before = _snapshot_backup_files(pkg_dir)
+    fix_obj = _draft_to_manual_fix(draft, "rejected", reason=reason)
+
+    try:
+        _ensure_inject_manifest_state(pkg_dir)
+        _write_manual_fix_entry(pkg_dir, fix_obj)
+        _sync_manual_fixes_manifest(pkg_dir, fixes_path)
+    except Exception as exc:
+        _restore_file_snapshot(fixes_path, manual_before)
+        _restore_file_snapshot(manifest_path, manifest_before)
+        _restore_backup_files(pkg_dir, backup_before)
+        print(f"错误：拒绝记录同步失败：{exc}"
+              "\n已回滚 manual_fixes.jsonl、manifest 和临时备份",
+              file=sys.stderr)
+        sys.exit(1)
+
+    print(f"修复已拒绝：{fix_id} — {reason}", file=sys.stderr)
+    print(json.dumps({
+        "status": "rejected",
+        "fix_id": fix_obj["fix_id"],
+        "source_repair_fix_id": fix_id,
+    }))
+    sys.exit(0)
+
+
+# ── main ────────────────────────────────────────────────
+
+
+def main() -> None:
+    argv = sys.argv[1:]
+
+    if not argv or any(a in ("-h", "--help") for a in argv):
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(0 if any(a in ("-h", "--help") for a in argv) else 1)
+
+    pkg_dir = Path(argv[0])
+    if not pkg_dir.is_dir():
+        print(f"错误：目录不存在：{pkg_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    # 检查是否为 apply/reject 子命令
+    if len(argv) >= 2 and argv[1] == "--apply":
+        if len(argv) < 3:
+            print("错误：--apply 后需要 fix_id", file=sys.stderr)
+            sys.exit(1)
+        _handle_apply(pkg_dir, argv[2])
+
+    if len(argv) >= 2 and argv[1] == "--reject":
+        if len(argv) < 4:
+            print("错误：--reject 后需要 fix_id 和拒绝原因", file=sys.stderr)
+            sys.exit(1)
+        _handle_reject(pkg_dir, argv[2], argv[3])
+
+    # ── 以下为 draft 生成逻辑 ──
+    pages_filter: set[int] | None = None
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--page":
+            i += 1
+            if i >= len(argv):
+                print("错误：--page 后需要页码", file=sys.stderr)
+                sys.exit(1)
+            pages_filter = _parse_page_arg(argv[i])
+        elif argv[i] == "--pages":
+            i += 1
+            if i >= len(argv):
+                print("错误：--pages 后需要页码列表", file=sys.stderr)
+                sys.exit(1)
+            pages_filter = _parse_page_arg(argv[i])
+        i += 1
+
+    # 读取 manifest
+    manifest_path = pkg_dir / "manifest.json"
+    if not manifest_path.exists():
+        print(f"错误：manifest.json 不存在：{manifest_path}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"错误：manifest.json 读取或解析失败：{e}", file=sys.stderr)
+        sys.exit(1)
+
+    # 读取候选
+    try:
+        candidates = _read_candidates(pkg_dir)
+    except _RepairError as e:
+        print(f"错误：{e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not candidates:
+        print("信息：无 table_candidates，跳过 draft 生成", file=sys.stderr)
+        sys.exit(0)
+
+    # 生成 draft
+    drafts = _generate_drafts(pkg_dir, manifest, candidates, pages_filter)
+
+    if not drafts:
+        msg = "未生成 draft 记录"
+        if pages_filter is not None:
+            msg += f"（请求页 {sorted(pages_filter)} 无对应候选）"
+        print(f"信息：{msg}", file=sys.stderr)
+        sys.exit(0)
+
+    # 写入 JSONL + manifest 同步
+    output_path = pkg_dir / "data" / "table_repair_draft.jsonl"
+    tmp_path = write_draft_jsonl(drafts, output_path)
+    try:
+        _sync_manifest(
+            pkg_dir, "data/table_repair_draft.jsonl",
+            tmp_path, output_path,
+        )
+    except Exception as e:
+        print(f"错误：draft 写入或 manifest 同步失败：{e}", file=sys.stderr)
+        sys.exit(1)
+
+    # 输出摘要
+    type_counts: dict[str, int] = {}
+    for d in drafts:
+        rt = d.get("repair_type", "unknown")
+        type_counts[rt] = type_counts.get(rt, 0) + 1
+
+    print(f"修复 draft 生成完成：{len(drafts)} 条"
+          f"（{', '.join(f'{k}:{v}' for k, v in sorted(type_counts.items()))}）",
+          file=sys.stderr)
+    for d in drafts:
+        cid = d.get("source_candidate_id", "?")
+        rt = d.get("repair_type", "?")
+        ws = "; ".join(d.get("warnings", [])[:2])
+        extra = f" — {ws}" if ws else ""
+        print(f"  [{rt}] {cid}{extra}", file=sys.stderr)
+
+    print(json.dumps({
+        "status": "completed",
+        "draft_count": len(drafts),
+        "output": str(output_path),
+    }))
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

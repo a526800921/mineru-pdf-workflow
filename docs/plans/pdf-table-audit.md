@@ -2,13 +2,13 @@
 
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 4 已达到待实施标准
+- 状态：已完成
+- 当前阶段：阶段 4 独立验收通过，全计划闭环
 - 最后更新：2026-07-13
 
 本文档是“表格异常自动发现”增量能力的事实源。它承接 [pdf2md-fix 人工复核与内容修复工作流](pdf2md-fix-manual-workflow.md)，不重新定义人工修复、页级表格重建、VLM 或 HTML pretty-print 契约；页级表格重建另见 [pdf-table-repair](pdf-table-repair.md)。
 
-## 背景与 Step 0 证据
+## Step 0 证据
 
 外部复盘报告 `/Users/jafish/Documents/work/motofind/docs/reports/pdf2md-fix-250sr-summary.md` 对春风 250Sr p33–p56 的人工修复进行了分类，显示列数膨胀、空列缺失、rowspan 错位、文本遗漏和原生文字缺失等问题可以被稳定发现，但最终表格语义仍需人工确认。报告还标记了 p87、p90 的 `8160+` 空单元格、p88–p93 的 `native_table_text_missing` 和 p132–p133 的待核查表格。
 
@@ -464,6 +464,68 @@ Step 0 证据：
 - 项目级 skill 与用户级 skill 一致；
 - `pytest -q`、相关 shell 回归、治理检查和 drift 检查通过。
 
+#### 阶段 4 独立验收（2026-07-13，通过）
+
+验收结论：**阶段 4 通过，计划状态推进为 `已完成`**。
+
+逐项验收证据：
+
+**1. Skill 一致性**
+
+项目级 `skills/pdf2md-fix/SKILL.md` 与用户级 `/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md` SHA-256 均为 `1ced2a16a77b9e2db264dd7352993b39adec2980b54d0c5c4f2d337d3734bd5a`，内容一致。
+
+**2. 三包真实产物最终交付检查**
+
+| 检查项 | demo20 | demo60 | 春风250Sr |
+|---|---|---|---|
+| `pdf-check-fixes` 退出码 | 0 ✅ | 0 ✅ | 0 ✅ |
+| 候选记录数 | 4 | 16 | 29 |
+| 所有记录含 `needs_human: true` | 4/4 ✅ | 16/16 ✅ | 29/29 ✅ |
+| 所有记录含 `page_anchor` | 4/4 ✅ | 16/16 ✅ | 29/29 ✅ |
+| 所有记录含 `source` | 4/4 ✅ | 16/16 ✅ | 29/29 ✅ |
+| `candidate_ref` 可解析 | 4/4 条引用 ✅ | 4/4 条引用 ✅ | 7/7 条引用 ✅ |
+| 悬空 `candidate_ref` | 0 ✅ | 0 ✅ | 0 ✅ |
+| manifest hash 一致 | 3/3 ✅ | 3/3 ✅ | 2/2 ✅ |
+| VLM 证据 | 8 条（6 成功 2 失败）✅ | 33 条（32 成功 1 失败）✅ | 无 VLM（使用 PDF 证据）✅ |
+| 幂等性 | diff 无变化 ✅ | diff 无变化 ✅ | diff 无变化 ✅ |
+
+**3. 失败回滚与幂等性**
+
+- 重复运行 `pdf-table-fix` 后候选文件和 manifest 均无变化（diff 干净），幂等性成立 ✅
+- 阶段 1 已覆盖 manifest rename 失败回滚、malformed manifest、缺失 PDF、候选写入失败和重复 page_anchor 回滚测试 ✅
+
+**4. 跨页表格**
+
+候选均为单页锚点（`<!-- pages N-N -->`），未将跨页表格误判为单页候选；跨页表格的修复由 `pdf-table-repair` 计划承接 ✅
+
+**5. 回归与治理**
+
+| 门禁 | 结果 |
+|---|---|
+| `python3 tests/test_table_candidates.py` | 28/28 ✅ |
+| `bash tests/test-fix-validate.sh` | 93/93 ✅ |
+| `pytest -q` | 256 passed ✅ |
+| `python3 scripts/check_plan_governance.py .` | 通过 ✅ |
+| `python3 scripts/check_plan_governance.py . --drift` | 通过 ✅ |
+| `git diff --check` | 通过 ✅ |
+| `python3 scripts/pdf-table-audit-stats` | 可从产物重建统计矩阵 ✅ |
+
+**6. 反向搜索漂移**
+
+- 引用 `pdf-table-audit` 的外部文件：`pdf-table-repair.md`（下游计划，依赖关系正确）、`pdf-extract-data-table-coverage.md`（下游计划）、`pdf2md-fix-manual-workflow.md`（已完成前置计划）、`pdf-table-audit-stats`（统计脚本）✅
+- 引用 `table_candidates` 的文件：skill、checker、scanner、测试、page_quality（信号源）— 均为本计划的正确依赖/消费者 ✅
+- `schema_version >= 2`、`candidate_type`、`needs_human`、`layout_or_visual_needs_review` 在代码与 skill 中的定义一致 ✅
+
+**非阻塞观察**
+
+- demo20 p14 VLM 仍返回无效 JSON（已知问题，不影响表格审计交付）
+- 春风250Sr 的 8 条 manual_fixes 无 `candidate_ref`（目录和非候选驱动的手动修复记录），属于正常状态；其余 7 条引用均已解析
+- 用户级 `pdf2md` skill 未在本计划中触及，无需同步
+
+**计划闭环确认**
+
+本计划的四个阶段（Step 0 复现 → 扩展扫描器 → skill 同步 → 真实样本扩展）和最终独立验收均已闭环。候选审计能力已稳定交付：`scripts/pdf-table-fix` 可在任意输出包上生成多信号候选、写入 manifest 登记的 `table_candidates.jsonl`，并由 `scripts/pdf-check-fixes` 校验完整性。人工确认、VLM 证据和页级修复的门禁已由 skill 文档固化，下游 `pdf-table-repair` 可直接承接。
+
 ## 风险与回滚
 
 | 风险 | 控制措施 | 回滚 |
@@ -474,7 +536,7 @@ Step 0 证据：
 | 新脚本与现有 `pdf-table-fix` 重复 | 阶段 0 先做能力差距审计 | 取消新入口，回退到现有 helper |
 | 外部报告页码无法在当前包复现 | 将报告降级为背景证据，登记待确认样本 | 不把该样本写入完成证据 |
 
-## 治理验证
+## 验证
 
 ```bash
 python3 scripts/check_plan_governance.py .

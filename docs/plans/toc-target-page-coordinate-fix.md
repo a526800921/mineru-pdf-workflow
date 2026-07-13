@@ -627,6 +627,15 @@ git diff --check
 
 **结论**：阶段 4 独立验收通过，全计划闭环。
 
+#### 阶段 4 再次独立复核（2026-07-13，通过）
+
+本次基于当前仓库重新执行只读验收，结论不改变：阶段 4 通过，计划保持 `已完成`。
+
+- 真实样本页码检测：春风250Sr `+8/verified`、250Sr-R `+8/verified`、春风 150AURA `+1/verified`、demo20/demo60 `unknown/needs_review`；250Sr 和 250Sr-R 均为 120/120 条大纲标准化并写出 `printed_page`。
+- 四个 canonical 包的 `validate_page_numbering()` 专项校验均为 0 错误；旧 AURA `page` 格式可被 section map 正确回退，四包现有 TOC 条目均可进入 section map。
+- 回归：`pytest -q` 为 310 passed；`bash tests/test-fix-validate.sh` 为 117/117；治理、drift、`git diff --check` 均通过。
+- 已知边界：对 canonical 包执行完整 `pdf-check-fixes` 时，150AURA 仍因预存的 formatting 备份缺失退出 1；该错误不涉及 `page_numbering`，其页码专项校验为 0 错误，属于 `pdf-merge-table-formatting` 范围，不阻断本计划验收。
+
 ## 风险与回滚
 
 | 风险 | 控制措施 | 回滚 |

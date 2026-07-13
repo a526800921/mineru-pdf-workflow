@@ -176,8 +176,10 @@ scripts/pdf-table-fix <package>
 2. 校验目标页锚点唯一性、目标内容 hash 和预期命中次数。
 3. 在锚点范围内执行替换——禁止全局无边界替换。
 4. 修复后校验页锚点唯一性、目标文本一致性和内容 hash。
-5. 同步更新 `manifest.json`（文件角色、hash、修复状态）。
-6. 记录到 `manual_fixes.jsonl`。
+5. 将 Markdown、`data/manual_fixes.jsonl`、manifest 和已有 `pre_fix_*`/`pre_format_md_*` 备份作为一个事务单元；应用器启动后任一步失败，都按字节恢复全部文件，不接受半成品。
+6. 成功后同步更新 `manifest.json`：`files.manual_fixes`、顶层 `hash.manual_fixes_sha256`、`fixes.manual_fixes_sha256`，以及当前 canonical Markdown 对应的 `fixes.markdown_sha256`；若存在 formatting 记录，`formatting.formatted_markdown_sha256` 也必须推进到当前 Markdown hash。
+7. 记录到 `manual_fixes.jsonl`；拒绝 draft 也必须写入 `status=rejected` 并同步上述 manual fixes 路径/hash，但不得修改 Markdown。
+8. 应用后运行 `scripts/pdf-check-fixes <package>`；人工确认的语义表格允许目标表格结构变化，未涉及修复的表格仍必须通过格式一致性校验。
 
 ## VLM 使用边界
 

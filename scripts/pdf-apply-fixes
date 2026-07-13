@@ -116,6 +116,19 @@ def apply_single_fix(md_text: str, fix: dict) -> tuple[str, list[str], bool]:
 
         block_start, block_end, block_text = block
 
+        # expected_hit_count 门禁：预期命中次数与实际不一致时拒绝
+        expected_hit = fix.get("expected_hit_count")
+        if expected_hit is not None and isinstance(expected_hit, int) and expected_hit > 0:
+            actual_hit = block_text.count(before)
+            if actual_hit != expected_hit:
+                errors.append(
+                    f"修复 {fix_id}: page {page}"
+                    f" 预期命中次数 {expected_hit}"
+                    f" 与实际 {actual_hit} 不一致，"
+                    "Markdown 可能已被中间修改，拒绝应用"
+                )
+                continue
+
         # 在页块范围内查找 before
         count = block_text.count(before)
         if count == 0:
@@ -301,6 +314,9 @@ def main() -> None:
     manifest["fixes"]["markdown_sha256"] = actual_new_hash
     manifest["fixes"]["manual_fixes_sha256"] = file_sha256(fixes_path)
     manifest["fixes"]["status"] = "applied"
+
+    # 同步顶层 hash
+    manifest.setdefault("hash", {})["manual_fixes_sha256"] = file_sha256(fixes_path)
 
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

@@ -188,6 +188,15 @@ def validate_manual_fixes(path: Path, manifest: dict | None = None) -> list[str]
                     f"（允许：{', '.join(sorted(FIX_STATUSES))}）"
                 )
 
+            # 可选：expected_hit_count 必须为正整数
+            ehc = obj.get("expected_hit_count")
+            if ehc is not None:
+                if not isinstance(ehc, int) or ehc < 1:
+                    errors.append(
+                        f"第 {lineno} 行 expected_hit_count 必须为正整数，"
+                        f"实际：{ehc}"
+                    )
+
             # pages 校验
             pages = obj.get("pages")
             if pages is not None:
@@ -551,6 +560,53 @@ def check_table_consistency(manifest: dict, pkg_dir: Path) -> list[str]:
     source_text = source_md_path.read_text(encoding="utf-8")
     current_text = current_md_path.read_text(encoding="utf-8")
 
+    # 已人工确认的语义表格修复允许改变目标表格的行列/文本结构；这些页
+    # 不应被“格式化前后一致”门禁误判，但未涉及修复的表格仍需继续校验。
+    semantic_fix_types = {
+        "rebuild_table", "fix_header", "fill_content", "cross_page_table",
+        "table_layout", "missing_text",
+    }
+    semantic_pages: set[int] = set()
+    manual_path = pkg_dir / "data" / "manual_fixes.jsonl"
+    if manual_path.exists():
+        with manual_path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    fix = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (fix.get("status") in ("applied", "verified")
+                        and fix.get("fix_type") in semantic_fix_types):
+                    semantic_pages.update(
+                        p for p in fix.get("pages", [])
+                        if isinstance(p, int) and p > 0
+                    )
+
+    def semantic_table_indexes(text: str) -> set[int]:
+        if not semantic_pages:
+            return set()
+        anchor_re = re.compile(
+            r'^<!-- pages (\d+)-(\d+) -->\s*$', re.MULTILINE)
+        anchors = list(anchor_re.finditer(text))
+        table_re = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
+        indexes: set[int] = set()
+        for index, table in enumerate(table_re.finditer(text), start=1):
+            containing = None
+            for anchor_index, anchor in enumerate(anchors):
+                next_start = (anchors[anchor_index + 1].start()
+                              if anchor_index + 1 < len(anchors) else len(text))
+                if anchor.start() <= table.start() < next_start:
+                    containing = anchor
+                    break
+            if containing is None:
+                continue
+            start_page, end_page = int(containing.group(1)), int(containing.group(2))
+            if any(start_page <= page <= end_page for page in semantic_pages):
+                indexes.add(index)
+        return indexes
+
+    semantic_indexes = semantic_table_indexes(source_text)
+
     # 使用格式化器的 validate_structure 做完整校验
     try:
         import sys as _sys
@@ -561,7 +617,11 @@ def check_table_consistency(manifest: dict, pkg_dir: Path) -> list[str]:
         # fallback：使用旧版 parse_html_tables 校验
         struct_errors = _legacy_table_check(source_text, current_text)
 
+    table_error_re = re.compile(r"表格\s*(\d+)")
     for e in struct_errors:
+        match = table_error_re.search(e)
+        if match and int(match.group(1)) in semantic_indexes:
+            continue
         errors.append(f"表格一致性：{e}")
 
     return errors
@@ -850,6 +910,123 @@ def validate_table_candidates(manifest: dict, pkg_dir: Path) -> list[str]:
     return errors
 
 
+_VALID_REPAIR_TYPES = frozenset({
+    "pretty_print", "fill_missing_text", "structure_warning",
+})
+
+
+def validate_repair_draft(manifest: dict, pkg_dir: Path) -> list[str]:
+    """校验 table_repair_draft.jsonl 的 manifest 登记和格式完整性。"""
+    errors: list[str] = []
+    files = manifest.get("files", {})
+    hashes = manifest.get("hash", {})
+
+    rd_registered = files.get("table_repair_draft")
+    default_path = pkg_dir / "data" / "table_repair_draft.jsonl"
+    file_exists = default_path.exists()
+
+    # 1. 登记了但文件不存在
+    if rd_registered:
+        rd_path = pkg_dir / rd_registered
+        if not rd_path.exists():
+            errors.append(
+                f"files.table_repair_draft 指向的文件不存在：{rd_path}")
+            return errors
+    else:
+        rd_path = default_path
+
+    # 2. 文件存在但未登记（草案阶段允许无登记，但提示通知）
+    if file_exists and not rd_registered:
+        errors.append(
+            "table_repair_draft.jsonl 存在但 manifest.files.table_repair_draft 未登记")
+        return errors
+
+    if not file_exists:
+        return errors
+
+    # 3. hash 为空
+    rd_hash = hashes.get("table_repair_draft_sha256")
+    if not rd_hash:
+        errors.append("hash.table_repair_draft_sha256 为空")
+    else:
+        actual_hash = file_sha256(rd_path)
+        if rd_hash != actual_hash:
+            errors.append(
+                f"table_repair_draft_sha256 不匹配"
+                f"（期望：{actual_hash[:16]}...，实际：{rd_hash[:16]}...）"
+            )
+
+    # 4. 逐行校验 JSONL 格式
+    try:
+        with rd_path.open(encoding="utf-8") as f:
+            for lineno, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as e:
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行 JSON 解析失败：{e}")
+                    continue
+                if not isinstance(obj, dict):
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行不是 JSON 对象")
+                    continue
+
+                # schema_version
+                sv = obj.get("schema_version")
+                if not isinstance(sv, int) or sv < 1:
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行"
+                        f" schema_version 应为 >=1，实际：{sv}"
+                    )
+
+                # fix_id — 同页多条 draft 共享 fix_id 属于正常，不做去重
+                fid = obj.get("fix_id")
+                if not fid or not isinstance(fid, str):
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行缺少 fix_id")
+
+                # needs_human
+                if obj.get("needs_human") is not True:
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行"
+                        f" needs_human 必须为 true")
+
+                # status
+                if obj.get("status") != "proposed":
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行"
+                        f" status 应为 proposed，实际：{obj.get('status')}")
+
+                # repair_type
+                rt = obj.get("repair_type")
+                if rt not in _VALID_REPAIR_TYPES:
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行"
+                        f" repair_type 不合法：{rt}"
+                    )
+
+                # pages
+                pages = obj.get("pages")
+                if not pages or not isinstance(pages, list):
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行"
+                        f" pages 为空或不是列表")
+
+                # source_candidate_id
+                scid = obj.get("source_candidate_id")
+                if not scid or not isinstance(scid, str):
+                    errors.append(
+                        f"table_repair_draft 第 {lineno} 行"
+                        f" 缺少 source_candidate_id")
+    except OSError as e:
+        errors.append(f"读取 table_repair_draft 失败：{e}")
+
+    return errors
+
+
 def validate_manual_fix_candidate_refs(
     manifest: dict, pkg_dir: Path, fixes_path: Path
 ) -> list[str]:
@@ -1080,6 +1257,10 @@ def main() -> None:
     # -- table_candidates --
     tc_errors = validate_table_candidates(manifest, pkg_dir)
     all_errors.extend(tc_errors)
+
+    # -- table_repair_draft --
+    rd_errors = validate_repair_draft(manifest, pkg_dir)
+    all_errors.extend(rd_errors)
 
     # -- manual_fixes candidate_ref --
     ref_errors = validate_manual_fix_candidate_refs(manifest, pkg_dir, fixes_path)

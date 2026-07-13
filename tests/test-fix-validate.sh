@@ -6,6 +6,7 @@ _scripts="$(cd "$(dirname "$0")/../scripts" && pwd)"
 _d20="$(cd "$(dirname "$0")/../pdf/demo20" && pwd)"
 _d60="$(cd "$(dirname "$0")/../pdf/demo60" && pwd)"
 _d5="$(cd "$(dirname "$0")/../pdf/demo5" && pwd)"
+_cf="$(cd "$(dirname "$0")/../pdf/春风250Sr" && pwd)"
 
 ok=0; fail=0
 trap 'for d in "${_td[@]}"; do [[ -d "$d" ]] && rm -rf "$d"; done' EXIT
@@ -844,6 +845,328 @@ corr_status=$(grep "$exp_rid" "$t/data/ingest_ready.csv" | cut -d',' -f13)
 "$_scripts"/pdf-export-ingest "$t" > /dev/null 2>&1
 new_batch_count=$(wc -l < "$t/data/ingest_batch.jsonl" | tr -d ' ')
 [[ "$new_batch_count" -eq 0 ]] && _pass "F9: 修正后 ready=0，export 为 0 条" || _fail "F9: 修正后仍有导出 (got=$new_batch_count)"
+
+# ── R1: pdf-table-repair 单页 draft 生成 ──
+echo ""
+echo "--- R1: 单页 draft 生成 (--page 87) ---"
+t=$(_mk)
+cp -R "$_cf/"* "$t/" 2>/dev/null || true
+if [ -f "$t/data/table_candidates.jsonl" ]; then
+  rm -f "$t/data/table_repair_draft.jsonl"
+  out="$("$_scripts"/pdf-table-repair "$t" --page 87 2>&1)" && rc=0 || rc=$?
+  _ck0 $rc "R1: 单页 draft 生成成功"
+  _grep "$out" "修复 draft 生成完成" "R1: 输出含完成信息"
+  if [ -f "$t/data/table_repair_draft.jsonl" ]; then
+    _pass "R1: draft 文件已生成"
+    python3 -c "
+import json
+m=json.load(open('$t/manifest.json'))
+f=m.get('files',{}).get('table_repair_draft','')
+h=m.get('hash',{}).get('table_repair_draft_sha256','')
+assert f=='data/table_repair_draft.jsonl', f'files 未登记: {f}'
+assert len(h)>0, 'hash 为空'
+print(f'  manifest: files={f}, hash={h[:16]}...')
+" 2>&1 && _pass "R1: manifest 登记正确" || _fail "R1: manifest 登记异常"
+    _ck0 "$(scripts/pdf-check-fixes "$t" 2>/dev/null; echo $?)" "R1: check-fixes 通过"
+  else
+    _fail "R1: draft 文件未生成"
+  fi
+else
+  echo "  SKIP: 候选文件不存在"
+fi
+
+# ── R2: 全页 draft 生成（跨页检测） ──
+echo ""
+echo "--- R2: 全页 draft 生成 ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/table_repair_draft.jsonl" "$t/manifest.json.tmp"
+out="$("$_scripts"/pdf-table-repair "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R2: 全页 draft 生成成功"
+draft_lines=$(wc -l < "$t/data/table_repair_draft.jsonl" 2>/dev/null || echo 0)
+if [ "$draft_lines" -gt 0 ]; then _pass "R2: draft 文件非空 ($draft_lines 行)"; else _fail "R2: draft 为空"; fi
+python3 -c "
+import json
+with open('$t/data/table_repair_draft.jsonl') as f:
+    lines=[json.loads(l) for l in f if l.strip()]
+total=len(lines)
+assert total>0, 'draft 为空'
+ok_nh=sum(1 for d in lines if d.get('needs_human')==True)
+ok_st=sum(1 for d in lines if d.get('status')=='proposed')
+ok_rt=sum(1 for d in lines if d.get('repair_type') in ('pretty_print','fill_missing_text','structure_warning'))
+print(f'  总数={total}, needs_human={ok_nh}/{total}, status=proposed={ok_st}/{total}, 合法repair_type={ok_rt}/{total}')
+assert ok_nh==total, f'{total-ok_nh} 条 needs_human 不为 true'
+assert ok_st==total, f'{total-ok_st} 条 status 不为 proposed'
+assert ok_rt==total, f'{total-ok_rt} 条 repair_type 不合法'
+" 2>&1 && _pass "R2: 所有 draft 满足 schema v1" || _fail "R2: schema v1 异常"
+
+# ── R3: 无效页返回空 ──
+echo ""
+echo "--- R3: 无效页返回空 ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/table_repair_draft.jsonl"
+out="$("$_scripts"/pdf-table-repair "$t" --page 999 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R3: 无效页返回 0（信息非错误）"
+_grep "$out" "未生成" "R3: 输出含未生成信息"
+
+# ── R4: 无候选时跳过 ──
+echo ""
+echo "--- R4: 无候选时跳过 ---"
+t=$(_mk)
+cp -R "$_d5/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/table_candidates.jsonl"
+out="$("$_scripts"/pdf-table-repair "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R4: 无候选返回 0"
+_grep "$out" "无 table_candidates" "R4: 输出含无候选信息"
+
+# ── R5: pdf-check-fixes 检测 repair_draft ──
+echo ""
+echo "--- R5: pdf-check-fixes 检测 repair_draft ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/table_repair_draft.jsonl"
+"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+out="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R5: check-fixes 检测 draft 通过"
+python3 -c "
+import json
+m=json.load(open('$t/manifest.json'))
+m['hash']['table_repair_draft_sha256']='badhash'
+json.dump(m, open('$t/manifest.json','w'), ensure_ascii=False, indent=2)
+" 2>/dev/null
+out2="$("$_scripts"/pdf-check-fixes "$t" 2>&1)" && rc2=0 || rc2=$?
+_ck1 $rc2 "R5: hash 异常返回非零"
+_grep "$out2" "table_repair_draft_sha256" "R5: 含 hash 错误信息"
+
+# ── R6: pdf-table-repair --apply 端到端 ──
+echo ""
+echo "--- R6: pdf-table-repair --apply ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/manual_fixes.jsonl" "$t/data/table_repair_draft.jsonl"
+"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+fix_id=$(python3 -c "
+import json
+with open('$t/data/table_repair_draft.jsonl') as f:
+    print(json.loads(f.readline())['fix_id'])
+" 2>/dev/null)
+# 准备 manifest fixes/formatting
+python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+md_hash=hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest()
+src_hash=hashlib.sha256(open('$t/manifest.json','rb').read()).hexdigest()
+m['fixes']={'schema_version':1,'status':'pending','markdown_sha256':md_hash,'manual_fixes_sha256':'','source_manifest_sha256':src_hash}
+m['formatting']={'schema_version':1,'mode':'merge_time','status':'none','source_markdown_sha256':md_hash,'formatted_markdown_sha256':md_hash}
+json.dump(m, open('$t/manifest.json','w'), ensure_ascii=False, indent=2)
+" 2>/dev/null
+md_hash_before=$(python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+print(hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest())
+" 2>/dev/null)
+"$_scripts"/pdf-table-repair "$t" --apply "$fix_id" > /dev/null 2>&1 && rc=0 || rc=$?
+_ck0 $rc "R6: --apply 成功"
+# 校验 Markdown hash 已变化
+md_hash_after=$(python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+print(hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest())
+" 2>/dev/null)
+if [ "$md_hash_before" != "$md_hash_after" ]; then
+  _pass "R6: Markdown hash 已变化"
+else
+  _fail "R6: Markdown hash 未变化"
+fi
+# manual_fixes 有 applied 记录
+python3 -c "
+import json
+with open('$t/data/manual_fixes.jsonl') as f:
+    applied=[l for l in f if json.loads(l).get('status')=='applied']
+assert len(applied)>0, '没有 applied 记录'
+" 2>/dev/null && _pass "R6: manual_fixes 含 applied 记录" || _fail "R6: manual_fixes 无 applied 记录"
+# apply 后完整 checker 必须通过（含顶层和 fixes 块 hash）
+out_check="$($_scripts/pdf-check-fixes "$t" 2>&1)" && rc_check=0 || rc_check=$?
+_ck0 $rc_check "R6: apply 后 pdf-check-fixes 通过"
+# 校验 manual_fixes_sha256 一致性
+python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+top=m.get('hash',{}).get('manual_fixes_sha256','')
+fix=m.get('fixes',{}).get('manual_fixes_sha256','')
+act=hashlib.sha256(open('$t/data/manual_fixes.jsonl','rb').read()).hexdigest()
+assert top==act, f'top hash mismatch: {top[:12]} vs {act[:12]}'
+assert fix==act, f'fix hash mismatch: {fix[:12]} vs {act[:12]}'
+print(f'  hash 一致性: {act[:16]}... ✅')
+" 2>/dev/null && _pass "R6: manual_fixes_sha256 一致" || _fail "R6: manual_fixes_sha256 不一致"
+
+# ── R7: pdf-table-repair --reject ──
+echo ""
+echo "--- R7: pdf-table-repair --reject ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/manual_fixes.jsonl" "$t/data/table_repair_draft.jsonl"
+"$_scripts"/pdf-table-repair "$t" --page 48 > /dev/null 2>&1
+fix_id=$(python3 -c "
+import json
+with open('$t/data/table_repair_draft.jsonl') as f:
+    print(json.loads(f.readline())['fix_id'])
+" 2>/dev/null)
+md_hash_before=$(python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+print(hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest())
+" 2>/dev/null)
+"$_scripts"/pdf-table-repair "$t" --reject "$fix_id" "测试拒绝" > /dev/null 2>&1 && rc=0 || rc=$?
+_ck0 $rc "R7: --reject 成功"
+# Markdown hash 不变
+md_hash_after=$(python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+print(hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest())
+" 2>/dev/null)
+if [ "$md_hash_before" == "$md_hash_after" ]; then
+  _pass "R7: Markdown hash 不变"
+else
+  _fail "R7: Markdown hash 不应变化"
+fi
+python3 -c "
+import json
+with open('$t/data/manual_fixes.jsonl') as f:
+    rejected=[json.loads(l) for l in f if 'reject' in l]
+assert len(rejected)>0, '没有 reject 记录'
+assert rejected[0].get('status')=='rejected', 'status 不是 rejected'
+" 2>/dev/null && _pass "R7: manual_fixes 含 rejected 记录" || _fail "R7: manual_fixes 记录异常"
+"$_scripts"/pdf-check-fixes "$t" > /dev/null 2>&1 && _pass "R7: reject 后 pdf-check-fixes 通过" || _fail "R7: reject 后 check-fixes 失败"
+python3 -c "
+import hashlib,json
+m=json.load(open('$t/manifest.json'))
+h=hashlib.sha256(open('$t/data/manual_fixes.jsonl','rb').read()).hexdigest()
+assert m.get('files',{}).get('manual_fixes')=='data/manual_fixes.jsonl'
+assert m.get('hash',{}).get('manual_fixes_sha256')==h
+assert m.get('fixes',{}).get('manual_fixes_sha256')==h
+" 2>/dev/null && _pass "R7: reject 后 manifest hash 已同步" || _fail "R7: reject 后 manifest hash 未同步"
+
+# ── R8: 重复 --apply 幂等跳过 ──
+echo ""
+echo "--- R8: 幂等 --apply ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/manual_fixes.jsonl" "$t/data/table_repair_draft.jsonl"
+"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+fix_id=$(python3 -c "
+import json
+with open('$t/data/table_repair_draft.jsonl') as f:
+    print(json.loads(f.readline())['fix_id'])
+" 2>/dev/null)
+python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+md_hash=hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest()
+src_hash=hashlib.sha256(open('$t/manifest.json','rb').read()).hexdigest()
+m['fixes']={'schema_version':1,'status':'pending','markdown_sha256':md_hash,'manual_fixes_sha256':'','source_manifest_sha256':src_hash}
+m['formatting']={'schema_version':1,'mode':'merge_time','status':'none','source_markdown_sha256':md_hash,'formatted_markdown_sha256':md_hash}
+json.dump(m, open('$t/manifest.json','w'), ensure_ascii=False, indent=2)
+" 2>/dev/null
+# 第一次 apply
+"$_scripts"/pdf-table-repair "$t" --apply "$fix_id" > /dev/null 2>&1
+md_after_first=$(python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+print(hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest())
+" 2>/dev/null)
+# 第二次 apply（幂等）
+"$_scripts"/pdf-table-repair "$t" --apply "$fix_id" > /dev/null 2>&1 && rc=0 || rc=$?
+md_after_second=$(python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+print(hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest())
+" 2>/dev/null)
+if [ "$md_after_first" == "$md_after_second" ]; then
+  _pass "R8: 幂等跳过（hash 不变）"
+else
+  _fail "R8: 非幂等（hash 变化）"
+fi
+
+# ── R9: hash 漂移时拒绝 apply ──
+echo ""
+echo "--- R9: hash 漂移拒绝 apply ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/manual_fixes.jsonl" "$t/data/table_repair_draft.jsonl"
+"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+fix_id=$(python3 -c "
+import json
+with open('$t/data/table_repair_draft.jsonl') as f:
+    print(json.loads(f.readline())['fix_id'])
+" 2>/dev/null)
+python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+md_rel=m.get('files',{}).get('markdown','')
+md_hash=hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest()
+src_hash=hashlib.sha256(open('$t/manifest.json','rb').read()).hexdigest()
+m['fixes']={'schema_version':1,'status':'pending','markdown_sha256':md_hash,'manual_fixes_sha256':'','source_manifest_sha256':src_hash}
+m['formatting']={'schema_version':1,'mode':'merge_time','status':'none','source_markdown_sha256':md_hash,'formatted_markdown_sha256':md_hash}
+json.dump(m, open('$t/manifest.json','w'), ensure_ascii=False, indent=2)
+" 2>/dev/null
+# 模拟 hash 漂移：修改 Markdown
+md_rel=$(python3 -c "
+import json
+print(json.load(open('$t/manifest.json')).get('files',{}).get('markdown',''))
+" 2>/dev/null)
+echo " " >> "$t/$md_rel"
+out="$("$_scripts"/pdf-table-repair "$t" --apply "$fix_id" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "R9: hash 漂移返回非零"
+_grep "$out" "hash 不匹配" "R9: 含 hash 漂移错误"
+
+# ── R10: apply 失败时 manual_fixes 回滚 ──
+echo ""
+echo "--- R10: apply 失败回滚 manual_fixes ---"
+t=$(_mk)
+cp -R "$_d60/"* "$t/" 2>/dev/null || true
+rm -f "$t/data/table_repair_draft.jsonl"
+"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+fix_id=$(python3 -c "
+import json
+with open('$t/data/table_repair_draft.jsonl') as f:
+    print(json.loads(f.readline())['fix_id'])
+" 2>/dev/null)
+python3 -c "
+import json,hashlib
+m=json.load(open('$t/manifest.json'))
+draft='$t/data/table_repair_draft.jsonl'
+rows=[json.loads(line) for line in open(draft,encoding='utf-8') if line.strip()]
+rows[0]['expected_hit_count']=999
+open(draft,'w',encoding='utf-8').write(''.join(json.dumps(x,ensure_ascii=False)+'\\n' for x in rows))
+m.setdefault('hash',{})['table_repair_draft_sha256']=hashlib.sha256(open(draft,'rb').read()).hexdigest()
+md_rel=m.get('files',{}).get('markdown','')
+md_hash=hashlib.sha256(open('$t/'+md_rel,'rb').read()).hexdigest()
+src_hash=hashlib.sha256(open('$t/manifest.json','rb').read()).hexdigest()
+m['fixes']={'schema_version':1,'status':'pending','markdown_sha256':md_hash,'manual_fixes_sha256':'','source_manifest_sha256':src_hash}
+m['formatting']={'schema_version':1,'mode':'merge_time','status':'none','source_markdown_sha256':md_hash,'formatted_markdown_sha256':md_hash}
+json.dump(m, open('$t/manifest.json','w'), ensure_ascii=False, indent=2)
+" 2>/dev/null
+md_before=$(shasum -a 256 "$t/demo60.md" | awk '{print $1}')
+manifest_before=$(shasum -a 256 "$t/manifest.json" | awk '{print $1}')
+manual_before=$(shasum -a 256 "$t/data/manual_fixes.jsonl" | awk '{print $1}')
+out="$($_scripts/pdf-table-repair "$t" --apply "$fix_id" 2>&1)" && rc=0 || rc=$?
+_ck1 $rc "R10: apply 内部失败返回非零"
+md_after=$(shasum -a 256 "$t/demo60.md" | awk '{print $1}')
+manifest_after=$(shasum -a 256 "$t/manifest.json" | awk '{print $1}')
+manual_after=$(shasum -a 256 "$t/data/manual_fixes.jsonl" | awk '{print $1}')
+[ "$md_before" = "$md_after" ] && _pass "R10: Markdown 字节级回滚" || _fail "R10: Markdown 未回滚"
+[ "$manifest_before" = "$manifest_after" ] && _pass "R10: manifest 字节级回滚" || _fail "R10: manifest 未回滚"
+[ "$manual_before" = "$manual_after" ] && _pass "R10: manual_fixes 字节级回滚" || _fail "R10: manual_fixes 未回滚"
 
 # ── 汇总 ──
 echo ""
