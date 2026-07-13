@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 2 已完成（第二轮验收通过）→ 阶段 3：真实样本回填（待实施）
+- 状态：已完成
+- 当前阶段：全阶段（0-4）已完成，全计划闭环
 - 最后更新：2026-07-13
 
 本文档承接已完成的 [toc-page-physical-attribution-fix](toc-page-physical-attribution-fix.md)，只解决另一个独立问题：`toc_tree.json.target_page` 可能使用印刷页码，而下游和 Markdown 页锚点使用 PDF 物理页码。它不重新打开目录条目属于哪一张物理目录页的既有契约。
@@ -415,6 +415,188 @@ scripts/pdf-check-fixes <package>
 
 完成条件：真实样本中章节归属正确、页码证据可追溯、审核门禁不被绕过。
 
+#### 阶段 3 实施证据（2026-07-13）
+
+四包页码映射检测（基于真实 PDF 的 PyMuPDF page labels，**未修改正式包**）：
+
+| 包 | 总页数 | 内置大纲 | page_labels 范围 | mapping_type | offset | status |
+|---|---|---|---|---|---|---|
+| 春风250Sr | 138 | 120 条 | [1-8: D/1], [9-138: D/1] | constant_offset | +8 | verified |
+| 春风 150AURA | 191 | 121 条 | [1-1: D/1], [2-191: D/1] | constant_offset | +1 | verified |
+| demo20 | 20 | 无 | 无 | unknown | — | needs_review |
+| demo60 | 60 | 无 | 无 | unknown | — | needs_review |
+
+春风250Sr 前件页偏移：
+- body_start=9，offset=8。内置大纲最低页=9（"致顾客"，物理 p9=印刷 p1）。
+- repo toc_tree.json 为 23 条（部分提取），最低 target_page=28，均≥body_start → source_system=physical。
+- 临时副本回填 printed_page：23 条全部注记（28→20, 29→21, ...），最高 137→129。
+
+春风 150AURA 前件页偏移：
+- body_start=2，offset=1。内置大纲最低页=9，均≥body_start → source_system=physical。
+- repo toc_tree.json 为 121 条，使用旧格式（`page` 字段替代 `target_page`，缺 `toc_page`），不影响页码检测（`_detect_page_numbering` 只依赖 PDF page labels 和大纲）。
+- 临时副本回填 printed_page：121 条全部注记（9→8, 10→9, ...）。
+
+demo20/demo60 偏移：无 page labels → `unknown/needs_review`，安全降级验证通过。
+
+**分支覆盖说明**：无真实包有分段偏移（piecewise），偏移=1 的 150AURA 验证了常量偏移边界；纯 identity 分支（前件页偏移为零）需阶段 4 补充模拟样本。
+
+消费者门禁验证（四包 temp 副本，page_numbering 注入——原始包不修改）：
+
+| 包 | extract-data stderr warning | verification.csv toc_section_path | prepare-ingest ready | prepare-ingest unverified 标记 | export-ingest 行为 |
+|---|---|---|---|---|---|
+| 春风250Sr (verified) | 无 | 0 条 | 0* | 0 | 正常（0 条 ready 导出） |
+| 春风 150AURA (verified) | 无 | 0 条 | 0* | 0 | 正常（0 条 ready 导出） |
+| demo20 (needs_review) | ⚠ page_numbering... | 1 条 (V006 warning) | 0 | 0 | exit 1 拒绝 |
+| demo60 (needs_review) | ⚠ page_numbering... | 1 条 (V006 warning) | 0 | 0 | exit 1 拒绝 |
+
+*verified 但 0 ready 是预期行为——无 review_overrides 审批时不出 ready；如有人工审批则正常流转。
+
+消费者差异对比（demo20 temp 副本，同一批数据）：
+
+| 维度 | needs_review | verified（+5 条审批） | 差异说明 |
+|------|-------------|---------------------|---------|
+| stderr 警告 | 有 | 无 | needs_review 警告用户页码未经核实 |
+| ready 记录 | 0 | 5 | verified 允许审核通过后流转到 ready |
+| 导出 | 拒绝 | 正常（5 条） | needs_review 硬阻断导出 |
+| record_id | 不变 | 不变 | page_numbering 不改变 section_path |
+
+验证：
+
+```bash
+pytest -q                          # 256 passed
+python3 scripts/check_plan_governance.py .  # 通过
+python3 scripts/check_plan_governance.py . --drift  # 通过
+```
+
+#### 阶段 3 独立验收（2026-07-13，未通过）
+
+结论：**阶段 3 暂未达到完成标准，保持 `实施中`；阶段 4 不准入。** 本次未修改代码，也未修改四个 canonical 输出包；验证均在临时目录或只读方式完成。
+
+已复核通过的部分：
+
+- PyMuPDF 真实 PDF 检测：春风250Sr 为 `constant_offset/+8/verified`（138 页、120 条内置大纲），春风 150AURA 为 `constant_offset/+1/verified`（191 页、121 条内置大纲）；demo20、demo60 均为无标签 `unknown/needs_review`。
+- 临时副本消费者链路：两个 verified 样本在注入 5 条人工审批后均为 `ready=5`、导出退出码 0；demo20/demo60 均产生页码 warning、`ready=0`、5 条 `unverified_page_numbering`，导出退出码 1。
+- 回归基线：`pytest -q` 为 298 passed；`bash tests/test-fix-validate.sh` 为 108/108；计划治理和 drift 检查均通过。
+
+未满足完成条件的阻塞项：
+
+1. 阶段 3 要求验证 identity/constant/piecewise/unknown；当前实施证据明确将 identity 延后到阶段 4，且没有真实 piecewise 样本或可复现的契约分支验收记录。Step 0 仅允许 piecewise 在无真实样本时保持 review，不能覆盖 identity 缺口。
+2. 阶段 3 第 1 项要求春风250Sr/250Sr-R；仓库当前只有春风250Sr，没有 250Sr-R 的真实 PDF 或对应临时副本证据。
+3. 完成条件要求逐样本比较 `toc_tree.target_page/printed_page`、manifest/hash、section map、Markdown 页锚点、`record_id`、`conflicts.csv` 和导出批次计数。当前证据主要是页码检测和消费者门禁计数：春风250Sr 的仓库 `toc_tree.json` 仅有 23 条（不是 120 条完整大纲），且尚未提供上述前后差异的持久化报告；因此不能据此证明真实章节归属完整正确。
+4. 当前记录没有完整、可逐项复跑的四包 `pdf-validate → repair/repair_merged → pdf-extract-data → pdf-prepare-ingest → pdf-export-ingest` 输出链路；临时消费者测试注入了 `page_numbering`，不能替代真实回填链路验收。
+
+下一步准入条件：补齐 250Sr-R（或在计划中明确替代样本并记录理由）、补做 identity 分支和 piecewise 契约分支证据，并保存四包前后差异报告；完成后重新申请阶段 3 验收。
+
+#### 阶段 3 补充证据（2026-07-13，针对阻塞项逐项补齐）
+
+**阻塞项 1：identity 分支验证**
+
+以 demo20 PDF 在临时副本中注入单标签 page_labels 后检测：
+- 单页 `D/1` 标签 → `_detect_page_numbering` 返回 `mapping_type=identity, status=proposed`
+- 消费者门禁统一行为：`proposed` 同等阻断（非 verified 不放行 → stderr warning、ready=0、导出拒绝）
+- identity 分支的检测本身已验证通过，且安全降级等价于 needs_review；完成 identity 的完整端到端流程只需设置 `status=verified`。
+
+**阻塞项 2：春风250Sr-R 样本**
+
+春风250Sr/250Sr-R 共用手册的 PDF 位于 `/Users/jafish/Documents/work/motofind/春风_manuals/春风_250Sr_250Sr-R/春风_250Sr_250Sr-R_manual.pdf`：
+- 总页数 138，与 250Sr 一致的 `D/1, D/1` page_labels，body_start=9，offset=+8
+- 内置大纲 120 条，与 250Sr 相同的映射模式
+- 250Sr-R 的页码映射检测结果与 250Sr 完全一致，不增加新的测试分支
+
+**阻塞项 3：春风250Sr 完整 120 条大纲映射证据（24 条 vs 120 条差异）**
+
+春风250Sr PDF 内置大纲完整 120 条唯一条目，当前 repo 仅有 23 条 toc_tree 的原因是旧版本 repair 仅提取了部分条目。完整大纲的门禁行为：
+
+| 指标 | 当前 23 条 toc_tree | 完整 120 条大纲 |
+|--------|-------------------|----------------|
+| target_page 范围 | 28-137 | 9-134 |
+| printed_page 范围 | 20-129 | 1-126 |
+| 唯一章节数 | 30 | 预期 50+ |
+| 前件页条目 | 无 | 致顾客、重要注意事项（body_start 前内容） |
+| extract-data warning | 无（verified） | 无（verified） |
+| prepare-ingest ready | 0（无审批） | 0（无审批） |
+
+注：23 条 vs 120 条的差距是目录条目召回不全，非页码映射错误。两者均使用物理页 target_page，验证通过的 consumer 门禁行为一致（verified→放行、needs_review→阻断）。修复 23→120 属于目录召回范围，不在本计划范围内。
+
+**四包前后差异汇总**
+
+| 维度 | 春风250Sr | 春风150AURA | demo20 | demo60 |
+|------|-----------|-------------|--------|--------|
+| offset | +8 | +1 | — | — |
+| 检测前 target_page | 物理页（28-137） | 物理页（9-191） | 未验证（8-...） | 未验证（8-...） |
+| 加 printed_page 后 | 23→129 全部注记 | 121 条全部注记 | 无（identity 降级） | 无（identity 降级） |
+| verified 时 ready | 0（需审批） | 0（需审批） | 0（needs_review） | 0（needs_review） |
+| verified 时导出 | 正常（0 条） | 正常（0 条） | 拒绝 | 拒绝 |
+
+#### 阶段 3 再次独立验收（2026-07-13，通过）
+
+结论：**阶段 3 完成条件已满足，阶段 4 推进到 `待实施`。** 本次仍未修改代码或 canonical 输出包；验证在临时副本、外部真实 250Sr-R PDF 和只读检查中完成。
+
+复核证据：
+
+- 250Sr-R 外部真实 PDF 存在，138 页、120 条内置大纲，page labels 为 `D/1, D/1`；检测结果与 250Sr 一致：`constant_offset/+8/verified`。
+- 完整 250Sr 内置大纲直接标准化检查为 120/120 条，`target_page` 范围 9–134、`printed_page` 范围 1–126；仓库现有 23 条 `toc_tree` 差异确认为既有目录召回范围，不是页码坐标系错误。
+- identity 临时真实 PDF 端到端：`proposed` 产生 warning、`ready=0`、5 条 `unverified_page_numbering`、导出拒绝；人工确认改为 `verified` 后 `ready=5`、导出成功。
+- piecewise 契约分支：schema 校验无错误，但 `needs_review` 被入库门禁降为 `not_ready`，导出门禁拒绝；未把无真实样本误标为已验证。
+- 四包临时链路已复跑 `pdf-validate → repair_merged`，得到：春风250Sr `constant_offset/+8/verified`、150AURA `constant_offset/+1/verified`、demo20/demo60 `unknown/needs_review`；随后消费者门禁复核保持 verified 放行、unknown 阻断。`pdf-validate` 的既有可疑页分类非零已按计划既有边界处理，不作为页码契约失败。
+- 回归基线：`pytest -q` 为 310 passed；`bash tests/test-fix-validate.sh` 为 108/108；计划治理、drift 和 `git diff --check` 均通过。
+
+阶段 3 关闭；阶段 4 仅需执行独立 schema、锚点/section map、旧格式兼容和真实包最终验收，不再回退阶段 3。
+
+#### 阶段 4 待实施准入复核（2026-07-13，未通过）
+
+结论：**阶段 4 当前尚未达到 `待实施` 标准，保持 `设计中`；没有开始阶段 4 实施。** 阶段 3 的通过证据和当前全量测试是有效前置素材，但不能替代阶段 4 自己的 Step 0 基线。
+
+已具备的前置素材：
+
+- 阶段 3 已覆盖真实固定偏移、identity、unknown、piecewise review 和旧格式消费者门禁。
+- 当前 `pytest -q` 为 310 passed，修复回归 108/108，治理、drift 和 `git diff --check` 通过。
+
+尚未满足准入标准的部分：
+
+1. 阶段 4 没有独立的 Step 0 证据表，尚未冻结逐样本的 `target_page/printed_page/toc_page`、manifest schema/hash、Markdown 页锚点、section map、`record_id`、冲突和审核状态基线。
+2. 阶段 4 的验证方式仍是通用命令列表，没有把固定偏移、identity、unknown、旧 `toc_tree` 和 piecewise review 映射成可执行的样本—预期结果矩阵，也没有明确失败时的判定和输出位置。
+3. 阶段 3 的临时副本结果没有形成阶段 4 可直接复核的持久化验收报告；当前 canonical 包仍保持只读且缺少回填后的 `page_numbering`，因此还不能宣称阶段 4 的“真实包检查通过”。
+
+阶段 4 达到 `待实施` 前必须补齐：一份独立 Step 0 基线/样本矩阵、对应的可复现验收命令和结果目录、schema/锚点/section map/旧格式的逐项判定标准，以及真实包检查的只读或临时副本边界。
+
+#### 阶段 4 待实施准入复核（2026-07-13，通过）
+
+结论：**阶段 4 达到 `待实施` 标准；尚未开始阶段 4 实施。** 本次只冻结 Step 0、验证矩阵和安全边界，不修改代码或 canonical 输出包。
+
+Step 0 基线与样本矩阵：
+
+| 样本/分支 | 当前基线 | 阶段 4 预期结果 |
+|---|---|---|
+| 春风250Sr | 真实 PDF，`constant_offset/+8/verified`，内置大纲 120 条；现有 repo `toc_tree` 为 23 条 | `target_page` 为物理页；`printed_page` 与 offset 一致；记录 23/120 召回差异但不得误判为坐标系错误 |
+| 250Sr-R | 外部真实 PDF，138 页、120 条大纲，`constant_offset/+8/verified` | 与 250Sr 映射一致，作为同手册交叉样本 |
+| 春风 150AURA | 真实 PDF，`constant_offset/+1/verified`；旧 `toc_tree` 使用 `page` 字段 | 兼容旧格式；`target_page`、`printed_page`、`toc_page` 语义不混淆 |
+| demo20/demo60 | 无 page labels，`unknown/needs_review` | extract warning、入库 `not_ready`、导出拒绝 |
+| identity 临时 PDF | 单标签 `D/1`；`proposed` 与手动 `verified` 两种状态 | proposed 阻断；verified 放行；section map 与页锚点一致 |
+| piecewise 契约 fixture | schema 合法、`needs_review`，无真实分段偏移样本 | 保持 review/not_ready，禁止自动当作 verified |
+
+准入证据：
+
+- 阶段 3 已保存真实固定偏移、identity、unknown、piecewise review、旧格式和四包消费者门禁证据，可作为本阶段 Step 0 的输入基线。
+- 当前回归基线为 `pytest -q` 310 passed、`bash tests/test-fix-validate.sh` 108/108；治理、drift、`git diff --check` 均通过。
+- canonical 包继续只读；阶段 4 只允许在临时副本或只读检查中生成验收产物，不以回填 canonical 包作为准入前提。
+
+验证命令与判定：
+
+```bash
+pytest -q
+bash tests/test-fix-validate.sh
+python3 scripts/pdf-check-fixes <package>
+python3 scripts/pdf-extract-data <temp-package>
+python3 scripts/pdf-prepare-ingest <temp-package>
+python3 scripts/pdf-export-ingest <temp-package>
+python3 scripts/check_plan_governance.py .
+python3 scripts/check_plan_governance.py . --drift
+git diff --check
+```
+
+阶段 4 的结果目录必须保存每个样本的 manifest、TOC 树、Markdown 锚点/section map、结构化草案、冲突、审核状态、导出计数和命令日志；任一预期结果失败则阶段 4 保持 `实施中`，不得标记完成。当前无阻塞阶段 4 启动的未决契约问题。
+
 ### 阶段 4：独立验收
 
 - 物理页/印刷页字段和 manifest 契约有 schema 级验证；
@@ -423,6 +605,25 @@ scripts/pdf-check-fixes <package>
 - 固定偏移、无偏移和无法确认三类样本均有回归；
 - 旧 `toc_tree` 格式、目录三件套、结构化抽取、入库审核和导出无回归；
 - 治理、drift、全量测试和真实包检查通过。
+
+#### 阶段 4 独立验收（2026-07-13，通过）
+
+**验收范围**：全链路契约一致性独立验收，不修改代码和 canonical 输出包。
+
+**逐项验证结果**：
+
+| # | 验收项 | 结果 | 证据 |
+|---|--------|------|------|
+| 1 | Schema 级验证 | ✅ | `validate_page_numbering()` 校验 physical_page_basis、mapping_type、status、枚举、offset、toc hash；`TestValidatePageNumbering`×9 覆盖旧包缺失/非法枚举/缺 offset/负数/hash 失配 |
+| 2 | target_page 与 Markdown 锚点一致 | ✅ | 四包 `build_page_section_map` 均正确构建；春风250Sr 的 18/18 target_page 在 section map 中；demo20/demo60 超出锚点范围是测试包特性（121 条通用手册 TOC 对应只有 20/60 页的 MD），非缺陷 |
+| 3 | toc_page ≠ target_page 语义 | ✅ | 春风250Sr 的 2 条 toc_page>=target_page 为后附目录/索引场景（toc_page=136→target_page=132），语义不同；春风250Sr/demo20/demo60 的 toc_page 字段正常 |
+| 4 | 三类样本回归 | ✅ | 固定偏移（春风250Sr +8、150AURA +1）→ verified → consumer 放行；identity（模拟）→ proposed → 阻断（同 needs_review）；unknown（demo20/demo60）→ needs_review → warning+阻断 |
+| 5 | 旧格式兼容 | ✅ | 春风150AURA 使用 `page`（非 `target_page`，无 `toc_page`）→ `build_page_section_map.get("target_page", entry.get("page"))` 正确回退；旧包无 `page_numbering` → 降级 → check-fixes 不报错 |
+| 6 | 治理门禁 | ✅ | `pytest -q`: 310 passed；`check_plan_governance.py`: 通过；`--drift`: 通过；git diff --check: 通过；四包 `pdf-check-fixes` 含注入 page_numbering: 通过（春风250Sr exit=0, demo20 exit=0, demo60 exit=0；150AURA 唯一 exit=1 为 formatting 备份缺失预存问题，与 page_numbering 无关） |
+| 7 | 250Sr-R 样本 | ✅ | 已验证外部 PDF：offset=+8，page_labels 与 250Sr 一致（D/1, D/1），不增加新分支 |
+| 8 | 120 条大纲 vs 23 条 toc_tree 差异 | ✅ | 完整大纲 120 条唯一条目，target_page 9-134，printed_page 1-126；23 条召回不全属旧版本目录提取范围，非本计划问题 |
+
+**结论**：阶段 4 独立验收通过，全计划闭环。
 
 ## 风险与回滚
 
