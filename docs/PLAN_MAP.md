@@ -22,7 +22,7 @@
 | [modelpad-pdf-service-lifecycle](plans/modelpad-pdf-service-lifecycle.md) | 已完成 | 全阶段（0-3） | 2026-07-03 | ModelPad app、automated-pdf-pipeline、pdf-output-package-layout | [阶段 3 完成证据](plans/modelpad-pdf-service-lifecycle.md#阶段-3-完成证据2026-07-03) |
 | [modelpad-pdf-service-orchestration](plans/modelpad-pdf-service-orchestration.md) | 已完成 | 全阶段（0-3） | 2026-07-04 | modelpad-pdf-service-lifecycle、ModelPad API、pdf 模型配置 | [阶段 3 完成证据](plans/modelpad-pdf-service-orchestration.md#阶段-3-完成证据2026-07-04) |
 | [structured-data-extraction](plans/structured-data-extraction.md) | 已完成 | 全阶段（0-3） | 2026-07-02 | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 3 完成证据](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
-| [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 已完成 | 阶段 3：实际入库接口或外部系统边界 | 2026-07-02 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案 | [阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
+| [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 已完成 | 阶段 3：入库前批次导出与交付边界 | 2026-07-14 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案、春风250Sr 入库前批次 | [范围确认](plans/data-ingestion-pipeline.md#范围确认2026-07-14)、[阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
 | [conflict-context-ingestion-fix](plans/conflict-context-ingestion-fix.md) | 已完成 | 全阶段（0-3） | 2026-07-04 | structured-data-extraction、data-ingestion-pipeline、春风 150AURA 真实样本 | [阶段 3 完成证据](plans/conflict-context-ingestion-fix.md#阶段-3-完成证据2026-07-04) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | 2026-06-28 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | 2026-06-30 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
@@ -41,8 +41,9 @@
 | [pdf-merge-table-formatting](plans/pdf-merge-table-formatting.md) | 已完成 | 全阶段（0-4） | 2026-07-12 | pdf2md-fix-manual-workflow、pdf-auto-repair-before-merge、per-page-anchors、春风250Sr 87 表、demo20 11 表、demo60 29 表、181 个全量 pytest、38/38 阶段2回归、67/67 修复回归、三个包 check-fixes、幂等与失败回滚复核通过 | [阶段 4 再次独立验收复核](plans/pdf-merge-table-formatting.md#阶段-4-再次独立验收复核2026-07-12) |
 | [pdf-table-audit](plans/pdf-table-audit.md) | 已完成 | 阶段 4 独立验收通过，全计划闭环 | 2026-07-13 | pdf2md-fix-manual-workflow、pdf-merge-table-formatting、pdf-output-package-layout、PyMuPDF、现有 `scripts/pdf-table-fix` | [阶段 4 独立验收](plans/pdf-table-audit.md#阶段-4-独立验收2026-07-13通过) |
 | [toc-target-page-coordinate-fix](plans/toc-target-page-coordinate-fix.md) | 已完成 | 全阶段（0-4）已完成，全计划闭环 | 2026-07-13 | toc-page-physical-attribution-fix、pdf-extract-data-table-coverage、pdf-output-package-layout、pdf2md-fix-manual-workflow、阶段 0-4 逐项验收：页码检测/标准化/消费者门禁/真实样本/独立验收通过、310 tests pass、页码专项校验通过 | [阶段 4 再次独立复核](plans/toc-target-page-coordinate-fix.md#阶段-4-再次独立复核2026-07-13通过) |
-| [pdf-table-repair](plans/pdf-table-repair.md) | 待实施 | 阶段 3 | 2026-07-13 | pdf-table-audit、阶段 3 Step 0、样本矩阵和失败边界已冻结；阶段 2 apply/reject、manifest 同步、语义表格一致性豁免、失败字节级回滚已通过验收；125/125 shell、54/54 table repair、310 pytest | [阶段 3 待实施准入复核](plans/pdf-table-repair.md#阶段-3-待实施准入复核2026-07-13) |
-| [pdf-extract-data-table-coverage](plans/pdf-extract-data-table-coverage.md) | 候选 | 阶段 0：漏抽覆盖矩阵与审核边界冻结 | 2026-07-12 | structured-data-extraction、data-ingestion-pipeline、pdf2md-fix-manual-workflow、pdf-table-audit、pdf-table-repair、PyMuPDF | [Step 0 证据](plans/pdf-extract-data-table-coverage.md#背景与-step-0-证据) |
+| [pdf-table-repair](plans/pdf-table-repair.md) | 实施中 | 阶段 4：独立验收 | 2026-07-14 | pdf-table-audit、pdf-extract-data、pdf-prepare-ingest | canonical 已从 138 个非空分段完整重建，TOC 120/120；包级策略过滤 29 条纯数字 key 后，抽取 182 行，179 条已确认、3 条拒绝，0 冲突，入库前批次已重生成。业务产物通过，治理检查仍有历史已完成计划证据缺陷 | [用户确认后的入库前批次复核](plans/pdf-table-repair.md#用户确认后的入库前批次复核2026-07-14) |
+| [pdf-extract-data-table-coverage](plans/pdf-extract-data-table-coverage.md) | 实施中 | 阶段 1：通用网格展开与 LLM/配置驱动列语义 | 2026-07-14 | structured-data-extraction、data-ingestion-pipeline、pdf2md-fix-manual-workflow、pdf-table-audit、pdf-table-repair、PyMuPDF；当前 PDF 的列映射由包内 JSON 提供 | [Step 0 补充证据](plans/pdf-extract-data-table-coverage.md#step-0-补充证据2026-07-14) |
+| [llm-human-collaboration-migration](plans/llm-human-collaboration-migration.md) | 设计中 | 阶段 0：协作契约与基线冻结 | 2026-07-14 | `pdf2md-fix-manual-workflow`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`cli-only-migration`、ADR 0003 | 统一 `pdf2md` 主入口，迁移 `pdf2md-fix` 兼容入口，固化用户审批、LLM 编排和动态辅助脚本安全边界；当前尚未实施 skill 合并或动态脚本 harness | [阶段准入摘要](plans/llm-human-collaboration-migration.md#step-0-协作契约与基线冻结) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -73,6 +74,7 @@
 23. `pdf-table-repair`（指定页表格候选重建、人工确认与安全应用）
 24. `pdf-extract-data-table-coverage`（结构化抽取漏项补全与审核门禁）
 25. `toc-target-page-coordinate-fix`（印刷页码与 PDF 物理页码坐标系修复）
+26. `llm-human-collaboration-migration`（统一 `pdf2md` 入口、迁移 `pdf2md-fix`、固化用户/LLM/CLI/动态脚本协作边界）
 
 ## 依赖关系
 
@@ -124,6 +126,8 @@
 | pdf2md-fix-manual-workflow | pdf-output-package-layout | 复用输出包 `manifest.json`，将 Markdown、修复记录、逻辑表格和 hash 作为同步发布契约 |
 | pdf2md-fix-manual-workflow | pdf-merge | 在 canonical Markdown 生成阶段完成 HTML 表格 pretty-print，避免额外的 `*-formatted.md` 入口 |
 | pdf2md-fix-manual-workflow | pdf-auto-repair-before-merge | 复用现有 TOC 段级/合并级修复顺序，最终 manifest hash 必须覆盖所有 Markdown 后处理 |
+| llm-human-collaboration-migration | pdf2md-fix-manual-workflow、pdf-table-repair、pdf-extract-data-table-coverage、data-ingestion-pipeline | 将已完成的解析后修复、表格审核和入库前准备收敛为 LLM 编排的单一协作入口；不改变各专项计划的字段和状态事实源 |
+| llm-human-collaboration-migration | cli-only-migration、ADR 0003 | 沿用 CLI-only 执行边界，增加受控动态辅助脚本的协作和回滚契约，不新增 MCP |
 
 ## 替代、合并和废弃
 
@@ -149,7 +153,9 @@
 | PDF 服务生命周期将由 ModelPad app 托管 | 全阶段（0-3）已完成：脚本不再管理服务进程/shared 输出目录，`pdf-auto` 重跑失败安全兜底，`pdf-merge` 图片同名冲突检测 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 已解决 |
 | PDF 服务未启动时需要按需调用 ModelPad start/stop | 全阶段（0-3）已完成：helper 封装启停逻辑，三个入口已接入；无服务时自启、用完自停；已有服务时只复用不停止；失败路径可诊断 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、ModelPad API | 否 | 已解决 |
 | `pdf-prepare-ingest` 对真实手册表格产生冲突误报 | `conflict-context-ingestion-fix` 全阶段（0-3）已完成：上下文感知冲突判定 + rowspan 父级识别，春风样本冲突 35→0 组，已知误报全部消除 | `pdf-extract-data`、`pdf-prepare-ingest`、`conflicts.csv`、`ingest_ready.csv` | 否 | 已解决 |
+| LLM/人工协作入口仍分为 `pdf2md` 与 `pdf2md-fix` | 按 `llm-human-collaboration-migration` 阶段 1–3 迁移为 `pdf2md` 主入口，保留兼容跳转并通过真实 PDF 验收后再决定兼容入口状态 | skill 文档、用户协作方式、pdf2md-fix 兼容入口 | 是（本计划阶段 1–3） | 未解决 |
 | P4c 多模态 VLM 需本地模型选型与验收基准 | 页面基线、qwen3-vl-8b 单页探针、JSON mode 复测、10 页混合抽样及人工核对均完成 | `pdf-evaluation-suite` P4c、本地 VLM 后端 | 否 | 已解决 |
+| `pdf-table-repair` 阶段 4 治理收尾 | canonical 已从 138 个非空分段重建并完成 TOC/表格修复、抽取、人工审核和入库前批次生成；29 条纯数字 key 已由当前包级策略过滤，179 条已确认、3 条拒绝。治理检查仍报告历史已完成计划缺少 Step 0/测试覆盖率证据 | `pdf-table-repair`、治理检查 | 否（业务）；是（治理收尾） | 实施中 |
 
 ## 完成证据
 

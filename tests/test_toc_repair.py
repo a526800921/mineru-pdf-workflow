@@ -261,6 +261,57 @@ class TestRepairMerged(unittest.TestCase):
         self.assertIn("第一章正文", repaired)
         os.unlink(pdf)
 
+    def test_sparse_toc_pages_do_not_overwrite_intervening_body(self):
+        """稀疏目录页只替换自身，不能按首尾页范围覆盖中间正文。"""
+        doc = fitz.open()
+        p1 = doc.new_page(width=400, height=600)
+        p1.insert_text((72, 100), "Alpha........")
+        p1.insert_text((72, 130), "........1")
+        p2 = doc.new_page(width=400, height=600)
+        p2.insert_text((72, 100), "中间正文不得被目录修复覆盖")
+        p3 = doc.new_page(width=400, height=600)
+        p3.insert_text((72, 100), "Gamma........")
+        p3.insert_text((72, 130), "........3")
+        pdf = tempfile.mktemp(suffix=".pdf")
+        doc.save(pdf)
+        doc.close()
+
+        try:
+            md = self.tmpdir / "merged.md"
+            md.write_text(
+                "<!-- pages 1-1 -->\n\n旧目录一\n\n"
+                "<!-- pages 2-2 -->\n\n中间正文不得被目录修复覆盖\n\n"
+                "<!-- pages 3-3 -->\n\n旧目录三",
+                encoding="utf-8",
+            )
+            validate = _create_validate_json([
+                {
+                    "name": "p0001-0001", "start_page": 1, "end_page": 1,
+                    "page_type_summary": {"toc": 1},
+                    "pages": [{"page": 0, "page_type": "toc"}],
+                },
+                {
+                    "name": "p0002-0002", "start_page": 2, "end_page": 2,
+                    "page_type_summary": {"text": 1},
+                    "pages": [{"page": 1, "page_type": "text"}],
+                },
+                {
+                    "name": "p0003-0003", "start_page": 3, "end_page": 3,
+                    "page_type_summary": {"toc": 1},
+                    "pages": [{"page": 2, "page_type": "toc"}],
+                },
+            ])
+
+            self.assertEqual(repair_merged(Path(pdf), md, validate), 1)
+            repaired = md.read_text(encoding="utf-8")
+            self.assertIn("Alpha 1", repaired)
+            self.assertIn("Gamma 3", repaired)
+            self.assertIn("中间正文不得被目录修复覆盖", repaired)
+            self.assertNotIn("旧目录一", repaired)
+            self.assertNotIn("旧目录三", repaired)
+        finally:
+            os.unlink(pdf)
+
 
 class TestBuildMergedTocBlock(unittest.TestCase):
     """_build_merged_toc_block 输出验证。"""

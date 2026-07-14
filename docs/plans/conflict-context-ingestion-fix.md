@@ -130,6 +130,10 @@ Skill 同步：
 - 阶段 2 实际实现将 `page_start/page_end/source_block_id/table_id/row_index/parent_key/key_role` 带入 `ingest_ready.csv`，便于人工复核；`source_row_hash` 仍不纳入这些新增字段，以保持 `record_id` 稳定。
 - 旧 `review_overrides.csv` 因 `page_start` 由空变有值导致 hash 变化，已备份为 `review_overrides_v1.csv`。
 
+### 后续补充：重复项目的行级上下文（2026-07-14）
+
+春风250Sr p89 的“空滤器滤芯”和“火花塞”各有两条合法保养间隔行。表格归一化后它们共享 `model/section_path/page_start/source_block_id/table_id/parent_key/key`，但 `row_index` 不同；原 7 维 identity 会将其误报为冲突。现行补充契约将 `row_index` 纳入 identity，并在 `conflicts.csv` 输出该字段。该补充只消除同一表格内不同数据行的假冲突，不放宽跨上下文或同一行多值冲突的审核门禁。
+
 ### 阶段 1 完成证据（2026-07-04）
 
 通过项：

@@ -780,7 +780,7 @@ mkdir -p "$t/data"
 cat > "$t/data/quick_lookup_draft.csv" <<'EOFCSV'
 source_pdf,model,section_path,key,value,unit,page_start,page_end,evidence_text,confidence,status,notes,source_block_id,table_id,row_index,parent_key,key_role
 demo20.pdf,demo20,规格,发动机型号,A,cc,14,14,testA,medium,draft,html_table,html_table:1,html_table:1,1,,business_key
-demo20.pdf,demo20,规格,发动机型号,B,cc,14,14,testB,medium,draft,html_table,html_table:1,html_table:1,2,,business_key
+demo20.pdf,demo20,规格,发动机型号,B,cc,14,14,testB,medium,draft,html_table,html_table:1,html_table:1,1,,business_key
 EOFCSV
 cat > "$t/manifest.json" <<'EOFJSON'
 {"model":"test","files":{"markdown":"test.md","pdf":"demo20.pdf"},"formatting":{"schema_version":1,"mode":"merge_time","status":"verified","source_markdown_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
@@ -945,7 +945,7 @@ echo "--- R6: pdf-table-repair --apply ---"
 t=$(_mk)
 cp -R "$_d60/"* "$t/" 2>/dev/null || true
 rm -f "$t/data/manual_fixes.jsonl" "$t/data/table_repair_draft.jsonl"
-"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+"$_scripts"/pdf-table-repair "$t" --page 50 > /dev/null 2>&1
 fix_id=$(python3 -c "
 import json
 with open('$t/data/table_repair_draft.jsonl') as f:
@@ -1059,7 +1059,7 @@ echo "--- R8: 幂等 --apply ---"
 t=$(_mk)
 cp -R "$_d60/"* "$t/" 2>/dev/null || true
 rm -f "$t/data/manual_fixes.jsonl" "$t/data/table_repair_draft.jsonl"
-"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+"$_scripts"/pdf-table-repair "$t" --page 50 > /dev/null 2>&1
 fix_id=$(python3 -c "
 import json
 with open('$t/data/table_repair_draft.jsonl') as f:
@@ -1103,7 +1103,7 @@ echo "--- R9: hash 漂移拒绝 apply ---"
 t=$(_mk)
 cp -R "$_d60/"* "$t/" 2>/dev/null || true
 rm -f "$t/data/manual_fixes.jsonl" "$t/data/table_repair_draft.jsonl"
-"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+"$_scripts"/pdf-table-repair "$t" --page 50 > /dev/null 2>&1
 fix_id=$(python3 -c "
 import json
 with open('$t/data/table_repair_draft.jsonl') as f:
@@ -1135,7 +1135,7 @@ echo "--- R10: apply 失败回滚 manual_fixes ---"
 t=$(_mk)
 cp -R "$_d60/"* "$t/" 2>/dev/null || true
 rm -f "$t/data/table_repair_draft.jsonl"
-"$_scripts"/pdf-table-repair "$t" --page 47 > /dev/null 2>&1
+"$_scripts"/pdf-table-repair "$t" --page 50 > /dev/null 2>&1
 fix_id=$(python3 -c "
 import json
 with open('$t/data/table_repair_draft.jsonl') as f:
@@ -1167,6 +1167,61 @@ manual_after=$(shasum -a 256 "$t/data/manual_fixes.jsonl" | awk '{print $1}')
 [ "$md_before" = "$md_after" ] && _pass "R10: Markdown 字节级回滚" || _fail "R10: Markdown 未回滚"
 [ "$manifest_before" = "$manifest_after" ] && _pass "R10: manifest 字节级回滚" || _fail "R10: manifest 未回滚"
 [ "$manual_before" = "$manual_after" ] && _pass "R10: manual_fixes 字节级回滚" || _fail "R10: manual_fixes 未回滚"
+
+# ── R11: 空页 rebuild 写入页锚点后的内容并保持幂等 ──
+echo ""
+echo "--- R11: 空页 rebuild ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+md_rel=$(python3 -c "import json; print(json.load(open('$t/manifest.json')).get('files',{}).get('markdown',''))")
+python3 -c "
+from pathlib import Path
+p=Path('$t')/'$md_rel'
+s=p.read_text(encoding='utf-8')
+start=s.index('<!-- pages 14-14 -->')
+end=s.index('<!-- pages ', start + 1)
+s=s[:start] + '<!-- pages 14-14 -->\\n\\n' + s[end:]
+p.write_text(s, encoding='utf-8')
+" 2>/dev/null
+mkdir -p "$t/data"
+cat > "$t/data/manual_fixes.jsonl" <<'EOF'
+{"fix_id":"empty-page-rebuild","fix_type":"rebuild_table","review_action":"fix_md","status":"applied","pages":[14],"allow_empty_page":true,"before":"__EMPTY_PAGE__","after":"## 重建表格\\n\\n<table><tr><td>项目</td></tr></table>\\n","evidence":"PDF 确认的空页表格"}
+EOF
+_inject "$t" "$t/data/manual_fixes.jsonl" "applied" "none" > /dev/null
+out="$($_scripts/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R11: 空页 rebuild 首次应用通过"
+grep -q "<table><tr><td>项目</td></tr></table>" "$t/$md_rel" && _pass "R11: 空页写入 after 内容" || _fail "R11: 空页未写入 after 内容"
+out="$($_scripts/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R11: 空页 rebuild 重复应用幂等"
+_grep "$out" "幂等跳过" "R11: 重复应用报告幂等跳过"
+
+# ── R12: 非空页按正文 hash 通用替换并保持幂等 ──
+echo ""
+echo "--- R12: 非空页正文 hash 替换 ---"
+t=$(_mk)
+cp -R "$_d20/"* "$t/" 2>/dev/null || true
+md_rel=$(python3 -c "import json; print(json.load(open('$t/manifest.json')).get('files',{}).get('markdown',''))")
+python3 -c "
+from pathlib import Path
+import hashlib, json
+p=Path('$t')/'$md_rel'
+s=p.read_text(encoding='utf-8')
+start=s.index('<!-- pages 14-14 -->')
+end=s.index('<!-- pages ', start + 1)
+block=s[start:end]
+body=block[block.index('\\n')+1:]
+sep='\\n\\n---\\n\\n'
+body=body[:body.rfind(sep)] if sep in body else body
+fix={'fix_id':'nonempty-page-body-replace','fix_type':'rebuild_table','review_action':'fix_md','status':'applied','pages':[14],'replace_page_body':True,'before':'__PAGE_BODY__','before_block_sha256':hashlib.sha256(body.encode()).hexdigest(),'after':'## 人工确认后的正文\\n\\n<table><tr><td>项目</td></tr></table>\\n','evidence':'页正文 hash 锁定'}
+(Path('$t')/'data'/'manual_fixes.jsonl').write_text(json.dumps(fix,ensure_ascii=False)+'\\n',encoding='utf-8')
+" 2>/dev/null
+_inject "$t" "$t/data/manual_fixes.jsonl" "applied" "none" > /dev/null
+out="$($_scripts/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R12: 非空页正文 hash 替换通过"
+grep -q "人工确认后的正文" "$t/$md_rel" && _pass "R12: 非空页正文已替换" || _fail "R12: 非空页正文未替换"
+out="$($_scripts/pdf-apply-fixes "$t" 2>&1)" && rc=0 || rc=$?
+_ck0 $rc "R12: 非空页正文重复应用幂等"
+_grep "$out" "幂等跳过" "R12: 重复应用报告幂等跳过"
 
 # ── 汇总 ──
 echo ""

@@ -658,3 +658,6 @@ python3 scripts/check_plan_governance.py .
 python3 scripts/check_plan_governance.py . --drift
 git diff --check
 ```
+#### 春风250Sr 目录召回补充复核（2026-07-14）
+
+此前记录的“23/120 条目”是旧 `repair_merged` 在主目录与末尾字母索引重名时的实际召回基线，不是目标状态。后续修正 `toc_repair` 的重复标题顺序归属、主目录连续页选择和稀疏目录页安全替换后，春风250Sr 正式包已复核为：主目录 p2-p8，`toc_tree.json`/`toc.md` 120/120 条；`target_page` 仍为物理页，`printed_page` 仍保留原始目录页码，manifest `constant_offset/+8/verified` 不变。该补充只更新真实样本证据，不改变阶段 4 已冻结的页码坐标系契约。

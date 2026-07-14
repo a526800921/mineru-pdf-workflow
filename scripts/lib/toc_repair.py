@@ -164,6 +164,7 @@ def _assign_to_toc_pages(
         return assigned
 
     review = []
+    last_outline_page = min(toc_page_nums) if toc_page_nums else None
     page_keys = None  # 完整行匹配所需，仅当存在缺 toc_page 的条目时才懒构建
 
     for e in entries:
@@ -180,6 +181,20 @@ def _assign_to_toc_pages(
         hits = [pn for pn in toc_page_nums if key in page_keys[pn]]
         if len(hits) == 1:
             assigned[hits[0]].append(e)
+            if e.get("source") == "outline":
+                last_outline_page = max(last_outline_page or hits[0], hits[0])
+        elif len(hits) > 1 and e.get("source") == "outline":
+            # 内置大纲保留完整目录顺序，但同名标题也会出现在末尾字母索引中。
+            # 按大纲顺序选择不早于上一个已归属目录页的最早命中页。
+            ordered_hits = [
+                pn for pn in hits if pn >= (last_outline_page or hits[0])
+            ]
+            if ordered_hits:
+                target_page = ordered_hits[0]
+                assigned[target_page].append(e)
+                last_outline_page = target_page
+            else:
+                review.append(e)
         else:
             # 3. 0 或多页命中 → 无法唯一归属，进入 review（不强制分配）
             review.append(e)
@@ -210,6 +225,110 @@ def _build_merged_toc_block(
             lines.append(f"{indent}- {e['title']} {e['page']}")
         lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _toc_page_runs(page_nums: list[int]) -> list[list[int]]:
+    """将目录候选页按物理页连续性分组。"""
+    runs: list[list[int]] = []
+    for page in sorted(set(page_nums)):
+        if not runs or page != runs[-1][-1] + 1:
+            runs.append([page])
+        else:
+            runs[-1].append(page)
+    return runs
+
+
+def _select_outline_toc_pages(doc, toc_page_nums: list[int], entries: list[dict]) -> list[int]:
+    """选择主目录连续页，排除末尾字母索引页，并补入相邻混合页。"""
+    if not toc_page_nums:
+        return []
+
+    outline_keys = {_normalize_title(e["title"]) for e in entries}
+    candidates = set(toc_page_nums)
+    for page in list(candidates):
+        for neighbor in (page - 1, page + 1):
+            if neighbor < 1 or neighbor > doc.page_count or neighbor in candidates:
+                continue
+            neighbor_entries = _extract_entries_from_page(doc, neighbor - 1)
+            if any(_normalize_title(e["title"]) in outline_keys for e in neighbor_entries):
+                candidates.add(neighbor)
+
+    runs = _toc_page_runs(sorted(candidates))
+    if len(runs) == 1:
+        return runs[0]
+
+    def run_score(run: list[int]) -> tuple[int, int]:
+        keys = set()
+        for page in run:
+            keys.update(
+                _normalize_title(e["title"])
+                for e in _extract_entries_from_page(doc, page - 1)
+            )
+        return (len(outline_keys & keys), -run[0])
+
+    return max(runs, key=run_score)
+
+
+def _replace_toc_page_blocks(
+    md_text: str,
+    toc_page_nums: list[int],
+    by_page: dict[int, list],
+    doc,
+    preserve_pages: set[int] | None = None,
+) -> str:
+    """只替换实际目录页块，保留目录页之间的正文。"""
+    anchor_re = re.compile(r"^<!-- pages (\d+)-(\d+) -->\s*$", re.MULTILINE)
+    anchors = [
+        (int(m.group(1)), int(m.group(2)), m.start(), m.end())
+        for m in anchor_re.finditer(md_text)
+    ]
+    replacements = []
+    first_page = min(toc_page_nums)
+    selected = set(toc_page_nums)
+    preserve_pages = preserve_pages or set()
+
+    for start, end, pos, anchor_end in anchors:
+        pages = [p for p in range(start, end + 1) if p in selected]
+        if not pages:
+            continue
+        if len(pages) != end - start + 1:
+            # 混合段不可安全整段替换，避免覆盖段内正文。
+            continue
+
+        next_pos = next((a[2] for a in anchors if a[2] > pos), len(md_text))
+        old_block = md_text[pos:next_pos]
+        lines = [f"<!-- pages {start}-{end} -->"]
+        if start == first_page:
+            lines.extend(["## 目录", ""])
+        for page in pages:
+            for entry in by_page.get(page, []):
+                indent = "  " * entry["depth"]
+                lines.append(f"{indent}- {entry['title']} {entry['page']}")
+        generated = "\n".join(lines) + "\n"
+
+        # 相邻混合页可能同时包含免责声明等正文；只删除其旧目录行。
+        native_entries = (
+            _extract_entries_from_page(doc, start - 1)
+            if start == end and start in preserve_pages
+            else []
+        )
+        if native_entries and old_block.strip() != f"<!-- pages {start}-{end} -->":
+            body = old_block[old_block.find("\n") + 1:]
+            title_keys = {_normalize_title(e["title"]) for e in native_entries}
+            kept = []
+            for line in body.splitlines():
+                normalized = _normalize_title(line)
+                if any(key in normalized and re.search(r"\d+", line) for key in title_keys):
+                    continue
+                kept.append(line)
+            remainder = "\n".join(kept).strip()
+            if remainder:
+                generated = generated.rstrip() + "\n\n" + remainder + "\n"
+        replacements.append((pos, next_pos, generated))
+
+    for start, end, replacement in reversed(replacements):
+        md_text = md_text[:start] + replacement + md_text[end:]
+    return md_text
 
 
 def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> int:
@@ -258,12 +377,17 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
         doc.close()
         return 0
 
-    first_toc = min(all_toc_pages)
-    last_toc = max(all_toc_pages)
+    raw_toc_page_nums = sorted(all_toc_pages)
+    toc_page_nums = (
+        _select_outline_toc_pages(doc, raw_toc_page_nums, entries)
+        if source == "PDF 内置大纲"
+        else raw_toc_page_nums
+    )
+    first_toc = min(toc_page_nums)
+    last_toc = max(toc_page_nums)
     md_text = merged_md_path.read_text(encoding="utf-8")
 
     # 按实际目录页分配条目
-    toc_page_nums = sorted(all_toc_pages)
     by_page = _assign_to_toc_pages(entries, doc, toc_page_nums)
     _backfill_toc_page(by_page)  # 将归属物理页回填到 entries 的 toc_page
     # 已归属有序条目：toc.md/toc_tree 与合并 md 目录块同源，排除未归属条目
@@ -276,39 +400,11 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
     # 同步更新 by_page 中对应条目的 page 值（_normalize_entries 原地修改 assigned，
     # 但 by_page 中的条目对象与 assigned 是同一引用，所以已同步）
 
-    # 构造替换用 TOC 块
-    toc_block = _build_merged_toc_block(first_toc, last_toc, by_page)
-
-    # 定位替换范围：用 `<!-- pages {N}-... -->` 段级锚点替代旧的逐页锚点
-    seg_anchor_re = re.compile(r"^<!-- pages (\d+)-(\d+) -->\s*$", re.MULTILINE)
-    all_seg_anchors = [(int(a), int(b), m.start(), m.end())
-                       for m in seg_anchor_re.finditer(md_text)
-                       for a, b in [(int(m.group(1)), int(m.group(2)))]]
-
-    # 找到页 first_toc 所在的段级锚点位置（锚点页号 ≤ first_toc ≤ 锚点末页）
-    start_anchor = next(
-        (s, e, pos, end) for s, e, pos, end in all_seg_anchors
-        if s <= first_toc <= e
+    # 只替换实际目录页，不按 first_toc-last_toc 连续范围覆盖正文页。
+    preserve_pages = set(toc_page_nums) - set(raw_toc_page_nums)
+    new_text = _replace_toc_page_blocks(
+        md_text, toc_page_nums, by_page, doc, preserve_pages=preserve_pages
     )
-    idx_start = start_anchor[2]  # pos
-    start_anchor_end = start_anchor[3]  # end
-
-    # 找到页 last_toc + 1 所在的段级锚点（锚点范围外则为文件尾）
-    next_page = last_toc + 1
-    try:
-        end_anchor = next(
-            (s, e, pos, end) for s, e, pos, end in all_seg_anchors
-            if s <= next_page <= e
-        )
-        idx_end = end_anchor[2]  # pos
-    except StopIteration:
-        idx_end = -1
-
-    if idx_end != -1:
-        new_text = md_text[:idx_start] + toc_block + md_text[idx_end:]
-    else:
-        # 最后一页无后续锚点，替换到文件尾
-        new_text = md_text[:idx_start] + toc_block
 
     merged_md_path.write_text(new_text, encoding="utf-8")
 
@@ -739,12 +835,17 @@ def repair(pdf_path: Path, segments_dir: Path, validate_tmp: str) -> int:
         return 0
 
     # 收集所有物理目录页，按物理页归属条目（与 repair_merged 同一规则）
-    toc_page_nums = sorted({
+    raw_toc_page_nums = sorted({
         p["page"] + 1
         for seg in toc_segs
         for p in seg.get("pages", [])
         if p.get("page_type") == "toc"
     })
+    toc_page_nums = (
+        _select_outline_toc_pages(doc, raw_toc_page_nums, entries)
+        if source == "PDF 内置大纲"
+        else raw_toc_page_nums
+    )
     by_page = _assign_to_toc_pages(entries, doc, toc_page_nums) if toc_page_nums else None
     if by_page:
         _backfill_toc_page(by_page)

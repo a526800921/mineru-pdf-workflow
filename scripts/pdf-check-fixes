@@ -911,7 +911,7 @@ def validate_table_candidates(manifest: dict, pkg_dir: Path) -> list[str]:
 
 
 _VALID_REPAIR_TYPES = frozenset({
-    "pretty_print", "fill_missing_text", "structure_warning",
+    "pretty_print", "fill_missing_text", "structure_warning", "rebuild_table",
 })
 
 

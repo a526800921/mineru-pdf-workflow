@@ -6,6 +6,7 @@
 
 import importlib.util
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,15 +28,13 @@ _repair = _load_module(os.path.join(_scripts_dir, "pdf-table-repair"))
 _build_fix_id = _repair._build_fix_id
 _build_table_id = _repair._build_table_id
 _classify_repair_types = _repair._classify_repair_types
-_detect_missing_text = _repair._detect_missing_text
 _compress_excessive_columns = _repair._compress_excessive_columns
 _parse_simple_html = _repair._parse_simple_html
-_extract_html_cell_texts = _repair._extract_html_cell_texts
 _detect_cross_page_candidates = _repair._detect_cross_page_candidates
 _generate_draft_for_repair_type = _repair._generate_draft_for_repair_type
+_generate_drafts = _repair._generate_drafts
 _verify_anchor_uniqueness = _repair._verify_anchor_uniqueness
 _compute_expected_hit_count = _repair._compute_expected_hit_count
-_generate_alignment_from_bbox = _repair._generate_alignment_from_bbox
 
 
 # ── TestBuildFixId ─────────────────────────────────────
@@ -140,34 +139,6 @@ class TestClassifyRepairTypes(unittest.TestCase):
         self.assertEqual(types, [])
 
 
-# ── TestDetectMissingText ─────────────────────────────
-
-
-class TestDetectMissingText(unittest.TestCase):
-    def test_text_in_pdf_not_in_html(self):
-        pdf = "图例 序号 A B C"
-        html = ["A", "B", "C"]
-        missing = _detect_missing_text(pdf, html)
-        self.assertIn("图例", missing)
-        self.assertIn("序号", missing)
-        self.assertEqual(len(missing), 2)
-
-    def test_all_text_present(self):
-        pdf = "A B C"
-        html = ["A", "B", "C"]
-        missing = _detect_missing_text(pdf, html)
-        self.assertEqual(missing, [])
-
-    def test_empty_pdf_text(self):
-        missing = _detect_missing_text("", ["A", "B"])
-        self.assertEqual(missing, [])
-
-    def test_empty_html_texts(self):
-        missing = _detect_missing_text("ABC XYZ", [])
-        self.assertIn("ABC", missing)
-        self.assertIn("XYZ", missing)
-
-
 # ── TestParseSimpleHtml ───────────────────────────────
 
 
@@ -193,29 +164,6 @@ class TestParseSimpleHtml(unittest.TestCase):
                 "<tr><td>3</td><td>4</td></tr></table>")
         rows = _parse_simple_html(html)
         self.assertEqual(len(rows), 2)
-
-
-# ── TestExtractHtmlCellTexts ──────────────────────────
-
-
-class TestExtractHtmlCellTexts(unittest.TestCase):
-    def test_basic(self):
-        html = "<table><tr><td>Hello</td><td>World</td></tr></table>"
-        texts = _extract_html_cell_texts(html)
-        self.assertEqual(texts, ["Hello", "World"])
-
-    def test_with_th(self):
-        html = "<table><tr><th>Header</th><td>Data</td></tr></table>"
-        texts = _extract_html_cell_texts(html)
-        self.assertEqual(texts, ["Header", "Data"])
-
-    def test_empty(self):
-        self.assertEqual(_extract_html_cell_texts(""), [])
-
-    def test_nested_tags(self):
-        html = "<table><tr><td><b>bold</b> text</td></tr></table>"
-        texts = _extract_html_cell_texts(html)
-        self.assertEqual(texts, ["bold text"])
 
 
 # ── TestCompressExcessiveColumns ──────────────────────
@@ -364,9 +312,7 @@ class TestGenerateDraftStructure(unittest.TestCase):
             "source_segment", "source_candidate_id",
             "source_pdf_sha256", "source_markdown_sha256",
             "before_html", "draft_html", "fallback_html",
-            "pdf_text", "page_words",
-            "missing_text", "expected_hit_count",
-            "alignment_candidates", "warnings",
+            "pdf_text", "missing_text", "expected_hit_count", "warnings",
         ]
         for field in required:
             self.assertIn(field, draft, f"缺少必需字段：{field}")
@@ -381,7 +327,6 @@ class TestGenerateDraftStructure(unittest.TestCase):
         )
         self.assertEqual(draft["repair_type"], "fill_missing_text")
         self.assertTrue(len(draft["missing_text"]) > 0)
-        self.assertTrue(len(draft["alignment_candidates"]) > 0)
 
     def test_structure_warning_draft(self):
         draft = _generate_draft_for_repair_type(
@@ -427,6 +372,35 @@ class TestVerifyAnchorUniqueness(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+# ── TestNoOpPrettyPrint ────────────────────────────────
+
+
+class TestNoOpPrettyPrint(unittest.TestCase):
+    def test_already_formatted_table_is_not_actionable_draft(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            html = "<table><tr><td>已格式化</td></tr></table>"
+            (root / "doc.md").write_text(
+                f"<!-- pages 1-1 -->\n{html}\n", encoding="utf-8")
+            candidate = {
+                "candidate_id": "pkg_p0001",
+                "page": 1,
+                "page_anchor": "<!-- pages 1-1 -->",
+                "segment": "p0001-0001",
+                "signals": ["excessive_columns"],
+                "candidate_type": "structural",
+                "table_stats": {"row_count": 1, "col_count": 8192},
+                "original_html": html,
+                "fallback_html": "",
+                "missing_text": [],
+            }
+            manifest = {"files": {"markdown": "doc.md"}}
+            drafts = _generate_drafts(root, manifest, [candidate], None)
+            self.assertFalse(
+                any(d["repair_type"] == "pretty_print" for d in drafts)
+            )
+
+
 # ── TestComputeExpectedHitCount ───────────────────────
 
 
@@ -449,39 +423,6 @@ class TestComputeExpectedHitCount(unittest.TestCase):
         count = _compute_expected_hit_count(
             md, "<!-- pages 5-5 -->", "<table>dup</table>")
         self.assertEqual(count, 2)
-
-
-# ── TestGenerateAlignmentFromBbox ─────────────────────
-
-
-class TestGenerateAlignmentFromBbox(unittest.TestCase):
-    def test_bbox_maps_to_column(self):
-        missing = ["刹车", "油门"]
-        page_words = [
-            {"text": "刹车", "x0": 50, "y0": 100, "x1": 80, "y1": 115},
-            {"text": "油门", "x0": 300, "y0": 100, "x1": 330, "y1": 115},
-        ]
-        result = _generate_alignment_from_bbox(missing, page_words, 3)
-        self.assertEqual(len(result), 2)
-        # "刹车" x0=50, page_width=max(x1)=330 → col 1
-        self.assertEqual(result[0]["text"], "刹车")
-        self.assertEqual(result[0]["candidate_column"], 1)
-        self.assertEqual(result[0]["confidence"], "low")
-        # "油门" x0=300, page_width=330 → col 3
-        self.assertEqual(result[1]["text"], "油门")
-        self.assertEqual(result[1]["candidate_column"], 3)
-
-    def test_no_bbox_fallback_to_modulo(self):
-        missing = ["missing1", "missing2"]
-        result = _generate_alignment_from_bbox(missing, [], 3)
-        self.assertEqual(len(result), 2)
-        self.assertIn("未找到 bbox", result[0]["reason"])
-        self.assertEqual(result[0]["candidate_column"], 1)
-        self.assertEqual(result[1]["candidate_column"], 2)
-
-    def test_empty_missing(self):
-        result = _generate_alignment_from_bbox([], [{"text": "a", "x0": 10}], 3)
-        self.assertEqual(result, [])
 
 
 # ── TestDraftNewFields ────────────────────────────────
@@ -513,12 +454,10 @@ class TestDraftNewFields(unittest.TestCase):
         draft = _generate_draft_for_repair_type(
             self.candidate, "fill_missing_text", "demo60",
             self.source_shas, {},
-            page_words=[{"text": "图例", "x0": 50, "x1": 80}],
             md_text="<!-- pages 47-47 -->\n<table>A</table>\n<!-- pages 48-48 -->",
         )
         self.assertEqual(draft["fallback_html"],
                          "<table><tr><td>fallback</td></tr></table>")
-        self.assertIn("page_words", draft)
         self.assertIsInstance(draft["expected_hit_count"], int)
         self.assertIn("图例", draft["missing_text"])
 
@@ -527,7 +466,6 @@ class TestDraftNewFields(unittest.TestCase):
         draft = _generate_draft_for_repair_type(
             self.candidate, "pretty_print", "demo60",
             self.source_shas, {},
-            page_words=[],
             md_text="<!-- pages 47-47 -->\nother content\n<!-- pages 48-48 -->",
         )
         self.assertEqual(draft["expected_hit_count"], 0)

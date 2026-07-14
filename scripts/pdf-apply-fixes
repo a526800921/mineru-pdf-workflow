@@ -92,6 +92,9 @@ def apply_single_fix(md_text: str, fix: dict) -> tuple[str, list[str], bool]:
     before = fix.get("before", "")
     after = fix.get("after", "")
     fix_id = fix.get("fix_id", "?")
+    repair_type = fix.get("fix_type", "")
+    allow_empty_page = fix.get("allow_empty_page") is True
+    replace_page_body = fix.get("replace_page_body") is True
 
     if not before:
         return md_text, [f"修复 {fix_id}: before 为空，跳过"], False
@@ -116,37 +119,106 @@ def apply_single_fix(md_text: str, fix: dict) -> tuple[str, list[str], bool]:
 
         block_start, block_end, block_text = block
 
-        # expected_hit_count 门禁：预期命中次数与实际不一致时拒绝
-        expected_hit = fix.get("expected_hit_count")
-        if expected_hit is not None and isinstance(expected_hit, int) and expected_hit > 0:
-            actual_hit = block_text.count(before)
-            if actual_hit != expected_hit:
+        # 完整合并后，异常表格页可能不是空页，但人工已经确认应以整页
+        # 内容替换。配置只携带页正文 hash，不把具体 PDF 语义写进脚本。
+        if replace_page_body:
+            if before != "__PAGE_BODY__":
                 errors.append(
-                    f"修复 {fix_id}: page {page}"
-                    f" 预期命中次数 {expected_hit}"
-                    f" 与实际 {actual_hit} 不一致，"
-                    "Markdown 可能已被中间修改，拒绝应用"
+                    f"修复 {fix_id}: replace_page_body 必须使用 before=__PAGE_BODY__"
+                )
+                continue
+            expected_hash = fix.get("before_block_sha256")
+            if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+                errors.append(
+                    f"修复 {fix_id}: replace_page_body 缺少有效 before_block_sha256"
+                )
+                continue
+            first_newline = block_text.find("\n")
+            if first_newline < 0:
+                errors.append(f"修复 {fix_id}: 页锚点缺少正文边界")
+                continue
+            body_start = first_newline + 1
+            separator = "\n\n---\n\n"
+            separator_start = block_text.rfind(separator)
+            if separator_start >= body_start:
+                page_body = block_text[body_start:separator_start]
+                suffix = block_text[separator_start:]
+            else:
+                page_body = block_text[body_start:]
+                suffix = ""
+            actual_hash = hashlib.sha256(page_body.encode("utf-8")).hexdigest()
+            if actual_hash != expected_hash:
+                if after == page_body:
+                    continue
+                errors.append(
+                    f"修复 {fix_id}: page {page} 正文 hash {actual_hash[:16]}..."
+                    f" 与配置 {expected_hash[:16]}... 不一致，拒绝整页替换"
+                )
+                continue
+            if not after:
+                errors.append(f"修复 {fix_id}: replace_page_body 的 after 为空")
+                continue
+            new_block = block_text[:body_start] + after + suffix
+            new_md = md_text[:block_start] + new_block + md_text[block_end:]
+            post_errors = verify_anchor_uniqueness(new_md)
+            if post_errors:
+                errors.append(
+                    f"修复 {fix_id}: page {page} 后置校验 — 页锚点不再唯一"
+                )
+                continue
+            md_text = new_md
+            has_changes = True
+            continue
+
+        # 空页 rebuild：仅允许明确声明的语义表格修复，before 使用
+        # 固定哨兵 __EMPTY_PAGE__，实际替换只追加到现有页锚点之后。
+        # 这样不会把页锚点包含在 before/after 中，保证重复 apply 幂等。
+        empty_page_rebuild = False
+        if (
+            allow_empty_page
+            and repair_type in ("rebuild_table", "cross_page_table")
+            and before == "__EMPTY_PAGE__"
+        ):
+            first_newline = block_text.find("\n")
+            page_body = block_text[first_newline + 1:] if first_newline >= 0 else ""
+            if not page_body.strip():
+                if after in block_text:
+                    continue
+                new_block = block_text + after
+                empty_page_rebuild = True
+
+        if not empty_page_rebuild:
+            # expected_hit_count 门禁：预期命中次数与实际不一致时拒绝
+            # 在页块范围内查找 before
+            count = block_text.count(before)
+            if count == 0:
+                # 幂等情况：before 已被替换，检查 after 是否存在
+                if after in block_text:
+                    continue  # 已应用，跳过
+                errors.append(
+                    f"修复 {fix_id}: page {page} 页块内未找到 before 文本"
+                    "（也未检测到已应用标记）"
                 )
                 continue
 
-        # 在页块范围内查找 before
-        count = block_text.count(before)
-        if count == 0:
-            # 幂等情况：before 已被替换，检查 after 是否存在
-            if after in block_text:
-                continue  # 已应用，跳过
-            errors.append(
-                f"修复 {fix_id}: page {page} 页块内未找到 before 文本"
-                "（也未检测到已应用标记）"
-            )
-            continue
+            expected_hit = fix.get("expected_hit_count")
+            if expected_hit is not None and isinstance(expected_hit, int) and expected_hit > 0:
+                if count != expected_hit:
+                    errors.append(
+                        f"修复 {fix_id}: page {page}"
+                        f" 预期命中次数 {expected_hit}"
+                        f" 与实际 {count} 不一致，"
+                        "Markdown 可能已被中间修改，拒绝应用"
+                    )
+                    continue
 
         # 记录页外内容（替换前）
         before_prefix = md_text[:block_start]
         before_suffix = md_text[block_end:]
 
-        # 在页块范围内替换
-        new_block = block_text.replace(before, after, 1)
+        # 普通修复在页块内替换；空页 rebuild 已在上面构造 new_block。
+        if not empty_page_rebuild:
+            new_block = block_text.replace(before, after, 1)
 
         # 替换后新页块的结束位置（长度可能因替换改变）
         new_suffix_start = block_start + len(new_block)

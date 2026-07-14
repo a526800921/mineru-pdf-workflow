@@ -66,6 +66,7 @@ MODELPAD_PDF_START_TIMEOUT=120
     pXXXX-XXXX-fallback/  ← 页级质量 fallback 候选，与原始页并存
   images/                  ← 提取的图片（预留）
   data/                    ← 结构化数据
+    extraction_overrides.json ← LLM/人工确认的表格列语义和包级抽取策略配置（可选）
     quick_lookup_draft.csv
     verification.csv
     fixtures_result.md
@@ -97,15 +98,18 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-extract-data /path/to` 写入 `<pdf_dir>/data/`。
 - `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
 - `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
+- 当现有 CLI 无法安全完成一个明确且有限的 PDF 特定操作时，LLM 可以先组合现有 CLI，再生成一次性或包级动态辅助脚本；运行前必须备份目标派生产物、记录 hash、先 dry-run、限制页锚点/record_id/文件范围，并在失败时整组回滚。动态脚本默认放在临时目录，不直接修改通用 `scripts/`。
+- 用户入口继续是 `pdf2md` skill，项目执行层继续使用 CLI；当前不新增 MCP Server 或 MCP 兼容层。只有出现跨机器远程调用、队列、多客户端发现或权限隔离需求时，才重新评估 MCP。
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
 - `scripts/pdf-eval-vlm /path/to` **可选**写入 `<pdf_dir>/data/vlm_eval.jsonl`（对 `image_or_sparse` 页做本地 VLM 视觉补充；标准模型固定为 `qwen3-vl-8b`，默认自动启停，设 `VLM_API_BASE` 可直连但仍需确认模型身份）。
 - `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 的合并 md。回填旧包时直接重跑此命令。
-- `pdf2md-fix` 位于 `pdf-auto` 完成之后、`pdf-extract-data` 之前；人工修复原地更新 canonical Markdown，并将修复状态、来源 hash、`manual_fixes.jsonl` hash 和当前 Markdown hash 同步写入 `manifest.json`。不生成 `*-fixed.md`。
+- `pdf2md-fix` 位于 `pdf-auto` 完成之后、`pdf-extract-data` 之前；人工修复原地更新 canonical Markdown，并将修复状态、来源 hash、`manual_fixes.jsonl` hash 和当前 Markdown hash 同步写入 `manifest.json`。不生成 `*-fixed.md`。对于扫描结果为空的页，只允许在人工确认的 `rebuild_table`/`cross_page_table` 记录中使用 `allow_empty_page=true`，按页锚点写入新表格并保持幂等。
 - `logical_tables.jsonl` 只有存在独立下游消费者时才生成，且必须由 `manual_fixes.jsonl` 派生，不能作为第二个事实源。
 - 目录页由 `toc_repair` 按**物理目录页**归属：条目只归属于其 PDF 原生文本实际出现的物理目录页（完整行/词边界匹配，短标题不命中更长词，如“制动”不命中“前制动手柄”）；无法唯一归属时进入 `review`，不静默猜测。目录输出分三个用途，禁止下游混用：
   - `doc.md`：主文档，保留段级锚点 `<!-- pages N-M -->`，供按页读取、结构化抽取和 section 映射；
   - `toc.md`：无锚点连续目录列表，供人工阅读和前端渲染；不含任何页级锚点，不重新解析或猜测页码；
   - `toc_tree.json`：机器权威目录结构，每条含 `title`、`target_page`（条目指向正文页）、`toc_page`（条目所在物理目录页）、`depth`；`pdf-extract-data` 用 `target_page` 做 section 映射。
+- 当 PDF 同时存在内置大纲、主目录和末尾字母索引时，`toc_repair` 按内置大纲顺序解决重复标题，选择覆盖最多大纲条目的主目录连续页，并补入相邻的“目录条目 + 正文”混合页；字母索引不覆盖成伪目录。合并级修复只替换实际目录页锚点块，不按目录首尾页连续覆盖中间正文页。
 - 目录修复必须把 `doc.md`、`toc.md`、`toc_tree.json`、`review.md`（如复核结论变化）和 `manifest.json` 作为一个同步发布单元：`manifest.files.toc` 指向 `toc.md`，`manifest.files.toc_tree` 指向 `toc_tree.json`，并登记 `manifest.hash.toc_md_sha256` 与 `manifest.hash.toc_tree_json_sha256`。不得只改主 Markdown 或只改展示目录；原始 `segments/**/content_list*.json` 只读，不能作为人工修复目标。
 - **页码坐标系契约**：`toc_tree.json` 的 `target_page` 必须统一为 PDF 物理页码（与 `<!-- pages N-M -->` 段锚点一致）。`manifest.json` 的 `page_numbering` 块记录映射关系：
   ```json
@@ -150,6 +154,22 @@ scripts/pdf-export-ingest /path/to
 ```
 
 已有 `segments/` 时可以跳过 `pdf-seg`，直接调用 `scripts/pdf-auto`。
+
+## 自动处理与人工校对边界（当前冻结）
+
+本项目不以“自动修复所有异常”为目标。当前交付边界是：
+
+- 自动完成 TOC 处理、确定性的表格格式化，以及有页锚点、来源 hash 和命中次数保障的低风险表格处理；
+- 自动发现大量空 `td`、异常列、缺失文字和结构警告，并写入 `review.md`/draft；
+- 复杂表头、列语义、`rowspan/colspan`、跨页关系、扫描件空页和图片表格由人工逐项确认；空页表格可在人工确认后通过显式 `allow_empty_page=true` 的重建记录写回，但不得自动猜测；
+- 人工确认或拒绝通过 `manual_fixes.jsonl` 和 manifest 留痕，再安全更新 canonical Markdown；
+- 未确认或无法安全判断的内容保持 `needs_review`/`not_ready`，不得为了提高自动修复率而猜测；
+- `pdf-table-repair` 不再生成 PDF words/bbox 到候选列的自动映射，也不按序猜测缺失文本位置；`pdf-table-fix` 提供缺失文本证据，列语义和落位由人工确认；
+- `pdf-extract-data` 只提供通用 `rowspan/colspan` 网格展开和证据定位；复杂表格的列语义由 LLM/人工写入可选的 `data/extraction_overrides.json`，不得把某个车型或页码的列规则硬编码进脚本；`■/▲` 等维修标记应按配置保留在证据/备注中，不能未经确认成为业务 `key`；包级 `policies.numeric_key=skip` 可显式过滤图示编号等纯数字 key，默认策略仍为 `keep`；
+- 已经格式化完成、没有实际 HTML 变化的 `pretty_print` 候选不会进入 apply 阶段；这类页面只保留人工审计证据；
+- 只有最终 Markdown、目录产物、修复记录和 manifest 完成同步后，才重新运行 `pdf-extract-data` 与 `pdf-prepare-ingest`。
+
+`content_list*.json` 和原始 segments 始终只读。`pdf2md-fix`/`pdf-table-repair` 的职责是提供人工校对证据、页级安全应用和产物同步，不继续扩展为全自动表格语义重建器。
 
 ## 工具选择
 
@@ -278,12 +298,12 @@ data/fixtures_result.md
 
 冲突判定规则（v2 上下文感知）：
 
-- 冲突 identity：`(model, section_path, page_start, source_block_id, table_id, parent_key, key)`
+- 冲突 identity：`(model, section_path, page_start, source_block_id, table_id, row_index, parent_key, key)`；同一表格中同一项目的多个保养间隔行由 `row_index` 区分
 - `key_role=marker` 不参与冲突检测（符号占位符）
 - `key_role=spec_value` 不参与冲突检测（规格值不是业务 key）
 - `key_role=local_label` 必须有 `table_id` 或 `source_block_id` 才参与
 - 跨上下文多值但缺少页段/块上下文的 key 标记为 `needs_review_context`
-- `conflicts.csv` 新增上下文列：`page_start`、`source_block_id`、`table_id`、`parent_key`、`key_role_distribution`
+- `conflicts.csv` 新增上下文列：`page_start`、`source_block_id`、`table_id`、`row_index`、`parent_key`、`key_role_distribution`
 
 生成入库候选和冲突报告：
 

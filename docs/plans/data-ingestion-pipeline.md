@@ -4,7 +4,7 @@
 
 `structured-data-extraction` 已在输出包 `<package>/data/` 下生成可审核草案：`quick_lookup_draft.csv`、`verification.csv` 和 `fixtures_result.md`。这些文件当前只承载人工复核和后续入库准备，不直接写入数据库。
 
-本计划负责把“可审核草案”继续推进到“可入库候选”的边界设计：明确字段契约、主键策略、审核状态流转、冲突处理、回滚方式和后续实施阶段。阶段 0 只落地设计和门禁，不改代码、不接数据库。
+本计划负责把“可审核草案”推进到“入库前可交付候选”：明确字段契约、主键策略、审核状态流转、冲突处理、回滚方式和批次导出边界。计划终点是生成可审计的入库前数据准备产物，不接数据库、不执行外部导入。
 
 ## 事实源职责
 
@@ -27,6 +27,7 @@
 - 阶段 0 不新增 MCP 工具。
 - 阶段 0 不修改 `scripts/pdf-extract-data`、`scripts/pdf-auto` 或输出包生成逻辑。
 - 不承诺最终数据库选型，数据库、SQLite、JSONL 或 CSV 只作为后续候选。
+- 不实现或调用任何外部数据库/API 导入流程；外部入库不属于本项目范围。
 
 ## 不变量
 
@@ -132,11 +133,11 @@ source_row_hash = sha256(quick_lookup_draft.csv 的规范化整行内容)
 | 阶段 0 | 固化入库边界和候选契约 | `structured-data-extraction` 已完成 | 草案样本、字段契约、状态流转、完成条件明确 | 已完成 |
 | 阶段 1 | 生成入库候选文件 | 阶段 0 完成 | 生成 `ingest_ready.csv`，记录 ID 稳定，源行可追溯 | 已完成 |
 | 阶段 2 | 人工审核状态流转和冲突检查 | 阶段 1 完成 | 审核状态、冲突、跳过原因可复现 | 已完成 |
-| 阶段 3 | 实际入库接口或外部系统边界 | 阶段 2 完成 | 下游接口、回滚和幂等策略明确 | 已完成 |
+| 阶段 3 | 入库前批次导出与交付边界 | 阶段 2 完成 | JSONL/manifest、回滚和幂等策略明确，明确不写数据库 | 已完成 |
 
 ## 当前阶段
 
-阶段 0-3 已完成（2026-07-02）。当前阶段已完成。计划状态：已完成。
+阶段 0-3 已完成（2026-07-02）；2026-07-14 以春风250Sr真实包补充验证。计划终点为入库前数据准备，当前阶段已完成。计划状态：已完成。
 
 ## 后续修正计划
 
@@ -145,6 +146,8 @@ source_row_hash = sha256(quick_lookup_draft.csv 的规范化整行内容)
 该问题不改变本计划已完成产物的历史事实，但后续冲突判定事实源转移到 [结构化数据冲突误报与上下文主键修正](conflict-context-ingestion-fix.md)。实施该修正前，不应继续把本文档中的三元组冲突规则视为最终入库放行口径。
 
 ## Step 0 证据
+
+Step 0 基线可复现：`pdf/demo20`、`pdf/demo5` 和 `pdf/春风250Sr` 均通过草案、审核门禁和入库前产物链路验证；执行 `scripts/pdf-extract-data <package>`、`scripts/pdf-prepare-ingest <package>`、`scripts/pdf-export-ingest <package>` 可重建对应产物，且全流程不写入数据库。
 
 ### 样本状态
 
@@ -342,6 +345,8 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 
 阶段 2 不允许通过审核文件修改 `key`、`value`、`unit` 或 `evidence_text`。需要修正内容时，应回到草案抽取或另建数据清洗计划。
 
+2026-07-14 补充：`conflicts.csv` 的当前 identity 在保留原上下文维度的基础上增加 `row_index`，用于区分同一表格中同名项目的多条合法间隔行；该字段不进入 `record_id` hash，也不改变审核状态门禁。
+
 ### conflicts.csv
 
 | 字段 | 含义 |
@@ -349,6 +354,11 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 | `conflict_id` | 稳定冲突 ID |
 | `model` | 车型或文档名 |
 | `section_path` | 章节路径 |
+| `page_start` | 来源起始页 |
+| `source_block_id` | 来源块 |
+| `table_id` | 来源表格 |
+| `row_index` | 表格内行序号 |
+| `parent_key` | 父级行/列标签 |
 | `key` | 字段名 |
 | `record_ids` | 涉及记录 ID，使用 `;` 分隔 |
 | `values` | 涉及值，使用 `;` 分隔 |
@@ -456,14 +466,14 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 
 ## 阶段 3 可实施说明
 
-阶段 3 在阶段 2 的 `ready` 记录基础上固化外部系统交付边界。第一版不直接写业务数据库，而是生成可移交、可审计、可回滚的入库批次文件；如果后续要直连数据库，需要另建迁移或 ADR 固化目标库、事务、权限和回滚策略。
+阶段 3 在阶段 2 的 `ready` 记录基础上固化入库前批次交付边界。生成可移交、可审计、可回滚的入库批次文件；实际数据库/API 导入不属于本项目，如未来需要必须另建计划、迁移或 ADR。
 
 ### 阶段 3 目标
 
 - 只导出 `ingest_status=ready` 的记录，生成可交付给下游系统的批次产物。
 - 固定批次 ID、输入哈希、记录数、来源包路径和生成命令，便于审计和幂等。
-- 明确外部系统接收契约和失败边界：本项目只生成批次，不确认入库成功。
-- 为后续数据库直连或 MCP 暴露保留边界，不在阶段 3 直接扩大运行时权限。
+- 明确批次文件交付契约和失败边界：本项目只生成批次，不确认外部入库成功。
+- 固定本项目的权限边界：不直连数据库、不调用外部导入 API、不新增 MCP。
 - 保持阶段 1-2 的原始草案、审核文件和入库候选文件不被破坏。
 
 ### 阶段 3 非目标
@@ -644,6 +654,10 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - 阶段 3：`scripts/pdf-export-ingest` 生成 `ingest_batch.jsonl` + `ingest_manifest.json`，验证空批次、有 ready 记录导出、字段完整性和幂等输出。
 - 所有阶段：`python3 scripts/check_plan_governance.py .`、`git diff --check`、`node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow`。
 
+## 测试覆盖率
+
+入库前数据准备回归：全量 Python 测试 `303 passed`，`tests/test-fix-validate.sh` 为 `129/129`；春风250Sr 的 `pdf-check-fixes`、`pdf-prepare-ingest`、`pdf-export-ingest` 和 JSONL 字段契约校验均通过。
+
 ## 风险
 
 - `quick_lookup_draft.csv` 的草案质量不足，可能导致入库候选大量停留在 `not_ready`。
@@ -663,8 +677,18 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 
 ## 未决问题
 
-- 最终入库目标是业务数据库、SQLite、JSONL 还是继续使用 CSV。
+- 外部入库目标、数据库/API 选型：不属于本项目范围。
 - 是否需要独立 JSON Schema 或 CSV schema 文件做机器校验。
 - `record_id` 是否应纳入 PDF hash、版本号或人工审核批次。
 - 人工审核状态是否由 CSV 编辑、单独 review 文件或外部系统维护。
-- 是否需要在 MCP 中暴露入库准备能力。
+- 是否需要在 MCP 中暴露入库准备能力：当前机器调用边界固定为 CLI，不新增 MCP。
+
+## 范围确认（2026-07-14）
+
+用户确认本项目只做到入库前数据准备，不执行实际数据库或外部系统导入。此前 75 条批次属于旧 canonical 的临时结果，已被完整重建后的批次取代。
+
+### 用户确认后的春风250Sr入库前批次（2026-07-14）
+
+- `scripts/pdf-prepare-ingest pdf/春风250Sr`：182 行，`ready=179`、`not_ready=0`、`skipped=3`、`conflicts=0`。
+- `scripts/pdf-export-ingest pdf/春风250Sr`：生成 `data/ingest_batch.jsonl` 179 条和 `data/ingest_manifest.json`，`total_conflicts=0`、`unresolved_conflicts=0`。
+- 本项目到此为止，不执行数据库或外部系统导入；最终入库前交付边界为 `data/ingest_ready.csv`、`data/ingest_batch.jsonl`、`data/ingest_manifest.json` 及其审核配置。

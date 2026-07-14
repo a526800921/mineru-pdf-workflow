@@ -22,22 +22,8 @@ import re
 import sys
 from pathlib import Path
 
-# ── 导入 table_eval（兼容 pdf-table-fix 模式） ──
-sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-try:
-    from table_eval import parse_table_html
-except ImportError:
-    parse_table_html = None  # 降级
-
-# PyMuPDF
-try:
-    import fitz
-except ImportError:
-    fitz = None  # 降级：不提取 words/bbox
-
 # ── 常量 ──
 SCHEMA_VERSION = 1
-REPAIR_TYPES = frozenset({"pretty_print", "fill_missing_text", "structure_warning"})
 
 
 class _RepairError(Exception):
@@ -98,46 +84,6 @@ def _classify_repair_types(signals: list[str],
 
 
 # ── 纯函数：HTML 解析与列压缩 ────────────────────────────
-
-
-def _extract_html_cell_texts(html: str) -> list[str]:
-    """从 HTML <td> 或 <th> 提取所有文本内容。"""
-    if not html:
-        return []
-    texts: list[str] = []
-    for m in re.finditer(r"<t[dh][^>]*>(.*?)</t[dh]>", html, re.IGNORECASE | re.DOTALL):
-        text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
-        texts.append(text)
-    return texts
-
-
-def _detect_missing_text(pdf_text: str, html_texts: list[str]) -> list[str]:
-    """检测 PDF 原生文本中缺失的表格内容。
-
-    返回 pdf_text 中有但 html_texts 中没有的文本片段。
-    """
-    if not pdf_text:
-        return []
-
-    # 将所有 HTML 文本拼接为一个字符串做检测
-    combined_html = " ".join(html_texts)
-
-    missing: list[str] = []
-    # 按空格和换行切分 PDF 文本
-    pdf_words = pdf_text.replace("\n", " ").split()
-    seen_words = set()
-
-    for word in pdf_words:
-        word = word.strip()
-        if not word or len(word) < 2:
-            continue
-        if word in seen_words:
-            continue
-        if word not in combined_html:
-            missing.append(word)
-            seen_words.add(word)
-
-    return missing
 
 
 def _parse_simple_html(html: str) -> list[list[dict]]:
@@ -315,54 +261,6 @@ def _compute_expected_hit_count(md_text: str, page_anchor: str,
     return 0
 
 
-# ── PDF 原生 words/bbox 提取 ───────────────────────────
-
-
-def _get_pdf_path(pkg_dir: Path, manifest: dict) -> Path | None:
-    """从 manifest 获取 PDF 路径。"""
-    pdf_rel = manifest.get("files", {}).get("pdf")
-    if pdf_rel:
-        pdf_path = pkg_dir / pdf_rel
-        if pdf_path.exists():
-            return pdf_path.resolve()
-    source_pdf = manifest.get("source_pdf")
-    if source_pdf:
-        pdf_path = Path(source_pdf)
-        if pdf_path.exists():
-            return pdf_path.resolve()
-    return None
-
-
-def _extract_page_words(pdf_path: Path, page_num: int) -> list[dict]:
-    """用 PyMuPDF 提取单页 words/bbox 证据。
-
-    返回 [{"text": str, "x0": float, "y0": float, "x1": float, "y1": float}, ...]
-    """
-    if fitz is None:
-        return []
-    try:
-        doc = fitz.open(str(pdf_path))
-        if page_num < 1 or page_num > len(doc):
-            doc.close()
-            return []
-        page = doc[page_num - 1]
-        words = page.get_text("words")
-        doc.close()
-        result: list[dict] = []
-        for w in words:
-            if len(w) >= 5:
-                result.append({
-                    "text": str(w[4]),
-                    "x0": float(w[0]),
-                    "y0": float(w[1]),
-                    "x1": float(w[2]),
-                    "y1": float(w[3]),
-                })
-        return result
-    except Exception:
-        return []
-
-
 # ── Draft 生成 ───────────
 
 
@@ -420,79 +318,17 @@ def _compute_table_stats_from_candidate(
     return None
 
 
-def _generate_alignment_from_bbox(
-    missing_words: list[str],
-    page_words: list[dict],
-    col_count: int,
-) -> list[dict]:
-    """根据 bbox x 坐标为缺失文本生成列位置候选。
-
-    对每个缺失词，查找其在 page_words 中的 bbox，
-    根据 x0 相对位置分配候选列（页面左→中→右映射为列 1→col_count）。
-    词未在 page_words 中找到时按序分配到剩余列。
-    """
-    candidates: list[dict] = []
-    if not page_words or col_count < 1:
-        col_count = max(col_count, 1)
-
-    # 建立 text → bbox 查找表（取第一个匹配）
-    word_map: dict[str, dict] = {}
-    for pw in page_words:
-        text = pw.get("text", "").strip()
-        if text and text not in word_map:
-            word_map[text] = pw
-
-    # 获取页面宽度估计（从 bbox 最大 x1）
-    page_width = max((pw.get("x1", 0) for pw in page_words), default=600)
-
-    # 找出所有 bbox 的 x 范围，用于列分割
-    all_x0 = sorted([pw.get("x0", 0) for pw in page_words])
-    if not all_x0 or page_width <= 0:
-        page_width = 600
-
-    assigned = 0
-    for mt in missing_words:
-        bw = word_map.get(mt)
-        if bw and page_width > 0:
-            x0 = bw.get("x0", 0)
-            # x0 / page_width → [0, 1] → 列号 [1, col_count]
-            col = min(int(x0 / page_width * col_count) + 1, col_count)
-            candidates.append({
-                "text": mt,
-                "candidate_column": col,
-                "candidate_row": 1,
-                "confidence": "low",
-                "reason": f"缺失文本 \"{mt}\" bbox x0={x0:.1f}/page_width={page_width:.1f}"
-                          f"，映射到列 {col}（待人工确认）",
-            })
-        else:
-            # 无 bbox 时按序分配
-            col = (assigned % max(col_count, 1)) + 1
-            candidates.append({
-                "text": mt,
-                "candidate_column": col,
-                "candidate_row": 1,
-                "confidence": "low",
-                "reason": f"缺失文本 \"{mt}\" 未找到 bbox，按序分配到列 {col}（待人工确认）",
-            })
-        assigned += 1
-
-    return candidates
-
-
 def _generate_draft_for_repair_type(
     candidate: dict,
     repair_type: str,
     pkg_name: str,
     source_shas: dict,
     cross_table_ids: dict[str, list[int]],
-    page_words: list[dict] | None = None,
     md_text: str | None = None,
 ) -> dict:
     """为单个候选和 repair_type 生成 draft 记录。"""
     page = candidate.get("page", 0)
     page_anchor = candidate.get("page_anchor", "")
-    signals = candidate.get("signals", [])
     segment = candidate.get("segment", "")
     candidate_id = candidate.get("candidate_id", "")
     original_html = candidate.get("original_html", "")
@@ -520,8 +356,6 @@ def _generate_draft_for_repair_type(
     # 根据 repair_type 执行不同逻辑（基于 before_html 操作）
     draft_html = before_html
     warnings: list[str] = []
-    alignment_candidates: list[dict] = []
-    extra_missing_text: list[str] = list(missing_text)
 
     # 跨页 table_id
     table_id = _build_table_id(pkg_name, [page])
@@ -541,16 +375,8 @@ def _generate_draft_for_repair_type(
             warnings.extend(pw)
 
     elif repair_type == "fill_missing_text":
-        # 额外检测 PDF 文本中的缺失
-        html_texts = _extract_html_cell_texts(before_html)
-        extra_missing = _detect_missing_text(pdf_text, html_texts)
-        if extra_missing:
-            extra_missing_text.extend(extra_missing)
-        # 基于 bbox 生成 alignment 候选（替代之前的按序取模）
-        alignment_candidates = _generate_alignment_from_bbox(
-            extra_missing_text, page_words or [], col_count)
-        if not extra_missing_text:
-            warnings.append("候选标记 native_table_text_missing 但未检测到具体缺失文本，"
+        if not missing_text:
+            warnings.append("候选标记 native_table_text_missing 但未提供具体缺失文本，"
                             "请人工核对 PDF 原文")
 
     elif repair_type == "structure_warning":
@@ -598,10 +424,8 @@ def _generate_draft_for_repair_type(
         "fallback_html": fallback_html,
         "source_original_html": original_html,
         "pdf_text": pdf_text,
-        "page_words": page_words or [],
-        "missing_text": extra_missing_text,
+        "missing_text": missing_text,
         "expected_hit_count": expected_hit_count,
-        "alignment_candidates": alignment_candidates,
         "warnings": unique_warnings,
     }
 
@@ -628,9 +452,6 @@ def _generate_drafts(
     # 计算 source hash
     source_shas = _compute_source_shas(pkg_dir, manifest)
 
-    # 获取 PDF 路径（用于 bbox 提取）
-    pdf_path = _get_pdf_path(pkg_dir, manifest)
-
     # 读取当前 canonical Markdown（用于锚点校验和命中次数）
     md_text: str | None = None
     md_rel = manifest.get("files", {}).get("markdown", "")
@@ -651,14 +472,6 @@ def _generate_drafts(
     # 检测跨页关联
     cross_table_ids = _detect_cross_page_candidates(filtered)
 
-    # 预提取每页的 words/bbox
-    all_words: dict[int, list[dict]] = {}
-    if pdf_path:
-        for c in filtered:
-            page = c.get("page", 0)
-            if isinstance(page, int) and page > 0:
-                all_words[page] = _extract_page_words(pdf_path, page)
-
     # 生成 draft
     drafts: list[dict] = []
     for candidate in filtered:
@@ -676,19 +489,21 @@ def _generate_drafts(
             if col_count <= 20:
                 types = [t for t in types if t != "pretty_print"]
 
-        # 对于 fill_missing_text，没有 missing_text 也生成（可能 PDF 检测到更多）
-        # 但完全空信号的跳过
+        # 完全空信号的候选仍保留结构警告，交给人工核对
         if not types:
             # 兜底：至少给一个 structure_warning
             types = ["structure_warning"]
 
-        page_words = all_words.get(page, []) if isinstance(page, int) else []
-
         for rt in types:
             draft = _generate_draft_for_repair_type(
                 candidate, rt, pkg_name, source_shas, cross_table_ids,
-                page_words=page_words, md_text=md_text,
+                md_text=md_text,
             )
+            # 已经格式化完成的表格不生成无变化 pretty_print 草稿，避免
+            # 人工 apply 时把“无变化”误当成可发布修复。
+            if (rt == "pretty_print"
+                    and draft["before_html"] == draft["draft_html"]):
+                continue
             drafts.append(draft)
 
     return drafts
@@ -1247,16 +1062,6 @@ def _handle_apply(pkg_dir: Path, fix_id: str) -> None:
               "\n已回滚 Markdown、manual_fixes.jsonl、manifest 和临时备份",
               file=sys.stderr)
         sys.exit(1)
-
-    # 成功
-    print(f"修复已应用：{fix_id}", file=sys.stderr)
-    print(json.dumps({
-        "status": "applied",
-        "fix_id": fix_obj["fix_id"],
-        "source_repair_fix_id": fix_id,
-        "output": str(manifest_path),
-    }))
-    sys.exit(0)
 
     # 成功
     print(f"修复已应用：{fix_id}", file=sys.stderr)

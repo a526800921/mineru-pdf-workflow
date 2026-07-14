@@ -95,6 +95,11 @@ def classify_key_role(key: str) -> str:
     return "business_key"
 
 
+def should_skip_numeric_key(key: str, numeric_key_policy: str = "keep") -> bool:
+    """按包内策略过滤纯数字 key；默认保留以兼容既有抽取行为。"""
+    return numeric_key_policy == "skip" and bool(DIGIT_ONLY_RE.fullmatch(key.strip()))
+
+
 def new_block_counters() -> dict:
     return {"paragraph": 0, "md_table": 0, "html_table": 0}
 
@@ -126,11 +131,23 @@ def refine_page_numbers(draft_rows: list[dict], pdf_path: Path) -> None:
         if not key:
             continue
 
-        # 找到包含 key 的候选页
+        # 找到包含 key 的候选页；优先限制在 Markdown 行锚点给出的原始页段，
+        # 避免“冷却液”“制动液”等重复项目被定位到更早页面。
         candidates = [
             p for p, text in page_texts.items()
             if key in text
         ]
+        try:
+            original_start = int(row.get("page_start", ""))
+            original_end = int(row.get("page_end", ""))
+        except (TypeError, ValueError):
+            original_start = original_end = 0
+        scoped_candidates = [
+            p for p in candidates
+            if original_start and original_end and original_start <= p <= original_end
+        ]
+        if scoped_candidates:
+            candidates = scoped_candidates
 
         if not candidates:
             # 无法在 PDF 中找到 key，保留页段级定位
@@ -331,7 +348,8 @@ def is_valid_colon_line(key: str, value: str) -> bool:
 
 def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str,
                        page_map: dict, counters: dict,
-                       page_section_map: dict | None = None) -> list:
+                       page_section_map: dict | None = None,
+                       numeric_key_policy: str = "keep") -> list:
     rows = []
     for line_idx, line in enumerate(md_text.split("\n")):
         line_orig = line.strip()
@@ -343,6 +361,8 @@ def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str
         key = m.group(1).strip()
         value = m.group(2).strip()
         if not is_valid_colon_line(key, value):
+            continue
+        if should_skip_numeric_key(key, numeric_key_policy):
             continue
         clean_val, unit = extract_unit(value)
         has_digit = bool(DIGIT_RE.search(clean_val))
@@ -511,11 +531,147 @@ def guess_value_col_idx(headers: list, rows: list) -> int:
     return max(1, len(headers) - 1)
 
 
+def parse_html_tables_with_spans(md_text: str) -> list[list[list[str]]]:
+    """解析 HTML 表格并在内存中展开 rowspan/colspan。
+
+    只给复杂表格抽取使用，不改变 canonical Markdown。普通表格仍沿用
+    parse_html_tables() 的原始单元格视图，避免改变既有 record_id 规则。
+    """
+
+    def expand(raw_rows: list[list[tuple[str, int, int]]]) -> list[list[str]]:
+        expanded: list[list[str]] = []
+        active: dict[int, tuple[int, str]] = {}
+
+        for raw_row in raw_rows:
+            cells: dict[int, str] = {}
+            occupied = set(active)
+            next_active: dict[int, tuple[int, str]] = {}
+            for col, (_, text) in active.items():
+                cells[col] = text
+
+            col = 0
+            for text, colspan, rowspan in raw_row:
+                while col in occupied:
+                    col += 1
+                span_cols = list(range(col, col + max(1, colspan)))
+                while any(c in occupied for c in span_cols):
+                    col += 1
+                    span_cols = list(range(col, col + max(1, colspan)))
+                for c in span_cols:
+                    cells[c] = text
+                    occupied.add(c)
+                    if rowspan > 1:
+                        next_active[c] = (rowspan - 1, text)
+                col += max(1, colspan)
+
+            width = max(cells, default=-1) + 1
+            expanded.append([cells.get(i, "") for i in range(width)])
+            for c, (remaining, text) in active.items():
+                if remaining > 1:
+                    next_active[c] = (remaining - 1, text)
+            active = next_active
+
+        width = max((len(row) for row in expanded), default=0)
+        return [row + [""] * (width - len(row)) for row in expanded]
+
+    class SpanTableParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.in_table = False
+            self.in_tr = False
+            self.in_cell = False
+            self.current_table: list[list[tuple[str, int, int]]] = []
+            self.current_row: list[tuple[str, int, int]] = []
+            self.current_text = ""
+            self.current_colspan = 1
+            self.current_rowspan = 1
+            self.tables: list[list[list[str]]] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "table":
+                self.in_table = True
+                self.current_table = []
+            elif tag == "tr" and self.in_table:
+                self.in_tr = True
+                self.current_row = []
+            elif tag in ("td", "th") and self.in_tr:
+                attrs_dict = dict(attrs)
+                self.in_cell = True
+                self.current_text = ""
+                self.current_colspan = int(attrs_dict.get("colspan", "1") or "1")
+                self.current_rowspan = int(attrs_dict.get("rowspan", "1") or "1")
+
+        def handle_endtag(self, tag):
+            if tag in ("td", "th") and self.in_cell:
+                self.current_row.append((
+                    self.current_text.strip(),
+                    self.current_colspan,
+                    self.current_rowspan,
+                ))
+                self.in_cell = False
+            elif tag == "tr" and self.in_tr:
+                if self.current_row:
+                    self.current_table.append(self.current_row)
+                self.in_tr = False
+            elif tag == "table" and self.in_table:
+                if self.current_table:
+                    self.tables.append(expand(self.current_table))
+                self.in_table = False
+                self.current_table = []
+
+        def handle_data(self, data):
+            if self.in_cell:
+                self.current_text += data
+
+    parser = SpanTableParser()
+    try:
+        parser.feed(md_text)
+    except Exception:
+        pass
+    return parser.tables
+
+
+def is_uniform_nonempty_row(row: list[str]) -> bool:
+    """判断由 colspan 展开的纯分类行。"""
+    values = [cell.strip() for cell in row]
+    return bool(values) and len(values) >= 6 and all(values) and len(set(values)) == 1
+
+
+def load_extraction_overrides(pkg: Path) -> dict[str, dict]:
+    """读取 LLM/人工确认的表格语义和包级策略配置。"""
+    path = pkg / "data" / "extraction_overrides.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    tables = payload.get("tables", {}) if isinstance(payload, dict) else {}
+    policies = payload.get("policies", {}) if isinstance(payload, dict) else {}
+    result = {}
+    if isinstance(policies, dict):
+        result["__policies__"] = policies
+    if isinstance(tables, list):
+        result.update({
+            item.get("table_id", ""): item
+            for item in tables
+            if isinstance(item, dict) and item.get("table_id")
+        })
+        return result
+    if not isinstance(tables, dict):
+        return result
+    result.update({str(k): v for k, v in tables.items() if isinstance(v, dict)})
+    return result
+
+
 def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
                            page_map: dict, counters: dict,
-                           page_section_map: dict | None = None) -> list:
+                           page_section_map: dict | None = None,
+                           table_overrides: dict[str, dict] | None = None,
+                           numeric_key_policy: str = "keep") -> list:
     rows = []
     tables = parse_html_tables(md_text)
+    expanded_tables = parse_html_tables_with_spans(md_text)
     parent_maps = build_html_parent_maps(md_text)
     # 逐行扫描获取每个 HTML 表格行的实际行号
     html_row_lines = _get_html_table_row_lines(md_text)
@@ -523,12 +679,25 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
     for table_idx, table in enumerate(tables):
         if len(table) < 2:
             continue
-        headers = table[0]
-        data_rows = table[1:]
-        key_idx = guess_key_col_idx(headers, data_rows)
-        val_idx = guess_value_col_idx(headers, data_rows)
+        table_id = f"html_table:{counters['html_table'] + 1}"
+        override = (table_overrides or {}).get(table_id)
+        if override and table_idx < len(expanded_tables):
+            table = expanded_tables[table_idx]
+            header_rows = int(override.get("header_rows", 1))
+            data_rows = table[header_rows:]
+            key_idx = int(override.get("key_column", 0))
+            marker_idx = override.get("marker_column")
+            value_columns = override.get("value_columns", {})
+            val_idx = max(
+                [int(v) for v in value_columns.values()] or [key_idx]
+            )
+        else:
+            headers = table[0]
+            data_rows = table[1:]
+            key_idx = guess_key_col_idx(headers, data_rows)
+            val_idx = guess_value_col_idx(headers, data_rows)
         counters["html_table"] += 1
-        table_id = f"html_table:{counters['html_table']}"
+        current_category = ""
 
         # rowspan 父级映射（来自 build_html_parent_maps）
         rowspan_parents = parent_maps[table_idx] if table_idx < len(parent_maps) else {}
@@ -537,9 +706,26 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
             if len(row) < max(key_idx, val_idx) + 1:
                 continue
             key = row[key_idx].strip()
-            value_str = " / ".join(
-                row[i] for i in range(len(row)) if i != key_idx and row[i].strip()
-            )
+            if should_skip_numeric_key(key, numeric_key_policy):
+                continue
+            marker = ""
+            if override:
+                if marker_idx is not None and int(marker_idx) < len(row):
+                    marker = row[int(marker_idx)].strip()
+                if override.get("category_row") == "all_cells_equal" and is_uniform_nonempty_row(row):
+                    # colspan=6 的分类行，例如“电气”“制动”，不是业务记录。
+                    current_category = row[0].strip()
+                    continue
+                value_parts = []
+                for label, idx in value_columns.items():
+                    idx = int(idx)
+                    if idx < len(row) and row[idx].strip():
+                        value_parts.append(f"{label}={row[idx].strip()}")
+                value_str = "；".join(value_parts)
+            else:
+                value_str = " / ".join(
+                    row[i] for i in range(len(row)) if i != key_idx and row[i].strip()
+                )
             if not key or not value_str or len(key) > 60:
                 continue
 
@@ -554,8 +740,12 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
             pg_start, pg_end = get_page_range(line_no, page_map)
             sec_path = get_section_path(line_no, sections, pg_start, page_section_map)
 
-            # parent_key：优先 rowspan 父级，其次旧的首列重复检测
-            parent_key = rowspan_parents.get(row_idx, "")
+            # parent_key：保养表使用展开后的分类行，其余沿用原逻辑。
+            parent_key = ""
+            if override:
+                parent_key = current_category
+            else:
+                parent_key = rowspan_parents.get(row_idx, "")
             if not parent_key:
                 first_col_values = [r[0].strip() if len(r) > 0 else "" for r in data_rows]
                 if (
@@ -567,15 +757,21 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                     if first_cell and first_cell != key:
                         parent_key = first_cell
 
-            confidence = "medium" if key_idx == 0 else "low"
+            confidence = "medium" if (key_idx == 0 or override) else "low"
             status = "draft" if confidence == "medium" else "needs_review"
+            evidence_key = f"{marker} {key}".strip() if marker else key
+            notes = "html_table"
+            if override:
+                notes += f";extraction_override={table_id}"
+                if marker:
+                    notes += f";marker={marker}"
             rows.append({
                 "source_pdf": source_pdf, "model": model, "section_path": sec_path,
                 "key": key, "value": clean_val, "unit": unit,
                 "page_start": pg_start, "page_end": pg_end,
-                "evidence_text": f"{key}: {value_str}"[:200],
+                "evidence_text": f"{evidence_key}: {value_str}"[:200],
                 "confidence": confidence, "status": status,
-                "notes": "html_table",
+                "notes": notes,
                 "source_block_id": f"html_table:{counters['html_table']}",
                 "table_id": table_id,
                 "row_index": str(row_idx + 1),
@@ -588,7 +784,8 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
 
 def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
                          page_map: dict, counters: dict,
-                         page_section_map: dict | None = None) -> list:
+                         page_section_map: dict | None = None,
+                         numeric_key_policy: str = "keep") -> list:
     rows = []
     lines = md_text.split("\n")
     MD_TABLE_SEP = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
@@ -609,6 +806,9 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
                     cells = [c.strip() for c in lines[i].strip().split("|")[1:-1]]
                     if len(cells) >= 2:
                         key = cells[0]
+                        if should_skip_numeric_key(key, numeric_key_policy):
+                            i += 1
+                            continue
                         value = " / ".join(cells[1:])
                         clean_val, unit = extract_unit(value)
                         line_no = i + 1
@@ -857,10 +1057,23 @@ def main():
     sections = parse_sections(md_text)
     page_map = parse_page_comments(md_text)
     counters = new_block_counters()
+    table_overrides = load_extraction_overrides(pkg)
+    policies = table_overrides.get("__policies__", {})
+    numeric_key_policy = policies.get("numeric_key", "keep")
 
-    md_table_rows = extract_md_table_rows(md_text, sections, source_pdf, model, page_map, counters)
-    html_table_rows = extract_html_table_rows(md_text, sections, source_pdf, model, page_map, counters)
-    colon_rows = extract_colon_rows(md_text, sections, source_pdf, model, page_map, counters)
+    md_table_rows = extract_md_table_rows(
+        md_text, sections, source_pdf, model, page_map, counters,
+        numeric_key_policy=numeric_key_policy,
+    )
+    html_table_rows = extract_html_table_rows(
+        md_text, sections, source_pdf, model, page_map, counters,
+        table_overrides=table_overrides,
+        numeric_key_policy=numeric_key_policy,
+    )
+    colon_rows = extract_colon_rows(
+        md_text, sections, source_pdf, model, page_map, counters,
+        numeric_key_policy=numeric_key_policy,
+    )
     draft_rows = md_table_rows + html_table_rows + colon_rows
 
     # refine_page_numbers：用 PyMuPDF 逐页搜索，将段级定位精确定位到单页
