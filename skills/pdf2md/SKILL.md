@@ -1,6 +1,6 @@
 ---
 name: pdf2md
-description: Use when the user wants to convert a PDF to Markdown, parse a PDF, extract structured data from a PDF output package, run the MinerU PDF workflow, or prepare/export reviewed PDF data. Triggers on PDF conversion, PDF-to-Markdown, MinerU parsing, .pdf paths, output package validation, pdf-auto, pdf-extract-data, pdf-prepare-ingest, or pdf-export-ingest.
+description: Use when the user wants to convert a PDF to Markdown, parse a PDF, review or repair PDF conversion results, extract structured data from a PDF output package, run the MinerU PDF workflow, or prepare/export reviewed PDF data. Triggers on PDF conversion, PDF-to-Markdown, MinerU parsing, .pdf paths, output package validation, review.md, table repair, TOC repair, pdf-auto, pdf-extract-data, pdf-prepare-ingest, or pdf-export-ingest.
 ---
 
 # PDF to Markdown
@@ -356,6 +356,66 @@ data/ingest_manifest.json
 - `pdf-export-ingest` 只导出 `review_status=approved` 且 `ingest_status=ready` 的记录。
 - `ingest_manifest.json` 记录输入 hash、计数、状态和“未写入数据库”说明。
 - 本项目不确认下游入库成功；外部系统回写 `ingested` 需另建计划。
+
+## LLM/人工协作阶段（统一主入口）
+
+`pdf2md` 是用户面对的主入口。用户不需要记忆或执行脚本；LLM 负责读取产物、选择工具、维护配置、执行验证和汇报结果。当前 `pdf2md-fix` 仍保留完整历史 skill，兼容入口迁移在 [LLM/人工协作入口迁移计划](../../docs/plans/llm-human-collaboration-migration.md) 阶段 3 完成；本节先把协作入口和边界统一到 `pdf2md`。
+
+### 统一顺序
+
+```text
+pdf-auto
+  → 读取 manifest/review.md/canonical Markdown
+  → 分类：自动处理 / 需要用户确认 / 需要动态辅助脚本 / 保留待复核
+  → 按页锚点修复 TOC、表格、缺失文本和章节归属
+  → 同步 manual_fixes.jsonl、manifest 和目录三件套
+  → pdf-extract-data（必要时读取 extraction_overrides.json）
+  → 用户审核结构化候选并由 LLM 更新 review_overrides.csv
+  → pdf-prepare-ingest
+  → pdf-export-ingest
+  → 交付入库前数据包，不导入数据库
+```
+
+每轮操作前，LLM 必须先回答：发现了什么、依据哪一页或哪条记录、需要用户确认什么、确认后会更新哪些产物。
+
+### 人工确认边界
+
+用户只确认 PDF 中的事实和业务语义：
+
+- 是否确实缺少文字、表头或表格行；
+- 连续页面是否属于同一逻辑表格，以及表头/列语义是什么；
+- TOC 条目应归属哪个物理目录页；
+- 结构化候选的 key/value/unit/section_path 是否符合 PDF；
+- 候选记录应 `approved`、`rejected` 还是继续 `needs_review`。
+
+LLM 不得把推断当成事实，不得自动批准待审核候选，不得把 VLM 输出直接作为最终事实。用户确认采用以下格式：
+
+```text
+【需要确认】<确认项标题>
+问题：<一个可判断的问题>
+PDF 证据：第 <页码> 页；<原文/截图/表格范围>
+当前候选：<Markdown、表格或结构化候选>
+请确认：确认 / 修改为…… / 拒绝 / 保留待复核
+确认后更新：<manual_fixes.jsonl | extraction_overrides.json | review_overrides.csv>
+```
+
+三类文件职责不能混用：`manual_fixes.jsonl` 记录内容/表格事实修复，`extraction_overrides.json` 记录表格列语义和包级抽取策略，`review_overrides.csv` 只记录结构化记录审核状态。
+
+### 动态辅助脚本边界
+
+现有 CLI 不足时，LLM 按以下优先级处理：
+
+```text
+组合现有 CLI → 生成临时动态辅助脚本 → 同类问题重复后晋升通用 CLI
+```
+
+动态脚本运行前必须备份目标 Markdown、manifest、相关 JSON/CSV 和修复记录，记录 hash，先执行 dry-run，并限制到页锚点、record_id 或明确文件范围。只允许修改派生产物，禁止修改 PDF、原始 `segments/` 和 `content_list*.json`。失败时整组回滚，重复运行必须幂等；默认脚本保留在临时目录，不直接写入通用 `scripts/`。详细规则见 [ADR 0003](../../docs/adr/0003-llm-orchestrated-dynamic-assistants.md)。
+
+### LLM 交付摘要
+
+执行后必须同时报告：输入包和 hash、执行的 CLI/动态脚本、备份情况、用户确认数量、产物前后变化、TOC/页锚点/manifest/表格/冲突/幂等验证、剩余异常和下一步。不能只报告“脚本执行成功”。
+
+当前项目继续使用 `pdf2md skill + CLI 执行层 + 用户审批`，不新增 MCP Server 或 MCP 兼容层。只有跨机器远程调用、任务队列、多客户端发现或权限隔离成为明确需求时，才另立计划评估 MCP。
 
 ## 页面类型与处理策略
 
