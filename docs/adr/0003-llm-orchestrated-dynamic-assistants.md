@@ -35,6 +35,8 @@
 - 具备页锚点、record_id、来源 hash 或等价的目标校验。
 - 具备幂等性；重复运行不能重复写入或扩大范围。
 - 执行失败时整组回滚，不能只恢复 Markdown 而遗漏 manifest 或配置。
+- apply 完成后必须执行显式、只读、可审计的验证命令；验证失败或验证阶段写入包内文件时，整组回滚。
+- 动态辅助脚本不能授权修改 `review_overrides.csv`、`ingest_ready.csv`、`conflicts.csv`、`ingest_batch.jsonl`、`ingest_manifest.json` 等审批或入库前门禁产物；这些状态只能由既有审核/导出流程在用户确认后更新。
 - 一次性脚本默认放在临时目录；只有需要复现或再次使用时，才登记为包内辅助脚本并保留命令、输入、输出和 hash。
 
 ### 4. 动态脚本的晋升规则

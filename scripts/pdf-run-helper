@@ -27,6 +27,7 @@
       --package pdf/demo \
       --allow data/manual_fixes.jsonl \
       --allow canonical.md \
+      --validate-command '["scripts/pdf-check-fixes", "pdf/demo"]' \
       -- python /tmp/one-off-repair.py --package pdf/demo
 
 命令会被调用两次；动态脚本通过 ``PDF_HELPER_MODE`` 区分 dry-run 和 apply。
@@ -49,6 +50,13 @@ import uuid
 
 FORBIDDEN_TOP_LEVEL = {"segments", "content_list"}
 FORBIDDEN_FILE_PREFIXES = ("content_list",)
+PROTECTED_GATE_ARTIFACTS = {
+    "review_overrides.csv",
+    "ingest_ready.csv",
+    "conflicts.csv",
+    "ingest_batch.jsonl",
+    "ingest_manifest.json",
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -128,6 +136,8 @@ def normalize_allowlist(package: Path, values: list[str]) -> list[str]:
             raise ValueError(f"原始证据路径禁止授权：{raw!r}")
         if any(part.lower().startswith(FORBIDDEN_FILE_PREFIXES) for part in parts):
             raise ValueError(f"content_list 原始证据路径禁止授权：{raw!r}")
+        if candidate.name.lower() in PROTECTED_GATE_ARTIFACTS:
+            raise ValueError(f"审批/入库前门禁产物禁止由动态 helper 授权：{raw!r}")
         if (package / candidate).is_dir():
             raise ValueError(f"allowlist 必须指向文件，不允许目录：{raw!r}")
         normalized.append(relative)
@@ -180,6 +190,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", default=None, help="可选事务 ID")
     parser.add_argument("--timeout", type=int, default=300, help="每个模式的超时秒数，默认 300")
     parser.add_argument("--log", type=Path, help="可选 JSON 摘要路径；必须位于包目录之外")
+    parser.add_argument(
+        "--validate-command",
+        required=True,
+        help="JSON 编码的只读验证命令，在 apply 成功后以 PDF_HELPER_MODE=validate 执行",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- 后面的动态辅助命令")
     return parser
 
@@ -189,6 +204,16 @@ def write_log(path: Path | None, result: dict) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def parse_command_json(value: str) -> list[str]:
+    try:
+        command = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--validate-command 必须是 JSON 数组：{exc}") from exc
+    if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
+        raise ValueError("--validate-command 必须是非空字符串数组")
+    return command
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -201,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.timeout <= 0:
         print("错误：--timeout 必须为正数", file=sys.stderr)
+        return 2
+    try:
+        validate_command = parse_command_json(args.validate_command)
+    except ValueError as exc:
+        print(f"错误：{exc}", file=sys.stderr)
         return 2
 
     package = args.package.expanduser().resolve()
@@ -228,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         "run_id": run_id,
         "package": str(package),
         "command": command,
+        "validate_command": validate_command,
         "allowlist": allowlist,
         "outcome": "failed",
         "rollback": False,
@@ -279,6 +310,36 @@ def main(argv: list[str] | None = None) -> int:
         }
         if result["rollback"]:
             return 1
+
+        validate = run_command(
+            validate_command,
+            package,
+            "validate",
+            allowlist,
+            run_id,
+            args.timeout,
+        )
+        result["validate"] = validate
+        after_validate = tree_manifest(package)
+        validate_changes = changed_paths(after_apply, after_validate)
+        result["validate_changes"] = validate_changes
+        if validate["exit_code"] != 0 or validate_changes:
+            restore_snapshot(package, snapshot)
+            result["rollback"] = True
+            result["reason"] = "validation_failed" if validate["exit_code"] != 0 else "validation_mutated_package"
+            after_validate = tree_manifest(package)
+            result["after_manifest_sha256"] = hashlib.sha256(
+                json.dumps(after_validate, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            result["allowlist_hashes"] = {
+                path: {
+                    "before": before.get(path),
+                    "after": after_validate.get(path),
+                }
+                for path in allowlist
+            }
+            return 1
+
         result["outcome"] = "success"
         return 0
     except Exception as exc:  # pragma: no cover - catastrophic filesystem/process guard

@@ -49,7 +49,17 @@ def run(package: Path, dynamic: Path, *extra_allow: str) -> subprocess.Completed
     ]
     for value in extra_allow:
         command.extend(["--allow", value])
-    command.extend(["--", sys.executable, str(dynamic), "--package", str(package)])
+    command.extend(
+        [
+            "--validate-command",
+            json.dumps([sys.executable, str(dynamic), "--package", str(package)]),
+            "--",
+            sys.executable,
+            str(dynamic),
+            "--package",
+            str(package),
+        ]
+    )
     return subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
 
 
@@ -166,6 +176,70 @@ if os.environ['PDF_HELPER_MODE'] == 'apply':
     assert summary["apply_changes"] == []
 
 
+def test_validation_failure_rolls_back_after_apply(tmp_path: Path) -> None:
+    package, allowed, _ = make_package(tmp_path)
+    before_allowed = digest(allowed)
+    dynamic = write_helper(
+        tmp_path,
+        """
+import os
+from pathlib import Path
+package = Path(os.environ['PDF_HELPER_PACKAGE'])
+if os.environ['PDF_HELPER_MODE'] == 'apply':
+    (package / 'data/manual_fixes.jsonl').write_text('applied then invalid\\n', encoding='utf-8')
+elif os.environ['PDF_HELPER_MODE'] == 'validate':
+    raise SystemExit(9)
+""",
+    )
+    completed = run(package, dynamic)
+    assert completed.returncode != 0
+    assert digest(allowed) == before_allowed
+    summary = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert summary["reason"] == "validation_failed"
+    assert summary["validate"]["exit_code"] == 9
+    assert summary["rollback"] is True
+
+
+def test_validation_mutation_rolls_back(tmp_path: Path) -> None:
+    package, allowed, _ = make_package(tmp_path)
+    before_allowed = digest(allowed)
+    dynamic = write_helper(
+        tmp_path,
+        """
+import os
+from pathlib import Path
+package = Path(os.environ['PDF_HELPER_PACKAGE'])
+if os.environ['PDF_HELPER_MODE'] == 'apply':
+    (package / 'data/manual_fixes.jsonl').write_text('valid candidate\\n', encoding='utf-8')
+elif os.environ['PDF_HELPER_MODE'] == 'validate':
+    (package / 'data/manual_fixes.jsonl').write_text('validation mutated\\n', encoding='utf-8')
+""",
+    )
+    completed = run(package, dynamic)
+    assert completed.returncode != 0
+    assert digest(allowed) == before_allowed
+    summary = json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))
+    assert summary["reason"] == "validation_mutated_package"
+    assert summary["validate_changes"] == ["data/manual_fixes.jsonl"]
+
+
+def test_gate_artifacts_cannot_be_allowlisted(tmp_path: Path) -> None:
+    package, _, _ = make_package(tmp_path)
+    dynamic = write_helper(tmp_path, "pass\n")
+    for filename in (
+        "review_overrides.csv",
+        "ingest_ready.csv",
+        "conflicts.csv",
+        "ingest_batch.jsonl",
+        "ingest_manifest.json",
+    ):
+        protected = package / "data" / filename
+        protected.write_text("protected\n", encoding="utf-8")
+        completed = run(package, dynamic, f"data/{filename}")
+        assert completed.returncode == 2
+        assert "审批/入库前门禁产物禁止" in completed.stderr
+
+
 def test_original_evidence_cannot_be_allowlisted(tmp_path: Path) -> None:
     package, _, _ = make_package(tmp_path)
     command = [
@@ -175,6 +249,8 @@ def test_original_evidence_cannot_be_allowlisted(tmp_path: Path) -> None:
         str(package),
         "--allow",
         "source.pdf",
+        "--validate-command",
+        json.dumps([sys.executable, "-c", "pass"]),
         "--",
         sys.executable,
         "-c",

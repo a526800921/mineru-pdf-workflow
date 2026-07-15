@@ -417,11 +417,12 @@ PDF 证据：第 <页码> 页；<原文/截图/表格范围>
 scripts/pdf-run-helper \
   --package <输出包> \
   --allow <包内派生文件相对路径> \
+  --validate-command '["scripts/pdf-check-fixes", "<输出包>"]' \
   --log <包外摘要路径> \
   -- <动态命令及参数>
 ```
 
-包装器会用 `PDF_HELPER_MODE=dry-run`、`PDF_HELPER_MODE=apply` 依次调用命令，并注入 `PDF_HELPER_PACKAGE`、`PDF_HELPER_ALLOWLIST`、`PDF_HELPER_RUN_ID`。dry-run 改变任意包内文件、apply 改变 allowlist 之外的文件、命令失败或验证失败时，整包恢复执行前快照；输出 JSON 摘要，记录命令、模式退出码、变更路径、前后清单 hash、结果和回滚状态。allowlist 只能包含派生产物文件，不能包含 PDF、`segments/`、`content_list*.json` 或目录。动态脚本默认放临时目录；需要复用时由 LLM 登记命令、输入/输出、hash 和验证命令，重复问题先补 fixture 再晋升通用 CLI。
+包装器会用 `PDF_HELPER_MODE=dry-run`、`PDF_HELPER_MODE=apply` 依次调用动态命令，再用 `PDF_HELPER_MODE=validate` 调用显式只读验证命令，并注入 `PDF_HELPER_PACKAGE`、`PDF_HELPER_ALLOWLIST`、`PDF_HELPER_RUN_ID`。dry-run 改变任意包内文件、apply 改变 allowlist 之外的文件、命令或验证失败、验证阶段发生写入时，整包恢复执行前快照；输出 JSON 摘要，记录命令、验证命令、各模式退出码、变更路径、前后清单 hash、结果和回滚状态。allowlist 只能包含派生产物文件，不能包含 PDF、`segments/`、`content_list*.json` 或目录，也不能包含 `review_overrides.csv`、`ingest_ready.csv`、`conflicts.csv`、`ingest_batch.jsonl`、`ingest_manifest.json` 等审批/入库前门禁产物。动态脚本默认放临时目录；需要复用时由 LLM 登记命令、输入/输出、hash 和验证命令，重复问题先补 fixture 再晋升通用 CLI。
 
 ### LLM 交付摘要
 
