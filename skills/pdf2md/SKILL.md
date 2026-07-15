@@ -250,6 +250,14 @@ scripts/pdf-export-chunks <package_dir>
 
 ## 结构化数据与入库准备
 
+### 人/LLM 协作定位（当前冻结）
+
+`pdf-extract-data` 是 `pdf2md` 协作流程中的入库前数据准备工具，不是第二套自动修复入口，也不是把车型语义硬编码进脚本的项目。LLM 负责读取已确认的 canonical Markdown、PDF 证据、`review.md` 和当前配置，判断是否存在漏抽或列语义问题，并生成或更新包内 `data/extraction_overrides.json`；脚本只负责通用 HTML 网格展开、来源定位、候选生成和状态计算。
+
+用户只需要确认以下事实：表格是否属于业务数据、跨页关系、列语义、key/value/unit，以及候选的采纳、拒绝或暂缓。LLM 根据用户确认同步 `extraction_overrides.json` 和 `review_overrides.csv`，重新运行抽取、入库前审核和批次导出，并汇报变更、hash、冲突和剩余异常。用户不需要运行脚本或手工编辑 JSON。
+
+具体 PDF 的列规则只能留在该输出包的 `extraction_overrides.json`，不能写入通用 `scripts/pdf-extract-data`。当前春风250Sr的表格闭环已完成；未来只有出现新的真实漏抽样本时，才新增 fixture 或推进通用能力，不以扩大自动化覆盖率作为默认目标。
+
 生成结构化草案：
 
 ```bash
