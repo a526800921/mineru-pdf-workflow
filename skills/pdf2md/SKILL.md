@@ -359,7 +359,7 @@ data/ingest_manifest.json
 
 ## LLM/人工协作阶段（统一主入口）
 
-`pdf2md` 是用户面对的主入口。用户不需要记忆或执行脚本；LLM 负责读取产物、选择工具、维护配置、执行验证和汇报结果。当前 `pdf2md-fix` 仍保留完整历史 skill，兼容入口迁移在 [LLM/人工协作入口迁移计划](../../docs/plans/llm-human-collaboration-migration.md) 阶段 3 完成；本节先把协作入口和边界统一到 `pdf2md`。
+`pdf2md` 是用户面对的主入口。用户不需要记忆或执行脚本；LLM 负责读取产物、选择工具、维护配置、执行验证和汇报结果。`pdf2md-fix` 已收敛为兼容入口，历史触发方式继续导向本节统一流程；入口最终是否废弃或保留，由 [LLM/人工协作入口迁移计划](../../docs/plans/llm-human-collaboration-migration.md) 阶段 4/5 独立验收决定。
 
 ### 统一顺序
 

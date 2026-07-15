@@ -1,351 +1,55 @@
 ---
 name: pdf2md-fix
-description: Use when pdf-auto 已完成且存在 review.md、需要人工复核和修复 PDF 转换结果、处理跨页表格逻辑连续性、目录内容/物理页归属和目录产物同步、修复 8192 空列/异常列数表格、修正字段遗漏/章节归属/结构语义、按页锚点边界执行安全内容修复、使用固定的 qwen3-vl-8b VLM 辅助视觉证据确认、生成 manual_fixes.jsonl 修复记录并同步 manifest。
+description: Use when pdf-auto 已完成且存在 review.md，需要人工复核或修复 PDF 转换结果、TOC、跨页表格、异常 td、字段遗漏、章节归属、页锚点、VLM 证据、manual_fixes.jsonl、manifest 或 review_overrides.csv；本名称现为兼容入口，统一流程由 pdf2md 编排。
 ---
 
-# pdf2md-fix — 人工复核与内容修复
+# pdf2md-fix 兼容入口
 
-本 skill 是 Claude Code 项目级 `pdf2md-fix` skill 的事实源，定义 `pdf-auto` 完成后的人工复核与内容修复工作流。
+`pdf2md-fix` 保留为历史触发名称，但不再维护第二套人工修复流程。当前用户入口统一为 [`pdf2md`](../pdf2md/SKILL.md)：用户不需要学习或执行脚本，LLM 负责读取产物、展示 PDF 证据、请求确认、编排 CLI/受控动态 helper、更新配置并验证入库前数据准备结果。
 
-## 同步目标
+## 兼容行为
 
-```text
-/Users/jafish/.claude/skills/pdf2md-fix/SKILL.md
-```
-
-同步方式：
-
-```bash
-mkdir -p /Users/jafish/.claude/skills/pdf2md-fix
-cp skills/pdf2md-fix/SKILL.md /Users/jafish/.claude/skills/pdf2md-fix/SKILL.md
-```
-
-涉及修复记录契约、VLM 辅助边界、manifest 同步规则和页锚点安全修复规则的更新，必须先更新本文件，再同步到用户级 skill。
-
-## 详细计划
-
-本 skill 的实施细节事实源位于 `docs/plans/pdf2md-fix-manual-workflow.md`，包含完整的字段方案、Schema、枚举、验收标准、风险与回滚。本 skill 只记录操作流程，不重复 plan 中的字段级方案。引用格式为 `[plan](docs/plans/pdf2md-fix-manual-workflow.md#<section>)`。
-
-## 触发条件
-
-`pdf2md-fix` 位于 `pdf-auto` 完整结束之后、结构化抽取之前：
+当用户以 `pdf2md-fix` 名称触发时，继续当前会话并按 `pdf2md` 的统一流程处理：
 
 ```text
-pdf-seg（必要时）
-  → pdf-auto（含表格 pretty-print、TOC 修复、review.md、manifest finalization）
-  → pdf2md-fix
-      ├─ 读取 canonical Markdown、review.md、manifest 和 segments
-      ├─ 按需调用 VLM（仅作视觉证据）
-      ├─ 人工确认和修复内容/表格语义
-      └─ 同步 manifest
-  → pdf-extract-data
+pdf-auto
+  → 读取 manifest/review.md/canonical Markdown
+  → 分类自动处理、需要用户确认、需要动态 helper 或保留待复核
+  → 按页锚点处理 TOC、表格、缺失文本和章节归属
+  → 同步 manual_fixes.jsonl / extraction_overrides.json / manifest
+  → 抽取、人工审核和 review_overrides.csv
   → pdf-prepare-ingest
   → pdf-export-ingest
+  → 交付入库前数据，不导入数据库
 ```
 
-### 介入决策
+兼容入口必须明确说明：`pdf2md` 是唯一主入口，`pdf2md-fix` 只负责把历史触发方式导向同一流程；不得在本文件恢复旧版逐步操作手册、字段表或业务修复规则。
 
-| 状态 | 动作 |
-|---|---|
-| `pass` | 不进入修复，直接继续结构化抽取 |
-| `fix_md` 或跨页表格/字段语义问题 | 进入修复流程，修复后再抽取 |
-| `rerun` | 回到 `pdf-rerun`/`pdf-auto` 解析修复路径，不由本 skill 伪装成内容修复 |
-| 格式化未完成 | 先执行或要求执行表格 pretty-print，再进入内容修复 |
+## 用户确认边界
 
-本 skill 不介入 MinerU 请求、页级 fallback、`pdf-merge` 内部或 TOC 修复中间步骤。
+用户仍只确认 PDF 事实和结构化候选：
 
-## 前置条件
+- TOC 条目、物理目录页和正文页归属；
+- 跨页表格是否属于同一逻辑表，以及表头和列语义；
+- Markdown、表格或缺失文本候选是否符合 PDF；
+- 结构化候选的 key/value/unit/section_path；
+- 记录应 `approved`、`rejected` 还是继续 `needs_review`。
 
-- `pdf-auto` 已完成，输出包中包含：
-  - `manifest.json`（含 `formatting.status`）
-  - Canonical Markdown（已执行 HTML 表格 pretty-print）
-  - `review.md`
-  - `segments/`
-- `formatting.status` 必须为 `verified` 或 `applied`；否则先执行格式化。
-- 原始 PDF、原始分段和格式化前 Markdown hash 已保留。
-- `pdf2md` 和 `pdf2md-fix` 技能均已可用。
+LLM 不得把推断当事实、自动批准候选或让用户执行 CLI。用户确认后，LLM 才能分别更新 `manual_fixes.jsonl`、`extraction_overrides.json` 或 `review_overrides.csv`。
 
-阶段边界：阶段 2 只修复 canonical Markdown、表格逻辑关系和人工修复记录；阶段 3 负责结构化字段修正（`key`/`value`/`unit`/`section_path`），通过 `fix_data` 条目在 `pdf-prepare-ingest` 内存视图中应用，不修改原始草案文件。详见 [plan: 阶段 3](docs/plans/pdf2md-fix-manual-workflow.md#阶段-3-结构化数据与入库审核衔接)。
+## 安全与入库边界
 
-## 核心工作流
+- 原始 PDF、`segments/` 和 `content_list*.json` 始终只读。
+- 动态辅助脚本必须经过 `scripts/pdf-run-helper` 的备份、dry-run、allowlist、验证和整组回滚；不得修改审核或入库前门禁产物。
+- `pdf-check-fixes`、`pdf-prepare-ingest` 和 `pdf-export-ingest` 仍是统一流程的确定性 CLI；最终只交付入库前数据，不连接数据库。
+- `pdf2md-fix` 不负责 MinerU 解析、ModelPad 生命周期、VLM 最终裁决或数据库导入。
 
-### 1. 读取并评估
+## 事实源与兼容窗口
 
-```bash
-# 读取包状态
-cat <package>/manifest.json
+字段契约、Schema、枚举、VLM 证据、页锚点修复、表格修复和结构化审核规则继续以专项计划和 ADR 为事实源：
 
-# 查看复核清单
-cat <package>/review.md
+- [LLM/人工协作入口迁移计划](../../docs/plans/llm-human-collaboration-migration.md)
+- [pdf2md-fix 人工复核与内容修复计划](../../docs/plans/pdf2md-fix-manual-workflow.md)
+- [ADR 0003：LLM 编排与受控动态辅助脚本](../../docs/adr/0003-llm-orchestrated-dynamic-assistants.md)
 
-# 查看 canonical Markdown
-cat <package>/<stem>.md | head -200
-
-# 查看段边界结构（所有页锚点及行号）
-grep -n '^<!-- pages' <package>/<stem>.md
-```
-
-### 2. 扫描可修复问题
-
-从 `manifest.json` 和 `review.md` 筛选信号：
-
-| 信号 | 含义 | 建议处理 |
-|---|---|---|
-| `excessive_empty_td` | 空单元格过多（如 8192） | 候选恢复 → PyMuPDF 提取页级原文 → 人工重建表格 |
-| `excessive_columns` | 列数异常 | 同上 |
-| `native_table_text_missing` | 原生表格字段缺失 | 扫描候选 → 确认缺失字段 → 人工填充或重建 |
-| `volume_inflation` | Markdown 体积异常膨胀 | 标记为 `layout_or_visual_needs_review`，可能为图片表格或布局异常 |
-| `text_coverage_low` | 文本覆盖率低 | 同上；仅当页面有 HTML 表格时才作为候选 |
-| `toc_unassigned` | 目录条目归属不明确 | 人工确认物理目录页 |
-| **表格跨页** | 相邻页码各有一个 `<table>` | 确认是否同一逻辑表，记录 `table_id` |
-| `needs_review` | 人工复核 | 按 review.md 逐项判断 |
-| 字段异常/冲突 | 结构化草案异常 | 人工修正 key/value/unit |
-
-候选按 `candidate_type` 分类：`native_missing`（表格字段缺失）、`structural`（空列/列数异常）、`text_omission`（仅文本相关信号）、`mixed`（多类信号并存）。`layout_or_visual_needs_review` 为 `true` 时表示需要视觉确认（图片/布局类页面）。
-
-### 3. 表格异常候选扫描（`pdf-table-fix`）
-
-`scripts/pdf-table-fix <package>` 是统一的只读审计入口，扫描五类质量信号并生成候选记录。
-
-**执行**：
-
-```bash
-scripts/pdf-table-fix <package>
-```
-
-**输出**：`data/table_candidates.jsonl`（schema v2），每条记录至少包含：
-
-| 字段 | 说明 |
-|---|---|
-| `schema_version` | 固定为 `2` |
-| `candidate_id` | 稳定 ID，格式 `{pkg}_p{page:04d}` |
-| `page` / `page_anchor` / `segment` | 页码、Markdown 锚点、段路径 |
-| `candidate_type` | `native_missing` / `structural` / `text_omission` / `mixed` |
-| `layout_or_visual_needs_review` | `true` 时需视觉确认 |
-| `signals` / `original_metrics` / `missing_text` | 质量信号和原始指标 |
-| `table_stats` | `parse_table_html` 结构指标（无表格时为 `null`） |
-| `original_html` / `fallback_html` / `pdf_text` | 原始 HTML、fallback HTML（如有）、PyMuPDF 原生文本 |
-| `source` | `{pdf, markdown_sha256}` 来源追溯 |
-| `needs_human` | 始终为 `true`，不自动判定结构 |
-
-**manifest 同步**：`pdf-table-fix` 自动将以下字段写入 `manifest.json`：
-
-```json
-{
-  "files": { "table_candidates": "data/table_candidates.jsonl" },
-  "hash": { "table_candidates_sha256": "<sha256>" }
-}
-```
-
-写入为事务性：候选文件和 manifest 变更要么全部成功，要么全部回滚（不留下候选文件存在但 manifest 未登记的半成品）。
-
-**后续步骤**：
-
-1. 运行 `scripts/pdf-check-fixes <package>` 校验候选文件格式和 manifest 一致性。
-2. 读取候选记录，按 `candidate_type` 优先处理 `native_missing` 和 `structural` 候选。
-3. 对照 PDF 原页确认最终列数、标题行、跨页连续性——不自动决定。
-4. 修复必须通过 `manual_fixes.jsonl` 记录后方可应用。
-
-### 4. 跨页表格逻辑确认
-
-当多个连续页各含一个 `<table>`，且视觉/语义上是同一张表：
-
-1. 使用 `pdf-read-page` 逐页读取。
-2. 对照 PDF 原页确认表头、列语义、连续行范围。
-3. 记录 `table_id`、`page_start`、`page_end`、各页角色（start/middle/end）。
-4. 逻辑列数记录在 `manual_fixes.jsonl` 中，不要求物理拼表。
-5. 下游结构化抽取使用 `table_id` 关联；只有存在独立消费者时才生成由 `manual_fixes.jsonl` 派生的 `logical_tables.jsonl`。
-
-### 5. 人工检查顺序
-
-1. **表格页**（review_only）：检查列语义、表头、跨页连续性和 rowspan/colspan。
-2. **8192 空列页**：PyMuPDF 提取原文 → 人工重建表格 → 记录候选 → 应用修复。
-3. **字段遗漏/覆盖率低页**：对照 PDF 原页，确认缺失字段和可能原因。
-4. **目录归属**（toc_unassigned）：确认条目物理目录页。
-5. **冲突事实**（冲突检测列表）：判断是否真实矛盾。
-6. **VLM 证据**（如已调用）：对照 PDF 原页确认关键数字和关系。
-7. **最终审核状态**：确定 approved/rejected/needs_review。
-
-### 6. 应用修复（仅限明确要求时）
-
-**默认只读检查**——只有用户明确要求应用修复时才写入派生产物。
-
-修复应用步骤：
-
-1. 锁定目标页锚点 `<!-- pages N-N -->`。
-2. 校验目标页锚点唯一性、目标内容 hash 和预期命中次数。
-3. 在锚点范围内执行替换——禁止全局无边界替换。
-4. 修复后校验页锚点唯一性、目标文本一致性和内容 hash。
-5. 将 Markdown、`data/manual_fixes.jsonl`、manifest 和已有 `pre_fix_*`/`pre_format_md_*` 备份作为一个事务单元；应用器启动后任一步失败，都按字节恢复全部文件，不接受半成品。
-6. 成功后同步更新 `manifest.json`：`files.manual_fixes`、顶层 `hash.manual_fixes_sha256`、`fixes.manual_fixes_sha256`，以及当前 canonical Markdown 对应的 `fixes.markdown_sha256`；若存在 formatting 记录，`formatting.formatted_markdown_sha256` 也必须推进到当前 Markdown hash。
-7. 记录到 `manual_fixes.jsonl`；拒绝 draft 也必须写入 `status=rejected` 并同步上述 manual fixes 路径/hash，但不得修改 Markdown。
-8. 应用后运行 `scripts/pdf-check-fixes <package>`；人工确认的语义表格允许目标表格结构变化，未涉及修复的表格仍必须通过格式一致性校验。
-
-## VLM 使用边界
-
-VLM 只生成候选证据，不直接产生最终事实或审核结论。
-
-### 固定模型与调用入口
-
-- 标准模型固定为 `qwen3-vl-8b`，不得在标准 `pdf2md-fix` 证据链中静默替换为其他模型。
-- 标准调用入口为 `scripts/pdf-eval-vlm <package>`。
-- ModelPad 管理 API 固定为 `http://127.0.0.1:9999`，实际 VLM 服务端点固定为 `http://127.0.0.1:9005`。
-- VLM 已运行时复用，不由本次流程停止；由本次流程启动时，执行结束后自动停止。
-- 允许用 `VLM_API_BASE` 直连远程端点，但远程端点仍必须提供 `qwen3-vl-8b`；无法确认模型身份时不得写入合规 VLM 证据。
-- 模型不可用时保持 `needs_review`，不得自动降级到未登记模型或把 VLM 缺失伪装成人工确认。
-
-### 适用场景（优先）
-
-- 跨页表格视觉连续性确认。
-- 图片/扫描页关键文字提取。
-- 图表标注解读。
-- 结构不明确页面的纹理/布局辅助判断。
-
-### 不适用场景
-
-- 表格行列、rowspan/colspan 结构判断（VLM 不可靠）。
-- 自动推断最终事实或审核结论。
-- 替代 PDF 原页的人工对照。
-
-### 每次调用必须记录
-
-| 字段 | 说明 |
-|---|---|
-| `model` | 固定填写 `qwen3-vl-8b`；其他模型只能作为未纳入标准证据链的实验记录 |
-| `input_pages` | 输入 PDF 页码 |
-| `crop_area` | 裁剪区域（如适用） |
-| `output_file` | VLM 输出文件路径 |
-| `human_conclusion` | 人工采纳/拒绝结论 |
-
-关键数字和声明必须有 PDF 原生文本或视觉双重核对，VLM 输出不能作为唯一来源。
-
-## HTML 表格 pretty-print 格式
-
-`pdf-merge` 在 canonical Markdown 生成阶段已执行。格式化规则：
-
-```html
-<table>
-  <tr>
-    <td colspan="2">最大净功率</td>
-    <td colspan="2">11.8 Kw / 8500 rpm</td>
-  </tr>
-</table>
-```
-
-强制规则：
-
-- `<table>`、`<tr>`、`<td>`、`<th>` 独立换行并按层级缩进。
-- 保留 `rowspan`、`colspan` 及其他已有属性的值和顺序口径。
-- 只做边界空白规范化，不改数字、单位、标点和实体内容。
-- 不自动补表头、不自动合并跨页表格、不自动删除空行——这些属于人工语义修复。
-
-验收标准：格式化前后表格数量、行数、单元格文本、rowspan/colspan 和逻辑行宽必须一致。
-
-## manifest 同步门禁
-
-每次生成、替换或发布 Markdown 时，必须在同一变更中更新 `manifest.json`：
-
-- `files.markdown` 始终指向 canonical Markdown。
-- `files.markdown` 始终指向原地更新后的 canonical Markdown；不生成 `fixed.md` 或 `files.fixed_markdown`。
-- 增加/维护 `files.manual_fixes`；只有存在独立消费者时才登记由其派生的 `files.logical_tables`。
-- `fixes` 元数据必须包含 `schema_version`、`status`、`source_manifest_sha256` 和 `manual_fixes_sha256`。
-- 当前 canonical Markdown 的 hash 必须登记在 `files.markdown_sha256` 和 `fixes.markdown_sha256`。
-- `fixes.status`：`none` → `pending` → `applied` → `verified`。
-- `formatting.status`：`none` → `applied` → `verified`。
-- `files.table_candidates` 指向 `data/table_candidates.jsonl`，由 `pdf-table-fix` 自动登记；`hash.table_candidates_sha256` 必须与文件内容一致。
-- `scripts/pdf-check-fixes` 会校验候选文件的 manifest 登记、hash、schema v2 格式、`candidate_id` 唯一性和 `page_anchor` 唯一性。
-- manifest 引用的每个派生文件都必须存在；hash 不匹配时 `pdf2md-fix` 必须失败。
-- 不得把人工修复状态伪装成 `parse_status`。
-
-### 目录修复同步门禁
-
-目录修复不是只改 canonical Markdown：必须从同一份人工确认后的目录条目集合重新生成并同步以下产物：
-
-- `files.markdown` 对应的 canonical `<stem>.md`，保留物理页锚点；
-- `files.toc` → `toc.md`，无锚点连续展示视图；
-- `files.toc_tree` → `toc_tree.json`，机器权威结构，逐条包含 `title`、`target_page`、`toc_page`、`depth`；
-- `review.md`，仅当目录复核状态、缺失条目或物理页归属发生变化时同步；
-- `hash.toc_md_sha256` 与 `hash.toc_tree_json_sha256`，并与当前文件内容一致。
-
-`toc.md` 和 `toc_tree.json` 必须来自同一份已确认条目集合，禁止只修其中一份。`toc_tree.json` 的 `toc_page` 表示条目所在 PDF 物理目录页，`target_page` 表示条目指向的正文页，二者不可混用。原始 `segments/**/content_list*.json` 只作为证据读取，不得人工改写。
-
-## 修复记录格式
-
-修复记录写入 `data/manual_fixes.jsonl`，每行 JSON：
-
-| 字段 | 说明 |
-|---|---|
-| `fix_id` | 稳定修复 ID |
-| `fix_type` | `rebuild_table` / `fix_header` / `fill_content` / `cross_page_table` / `table_layout` / `missing_text` / `section_attribution` / `field_correction` / `image_ocr` |
-| `review_action` | `pass` / `fix_md` / `rerun` / `fix_data`（`fix_data` 在阶段 3 应用，字段契约见 [plan: fix_data](docs/plans/pdf2md-fix-manual-workflow.md#1-fix_data-字段扩展)） |
-| `status` | `proposed` / `applied` / `verified` / `rejected` |
-| `pages` | 相关 PDF 页码列表 |
-| `source_refs` | segment、block_id、Markdown 行引用 |
-| `before` | 修复前摘要 |
-| `after` | 修复后摘要或规范化结果 |
-| `evidence` | 原 PDF 页、原生文本、截图/视觉检查说明 |
-| `vlm_evidence` | 可选：VLM 模型、输入页、输出引用和人工采纳说明 |
-| `operator_note` | 人工判断和保留意见 |
-
-详见 [plan: 候选修复记录契约](docs/plans/pdf2md-fix-manual-workflow.md#候选修复记录契约)。
-
-## 禁止事项
-
-- ❌ 不使用页锚点的全局 `replace()`；p37/p47/p48 曾因全局替换命中三页。
-- ❌ 不自动推断最终行列、rowspan/colspan 或跨页合并结构。
-- ❌ 不把 VLM 输出作为最终事实——必须人工对照 PDF 原页。
-- ❌ 不把人工修复伪装成 `parse_status` 或 `approved`。
-- ❌ 不修改原始 PDF、原始 `segments/` 和原始 `content_list.json`。
-- ❌ 不在只读检查中自动写入任何派生文件。
-- ❌ 不覆盖 `review_overrides.csv` 的审核状态职责（它只处理 `record_id,review_status,notes`）。
-- ❌ 修复不幂等时不允许应用——第二遍不能产生重复行/重复表。
-- ❌ 不把排版优化、无来源的文字润色当作事实修复。
-
-## 验收清单
-
-完成修复后验证：
-
-- [ ] `manual_fixes.jsonl` 中所有 `applied` 记录都已人工确认。
-- [ ] 修复后的 Markdown 页锚点唯一，目标块 hash 未漂移。
-- [ ] 格式化前后表格结构（数量、行数、单元格、rowspan/colspan）一致。
-- [ ] `manifest.json` 已同步：文件角色、hash、修复状态、版本号。
-- [ ] manifest 引用的每个派生文件都存在且 hash 匹配。
-- [ ] 跨页表格的 `table_id`、页段角色和逻辑列数已记录。
-- [ ] VLM 证据（如使用）已记录模型、输入页和人工结论。
-- [ ] 原始 PDF、原始段和格式化前 Markdown hash 未覆盖。
-- [ ] 重复应用相同修复不会产生重复内容。
-- [ ] 人工内容修正未改变 `review_overrides.csv` 的审核状态。
-- [ ] 冲突未解决或证据缺失时仍保持 `not_ready`。
-- [ ] 修复前后内容 hash 已记入 manifest。
-- [ ] 无 `approved`/`ready` 记录在 `review_overrides.csv` 未设置时自动产生。
-- [ ] `scripts/pdf-check-fixes <package>` 校验通过（exit 0）。
-- [ ] 应用修复时使用 `scripts/pdf-apply-fixes <package>`（含 `--dry-run` 预览）。
-- [ ] `scripts/pdf-apply-fixes` 不会因页块替换后长度变化产生页外内容误报。
-- [ ] 重复运行 `pdf-apply-fixes` 幂等跳过，不重复修改内容。
-- [ ] `data/table_candidates.jsonl`（如存在）通过 `pdf-check-fixes` 校验（格式、hash、candidate_id/page_anchor 唯一性）。
-- [ ] 候选文件中每条记录的 `schema_version` 为 `2`，`needs_human` 为 `true`。
-- [ ] `manifest.json` 中 `files.table_candidates` 和 `hash.table_candidates_sha256` 已登记且一致。
-
-## 排障
-
-| 症状 | 处理 |
-|---|---|
-| `formatting.status` 不是 `verified` | 先执行或要求执行 HTML 表格 pretty-print |
-| `pdf-check-fixes` 返回非零 | 查看 stderr 的具体错误：`manual_fixes.jsonl` 格式、manifest 块 hash 或不匹配的派生路径 |
-| `pdf-table-fix` 无输出 | 确认 `manifest.json.page_fallback` 中存在五类信号之一（`excessive_empty_td`/`excessive_columns`/`native_table_text_missing`/`volume_inflation`/`text_coverage_low`）；纯文本信号页还需有 HTML 表格内容 |
-| `pdf-apply-fixes` 返回 1 | 查看 stderr：before 未找到（检查 `pages` 和目标页块）、页块外内容变化（检查 `before` 是否越界）、当前 MD hash 与 manifest 不一致（先运行 `pdf-check-fixes`） |
-| 页面锚点不唯一 | 修复必须失败，保留原始 Markdown |
-| 修复后页块 hash 不匹配 | 修复应用未命中目标；检查页锚点范围 |
-| `manifest.json` 引用路径不存在 | 修复后手动校验所有派生文件存在性 |
-| 同一页面有多条修复记录 | 校验 `fix_id` 和 `status`，避免冲突操作 |
-| VLM 结果与 PDF 页面对不上 | 检查 VLM 的输入页码和裁剪区域记录 |
-| 人工修正后 `review_overrides.csv` 被覆盖 | `review_overrides.csv` 只处理审核状态；内容修正独立记录 |
-
-## 风险与回滚原则
-
-详见 [plan: 风险与回滚](docs/plans/pdf2md-fix-manual-workflow.md#风险与回滚)。关键原则：
-
-- **页锚点保护**：所有修复失败即恢复原始 Markdown，不接受部分替换。
-- **VLM 幻觉控制**：VLM 无最终事实权，标记 rejected 即可回滚。
-- **manifest 原子性**：回滚 canonical Markdown、`manual_fixes.jsonl` 和 manifest 的整组变更，不接受只有正文或只有 manifest 的部分更新。
-- **`table_id` 混淆**：下游回退到原始来源块读取。
+阶段3只收敛入口，不删除本 skill，不删除 `pdf2md-fix` 触发名称，也不改写历史完成证据。兼容窗口持续到阶段4/5独立验收完成；届时再决定将本入口标记为 `已合并` 或 `已废弃`。若兼容验证失败，直接恢复本文件的上一版本，不改动 PDF 包或下游数据。
