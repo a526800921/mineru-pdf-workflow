@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""受控执行 LLM 临时动态辅助脚本。
+
+本工具不理解 PDF 业务语义，只提供事务边界：
+
+1. 对整个输出包创建临时快照；
+2. 以 ``PDF_HELPER_MODE=dry-run`` 运行动态命令，并拒绝 dry-run 写入；
+3. 以 ``PDF_HELPER_MODE=apply`` 运行同一命令；
+4. 检查 apply 的变更是否严格落在 allowlist；
+5. 命令失败或范围越界时恢复整包；
+6. 输出机器可读的 JSON 执行摘要。
+
+动态命令必须读取以下环境变量：
+
+``PDF_HELPER_MODE``
+    ``dry-run`` 或 ``apply``。
+``PDF_HELPER_PACKAGE``
+    输出包绝对路径。
+``PDF_HELPER_ALLOWLIST``
+    JSON 编码的相对路径数组。
+``PDF_HELPER_RUN_ID``
+    本次事务 ID。
+
+用法示例::
+
+    scripts/pdf-run-helper \
+      --package pdf/demo \
+      --allow data/manual_fixes.jsonl \
+      --allow canonical.md \
+      -- python /tmp/one-off-repair.py --package pdf/demo
+
+命令会被调用两次；动态脚本通过 ``PDF_HELPER_MODE`` 区分 dry-run 和 apply。
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+
+FORBIDDEN_TOP_LEVEL = {"segments", "content_list"}
+FORBIDDEN_FILE_PREFIXES = ("content_list",)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tree_manifest(root: Path) -> dict[str, dict[str, str]]:
+    """返回包内文件、目录和链接的稳定清单。"""
+    result: dict[str, dict[str, str]] = {}
+    for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        dirs[:] = sorted(dirs)
+        files[:] = sorted(files)
+        for name in dirs + files:
+            path = current_path / name
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                result[relative] = {"kind": "symlink", "value": os.readlink(path)}
+            elif path.is_dir():
+                result[relative] = {"kind": "dir", "value": ""}
+            elif path.is_file():
+                result[relative] = {"kind": "file", "value": sha256_file(path)}
+            else:
+                raise RuntimeError(f"无法纳入快照的文件类型：{relative}")
+    return result
+
+
+def changed_paths(before: dict, after: dict) -> list[str]:
+    return sorted(
+        key for key in set(before) | set(after) if before.get(key) != after.get(key)
+    )
+
+
+def clear_directory(root: Path) -> None:
+    for child in root.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def restore_snapshot(package: Path, snapshot: Path) -> None:
+    clear_directory(package)
+    for child in snapshot.iterdir():
+        destination = package / child.name
+        if child.is_dir() and not child.is_symlink():
+            shutil.copytree(child, destination, symlinks=True)
+        else:
+            shutil.copy2(child, destination, follow_symlinks=False)
+
+
+def normalize_allowlist(package: Path, values: list[str]) -> list[str]:
+    if not values:
+        raise ValueError("至少需要一个 --allow 派生产物路径")
+
+    package_resolved = package.resolve()
+    normalized: list[str] = []
+    for raw in values:
+        candidate = Path(raw)
+        if candidate.is_absolute() or not raw or "." in candidate.parts or ".." in candidate.parts:
+            raise ValueError(f"allowlist 必须是包内相对路径：{raw!r}")
+        relative = candidate.as_posix()
+        if relative in ("", "."):
+            raise ValueError("allowlist 不能指向整个包")
+        target = (package / candidate).resolve(strict=False)
+        try:
+            target.relative_to(package_resolved)
+        except ValueError as exc:
+            raise ValueError(f"allowlist 路径越出包目录：{raw!r}") from exc
+        parts = candidate.parts
+        first = parts[0].lower()
+        if first in FORBIDDEN_TOP_LEVEL or candidate.name.lower().endswith(".pdf"):
+            raise ValueError(f"原始证据路径禁止授权：{raw!r}")
+        if any(part.lower().startswith(FORBIDDEN_FILE_PREFIXES) for part in parts):
+            raise ValueError(f"content_list 原始证据路径禁止授权：{raw!r}")
+        if (package / candidate).is_dir():
+            raise ValueError(f"allowlist 必须指向文件，不允许目录：{raw!r}")
+        normalized.append(relative)
+    return sorted(set(normalized))
+
+
+def run_command(command: list[str], package: Path, mode: str, allowlist: list[str], run_id: str, timeout: int) -> dict:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PDF_HELPER_MODE": mode,
+            "PDF_HELPER_PACKAGE": str(package.resolve()),
+            "PDF_HELPER_ALLOWLIST": json.dumps(allowlist, ensure_ascii=False),
+            "PDF_HELPER_RUN_ID": run_id,
+        }
+    )
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=package,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=timeout,
+        )
+        return {
+            "mode": mode,
+            "exit_code": completed.returncode,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "stdout_tail": completed.stdout[-2000:],
+            "stderr_tail": completed.stderr[-2000:],
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "mode": mode,
+            "exit_code": 124,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "stdout_tail": str(exc.stdout or "")[-2000:],
+            "stderr_tail": f"命令超过 {timeout} 秒超时",
+        }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--package", required=True, type=Path, help="输出包目录")
+    parser.add_argument("--allow", action="append", default=[], help="允许修改的包内相对文件，可重复")
+    parser.add_argument("--run-id", default=None, help="可选事务 ID")
+    parser.add_argument("--timeout", type=int, default=300, help="每个模式的超时秒数，默认 300")
+    parser.add_argument("--log", type=Path, help="可选 JSON 摘要路径；必须位于包目录之外")
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="-- 后面的动态辅助命令")
+    return parser
+
+
+def write_log(path: Path | None, result: dict) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    command = list(args.command)
+    if command[:1] == ["--"]:
+        command = command[1:]
+    if not command:
+        print("错误：必须通过 -- 提供动态辅助命令", file=sys.stderr)
+        return 2
+    if args.timeout <= 0:
+        print("错误：--timeout 必须为正数", file=sys.stderr)
+        return 2
+
+    package = args.package.expanduser().resolve()
+    if not package.is_dir() or package.is_symlink():
+        print(f"错误：--package 必须是非符号链接目录：{package}", file=sys.stderr)
+        return 2
+    try:
+        allowlist = normalize_allowlist(package, args.allow)
+        if args.log is not None:
+            log_path = args.log.expanduser().resolve()
+            try:
+                log_path.relative_to(package)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("--log 必须位于包目录之外，以免污染事务范围")
+        else:
+            log_path = None
+    except ValueError as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        return 2
+
+    run_id = args.run_id or f"helper-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    result: dict = {
+        "run_id": run_id,
+        "package": str(package),
+        "command": command,
+        "allowlist": allowlist,
+        "outcome": "failed",
+        "rollback": False,
+    }
+    snapshot_parent = Path(tempfile.mkdtemp(prefix="pdf-helper-"))
+    snapshot = snapshot_parent / "package"
+    try:
+        before = tree_manifest(package)
+        shutil.copytree(package, snapshot, symlinks=True)
+        result["before_manifest_sha256"] = hashlib.sha256(
+            json.dumps(before, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+
+        dry_run = run_command(command, package, "dry-run", allowlist, run_id, args.timeout)
+        result["dry_run"] = dry_run
+        after_dry_run = tree_manifest(package)
+        dry_run_changes = changed_paths(before, after_dry_run)
+        result["dry_run_changes"] = dry_run_changes
+        if dry_run["exit_code"] != 0 or dry_run_changes:
+            restore_snapshot(package, snapshot)
+            result["rollback"] = True
+            result["reason"] = "dry_run_failed" if dry_run["exit_code"] != 0 else "dry_run_mutated_package"
+            result["after_manifest_sha256"] = hashlib.sha256(
+                json.dumps(tree_manifest(package), sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            return 1
+
+        apply = run_command(command, package, "apply", allowlist, run_id, args.timeout)
+        result["apply"] = apply
+        after_apply = tree_manifest(package)
+        apply_changes = changed_paths(before, after_apply)
+        result["apply_changes"] = apply_changes
+        unauthorized = [path for path in apply_changes if path not in allowlist]
+        result["unauthorized_changes"] = unauthorized
+        if apply["exit_code"] != 0 or unauthorized:
+            restore_snapshot(package, snapshot)
+            result["rollback"] = True
+            result["reason"] = "apply_failed" if apply["exit_code"] != 0 else "out_of_scope_change"
+            after_apply = tree_manifest(package)
+        result["after_manifest_sha256"] = hashlib.sha256(
+            json.dumps(after_apply, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        result["allowlist_hashes"] = {
+            path: {
+                "before": before.get(path),
+                "after": after_apply.get(path),
+            }
+            for path in allowlist
+        }
+        if result["rollback"]:
+            return 1
+        result["outcome"] = "success"
+        return 0
+    except Exception as exc:  # pragma: no cover - catastrophic filesystem/process guard
+        result["reason"] = f"exception: {type(exc).__name__}: {exc}"
+        try:
+            restore_snapshot(package, snapshot)
+            result["rollback"] = True
+        except Exception as restore_exc:
+            result["rollback_error"] = f"{type(restore_exc).__name__}: {restore_exc}"
+        return 1
+    finally:
+        write_log(log_path, result)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        shutil.rmtree(snapshot_parent, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

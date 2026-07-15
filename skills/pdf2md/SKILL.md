@@ -411,6 +411,18 @@ PDF 证据：第 <页码> 页；<原文/截图/表格范围>
 
 动态脚本运行前必须备份目标 Markdown、manifest、相关 JSON/CSV 和修复记录，记录 hash，先执行 dry-run，并限制到页锚点、record_id 或明确文件范围。只允许修改派生产物，禁止修改 PDF、原始 `segments/` 和 `content_list*.json`。失败时整组回滚，重复运行必须幂等；默认脚本保留在临时目录，不直接写入通用 `scripts/`。详细规则见 [ADR 0003](../../docs/adr/0003-llm-orchestrated-dynamic-assistants.md)。
 
+统一事务包装器为 `scripts/pdf-run-helper`。LLM 先准备临时动态命令，再通过以下边界执行；用户不需要运行这条命令：
+
+```bash
+scripts/pdf-run-helper \
+  --package <输出包> \
+  --allow <包内派生文件相对路径> \
+  --log <包外摘要路径> \
+  -- <动态命令及参数>
+```
+
+包装器会用 `PDF_HELPER_MODE=dry-run`、`PDF_HELPER_MODE=apply` 依次调用命令，并注入 `PDF_HELPER_PACKAGE`、`PDF_HELPER_ALLOWLIST`、`PDF_HELPER_RUN_ID`。dry-run 改变任意包内文件、apply 改变 allowlist 之外的文件、命令失败或验证失败时，整包恢复执行前快照；输出 JSON 摘要，记录命令、模式退出码、变更路径、前后清单 hash、结果和回滚状态。allowlist 只能包含派生产物文件，不能包含 PDF、`segments/`、`content_list*.json` 或目录。动态脚本默认放临时目录；需要复用时由 LLM 登记命令、输入/输出、hash 和验证命令，重复问题先补 fixture 再晋升通用 CLI。
+
 ### LLM 交付摘要
 
 执行后必须同时报告：输入包和 hash、执行的 CLI/动态脚本、备份情况、用户确认数量、产物前后变化、TOC/页锚点/manifest/表格/冲突/幂等验证、剩余异常和下一步。不能只报告“脚本执行成功”。
