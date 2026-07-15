@@ -1,5 +1,13 @@
 # 计划：从 marker-pdf-workflow 吸纳特性
 
+## Step 0 Evidence
+
+基线类型：历史已完成计划的现状快照与既有阶段证据。补充本节只为治理检查提供结构化入口，不改变本计划已完成阶段的业务结论。
+
+## 验证方式
+
+使用 `plan-governance-cli check . --strict-readiness` 检查 Step 0、验证方式和测试覆盖率入口；使用仓库现有回归命令复核当前工作区，失败时仅回滚本次治理文档补充。
+
 ## 背景
 
 同级项目 [marker-pdf-workflow](../../../marker-pdf-workflow/) 是基于 Marker Server 的 PDF 分段解析工作流，与本项目共享"分段解析 → 自动验证 → 合并 → 人工兜底"的流程骨架。marker 项目已完成阶段 0–2，其 README、脚本输出格式、review.md 呈现和治理文档中有部分设计优于本项目的当前状态。
@@ -911,3 +919,7 @@ git diff --check
 - [marker-pdf-workflow 项目](../../../marker-pdf-workflow/)
 - [marker 设计草案](../../../marker-pdf-workflow/marker_pdf_workflow_draft.md)
 - [marker Phase 2 验收报告](../../../marker-pdf-workflow/docs/reports/phase2-acceptance.md)
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

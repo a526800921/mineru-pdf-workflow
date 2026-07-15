@@ -353,3 +353,7 @@ rm -rf /Users/jafish/Documents/models/mineru-api-output/*
 - [ModelPad 托管 PDF 服务与脚本副作用收敛](modelpad-pdf-service-lifecycle.md)
 - [自动化 PDF 解析流水线计划](automated-pdf-pipeline.md)
 - [PDF 输出包目录结构计划](pdf-output-package-layout.md)
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

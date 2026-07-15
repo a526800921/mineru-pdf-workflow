@@ -41,9 +41,10 @@
 | [pdf-merge-table-formatting](plans/pdf-merge-table-formatting.md) | 已完成 | 全阶段（0-4） | 2026-07-12 | pdf2md-fix-manual-workflow、pdf-auto-repair-before-merge、per-page-anchors、春风250Sr 87 表、demo20 11 表、demo60 29 表、181 个全量 pytest、38/38 阶段2回归、67/67 修复回归、三个包 check-fixes、幂等与失败回滚复核通过 | [阶段 4 再次独立验收复核](plans/pdf-merge-table-formatting.md#阶段-4-再次独立验收复核2026-07-12) |
 | [pdf-table-audit](plans/pdf-table-audit.md) | 已完成 | 阶段 4 独立验收通过，全计划闭环 | 2026-07-13 | pdf2md-fix-manual-workflow、pdf-merge-table-formatting、pdf-output-package-layout、PyMuPDF、现有 `scripts/pdf-table-fix` | [阶段 4 独立验收](plans/pdf-table-audit.md#阶段-4-独立验收2026-07-13通过) |
 | [toc-target-page-coordinate-fix](plans/toc-target-page-coordinate-fix.md) | 已完成 | 全阶段（0-4）已完成，全计划闭环 | 2026-07-13 | toc-page-physical-attribution-fix、pdf-extract-data-table-coverage、pdf-output-package-layout、pdf2md-fix-manual-workflow、阶段 0-4 逐项验收：页码检测/标准化/消费者门禁/真实样本/独立验收通过、310 tests pass、页码专项校验通过 | [阶段 4 再次独立复核](plans/toc-target-page-coordinate-fix.md#阶段-4-再次独立复核2026-07-13通过) |
-| [pdf-table-repair](plans/pdf-table-repair.md) | 实施中 | 阶段 4：独立验收 | 2026-07-15 | pdf-table-audit、pdf-extract-data、pdf-prepare-ingest | canonical 已从 138 个非空分段完整重建，TOC 120/120；包级策略过滤 29 条纯数字 key 后，抽取 182 行，179 条已确认、3 条拒绝，0 冲突，入库前批次已重生成。业务独立验收通过；计划暂未关闭，治理检查仍有历史已完成计划证据缺陷 | [阶段 4 独立验收复核](plans/pdf-table-repair.md#阶段-4-独立验收复核2026-07-15通过业务治理未收口) |
+| [pdf-table-repair](plans/pdf-table-repair.md) | 已完成 | 阶段 4：独立验收（已完成） | 2026-07-15 | pdf-table-audit、pdf-extract-data、pdf-prepare-ingest、legacy-plan-governance-evidence-remediation | canonical 已从 138 个非空分段完整重建，TOC 120/120；包级策略过滤 29 条纯数字 key 后，抽取 182 行，179 条已确认、3 条拒绝，0 冲突，入库前批次已重生成。业务与治理独立验收通过，全计划关闭 | [阶段 4 独立验收复核](plans/pdf-table-repair.md#阶段-4-独立验收2026-07-15) |
 | [pdf-extract-data-table-coverage](plans/pdf-extract-data-table-coverage.md) | 实施中 | 阶段 1：通用网格展开与 LLM/配置驱动列语义 | 2026-07-14 | structured-data-extraction、data-ingestion-pipeline、pdf2md-fix-manual-workflow、pdf-table-audit、pdf-table-repair、PyMuPDF；当前 PDF 的列映射由包内 JSON 提供 | [Step 0 补充证据](plans/pdf-extract-data-table-coverage.md#step-0-补充证据2026-07-14) |
 | [llm-human-collaboration-migration](plans/llm-human-collaboration-migration.md) | 已完成 | 阶段 5：治理收尾与兼容策略决策已完成 | 2026-07-15 | `pdf2md-fix-manual-workflow`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`cli-only-migration`、ADR 0003 | 用户已批准并完成废弃 `pdf2md-fix`；项目级/用户级兼容 skill 已删除，活动引用已迁移，主 `pdf2md` skill 同步；原有 PDF 产物和 CLI 不变 | [阶段 5 独立验收](plans/llm-human-collaboration-migration.md#阶段-5-独立验收2026-07-15通过) |
+| [legacy-plan-governance-evidence-remediation](plans/legacy-plan-governance-evidence-remediation.md) | 已完成 | 阶段 1：历史已完成计划证据补全（已完成） | 2026-07-15 | plan-governance-cli、现有 23 个已完成专项计划 | 23 个历史计划的 Step 0/验证/测试覆盖治理入口已补全；严格治理检查、真实 PDF 包检查和当前回归均通过；未改变代码、PDF 产物、业务状态或历史完成结论 | [独立验收](plans/legacy-plan-governance-evidence-remediation.md#独立验收2026-07-15) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -155,7 +156,8 @@
 | `pdf-prepare-ingest` 对真实手册表格产生冲突误报 | `conflict-context-ingestion-fix` 全阶段（0-3）已完成：上下文感知冲突判定 + rowspan 父级识别，春风样本冲突 35→0 组，已知误报全部消除 | `pdf-extract-data`、`pdf-prepare-ingest`、`conflicts.csv`、`ingest_ready.csv` | 否 | 已解决 |
 | LLM/人工协作入口仍分为 `pdf2md` 与 `pdf2md-fix` | 阶段 3 已收敛为兼容跳转；阶段 4 已验证统一协作闭环；阶段 5 已按用户批准废弃兼容 skill，统一由 `pdf2md` 承担入口 | skill 文档、用户协作方式、历史 pdf2md-fix 兼容入口 | 否 | 已解决 |
 | P4c 多模态 VLM 需本地模型选型与验收基准 | 页面基线、qwen3-vl-8b 单页探针、JSON mode 复测、10 页混合抽样及人工核对均完成 | `pdf-evaluation-suite` P4c、本地 VLM 后端 | 否 | 已解决 |
-| `pdf-table-repair` 阶段 4 治理收尾 | canonical 已从 138 个非空分段重建并完成 TOC/表格修复、抽取、人工审核和入库前批次生成；29 条纯数字 key 已由当前包级策略过滤，179 条已确认、3 条拒绝。治理检查仍报告历史已完成计划缺少 Step 0/测试覆盖率证据 | `pdf-table-repair`、治理检查 | 否（业务）；是（治理收尾） | 实施中 |
+| `pdf-table-repair` 阶段 4 治理收尾 | canonical 已从 138 个非空分段重建并完成 TOC/表格修复、抽取、人工审核和入库前批次生成；29 条纯数字 key 已由当前包级策略过滤，179 条已确认、3 条拒绝。业务与治理验收通过 | `pdf-table-repair`、legacy-plan-governance-evidence-remediation | 否 | 已解决 |
+| 历史已完成计划缺少 Step 0/测试覆盖证据 | 23 个历史计划的治理入口已补全；严格检查通过，补全未回写业务实现或伪造行覆盖率 | 23 个历史专项计划、治理检查 | 否 | 已解决 |
 
 ## 完成证据
 

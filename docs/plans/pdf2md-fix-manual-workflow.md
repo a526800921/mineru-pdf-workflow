@@ -1,5 +1,13 @@
 # 计划：pdf2md-fix 人工复核与内容修复工作流
 
+## Step 0 Evidence
+
+基线类型：历史已完成计划的现状快照与既有阶段证据。补充本节只为治理检查提供结构化入口，不改变本计划已完成阶段的业务结论。
+
+## 验证方式
+
+使用 `plan-governance-cli check . --strict-readiness` 检查 Step 0、验证方式和测试覆盖率入口；使用仓库现有回归命令复核当前工作区，失败时仅回滚本次治理文档补充。
+
 ## 计划状态
 
 - 状态：已完成
@@ -1206,3 +1214,15 @@ git diff --check
 - `python3 scripts/check_plan_governance.py .` 通过。
 
 阶段 0 完成证据：2026-07-12 已读取 `demo20`、`demo60`、`demo5` 的现有 manifest，确认 8192/16311 空单元格异常页；核对 demo20 p14–p16 和 demo60 p37/p47/p48/p50 的页锚点唯一性；根据人工复盘确认 p37/p47/p48 全局 `replace()` 的三处误命中机制。上述证据已记录在“Step 0 实测补充”中。阶段 1 已完成验收，阶段 2 准入契约已按“已冻结决策与后续边界”收敛。
+
+## Step 0 证据
+
+本节为 2026-07-15 的治理补充。基线类型：历史计划现状快照与既有阶段完成证据；本计划原有样本、命令和完成记录仍是业务事实源，本节不新增未验证的业务结论。
+
+## 验证方式
+
+治理补充使用 `plan-governance-cli check . --strict-readiness`、`git diff --check`、`python -m pytest -q` 和 `bash tests/test-fix-validate.sh` 复核；失败时只回滚本次文档补充，不改变代码、PDF 产物或数据库。
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

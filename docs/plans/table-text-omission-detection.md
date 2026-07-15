@@ -1,5 +1,13 @@
 # 计划：通用表格字段缺失检测与页级 fallback 触发
 
+## Step 0 Evidence
+
+基线类型：历史已完成计划的现状快照与既有阶段证据。补充本节只为治理检查提供结构化入口，不改变本计划已完成阶段的业务结论。
+
+## 验证方式
+
+使用 `plan-governance-cli check . --strict-readiness` 检查 Step 0、验证方式和测试覆盖率入口；使用仓库现有回归命令复核当前工作区，失败时仅回滚本次治理文档补充。
+
 ## 计划状态
 
 - 状态：已完成
@@ -521,3 +529,15 @@ git diff --check
 - [x] 治理检查、全量测试、`git diff --check` 和 GitNexus `detect_changes()` 通过。
 
 > 阶段 4（整表头/顶部列头漏报补强）的完成定义见上文 [阶段 4 验收条件](#验收条件)；阶段 4 实施完成、验收条件全部通过，待用户最终验收后本专项计划整体标记为"已完成"。
+
+## Step 0 证据
+
+本节为 2026-07-15 的治理补充。基线类型：历史计划现状快照与既有阶段完成证据；本计划原有样本、命令和完成记录仍是业务事实源，本节不新增未验证的业务结论。
+
+## 验证方式
+
+治理补充使用 `plan-governance-cli check . --strict-readiness`、`git diff --check`、`python -m pytest -q` 和 `bash tests/test-fix-validate.sh` 复核；失败时只回滚本次文档补充，不改变代码、PDF 产物或数据库。
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

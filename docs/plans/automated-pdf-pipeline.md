@@ -1,5 +1,13 @@
 # 计划：自动化 PDF 解析流水线
 
+## Step 0 Evidence
+
+基线类型：历史已完成计划的现状快照与既有阶段证据。补充本节只为治理检查提供结构化入口，不改变本计划已完成阶段的业务结论。
+
+## 验证方式
+
+使用 `plan-governance-cli check . --strict-readiness` 检查 Step 0、验证方式和测试覆盖率入口；使用仓库现有回归命令复核当前工作区，失败时仅回滚本次治理文档补充。
+
 ## 背景
 
 长 PDF 使用 MinerU 单次全量解析时，macOS 上的 PyTorch/MPS 缓存和 MinerU 中间结果会让内存持续增长。分段解析可以让每段结束后释放进程缓存，内存更稳定。
@@ -242,3 +250,15 @@ PDF_AUTO_JSON=1 scripts/pdf-auto pdf/demo5/demo5.pdf pdf/demo5/segments
 - [MCP 接入设计](../../mcp/README.md)
 - [superpowers pdf-auto 实施记录](../superpowers/plans/2026-06-27-pdf-auto-plan.md)
 - [superpowers pdf-auto JSON 模式实施记录](../superpowers/plans/2026-06-28-pdf-auto-json-mode-plan.md)
+
+## Step 0 证据
+
+本节为 2026-07-15 的治理补充。基线类型：历史计划现状快照与既有阶段完成证据；本计划原有样本、命令和完成记录仍是业务事实源，本节不新增未验证的业务结论。
+
+## 验证方式
+
+治理补充使用 `plan-governance-cli check . --strict-readiness`、`git diff --check`、`python -m pytest -q` 和 `bash tests/test-fix-validate.sh` 复核；失败时只回滚本次文档补充，不改变代码、PDF 产物或数据库。
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

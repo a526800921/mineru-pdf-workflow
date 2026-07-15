@@ -468,3 +468,7 @@ MCP 文档一致性：
 - [PDF 输出包目录结构](pdf-output-package-layout.md)
 - [逐页锚点](per-page-anchors.md)
 - [项目级 pdf2md skill](../../skills/pdf2md/SKILL.md)
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

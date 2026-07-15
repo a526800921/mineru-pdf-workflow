@@ -1,5 +1,13 @@
 # 计划：结构化数据冲突误报与上下文主键修正
 
+## Step 0 Evidence
+
+基线类型：历史已完成计划的现状快照与既有阶段证据。补充本节只为治理检查提供结构化入口，不改变本计划已完成阶段的业务结论。
+
+## 验证方式
+
+使用 `plan-governance-cli check . --strict-readiness` 检查 Step 0、验证方式和测试覆盖率入口；使用仓库现有回归命令复核当前工作区，失败时仅回滚本次治理文档补充。
+
 ## 背景
 
 真实样本 `pdf/春风 150AURA` 在执行结构化数据与入库准备流程后产生 35 组冲突，导致 390 条记录全部停留在 `ingest_status=not_ready`。人工对照最终 Markdown 与 PDF 原文页后确认，这些冲突基本不是同一事实互相矛盾，而是当前抽取和入库准备流程缺少页面、表格、父级行/列等上下文，把局部编号、符号、规格或状态标签误当成全局唯一 key。
@@ -526,3 +534,15 @@ node .gitnexus/run.cjs detect_changes --repo mineru-pdf-workflow
 - `record_id` 是否应纳入新增上下文字段；若纳入，需要定义旧 `review_overrides.csv` 的迁移策略。
 - `conflicts.csv` 是否需要新增 `conflict_type`、`identity_fields`、`excluded_reason` 字段。
 - 第一版是否允许自动生成“误报解除报告”，用于人工批量审核。
+
+## Step 0 证据
+
+本节为 2026-07-15 的治理补充。基线类型：历史计划现状快照与既有阶段完成证据；本计划原有样本、命令和完成记录仍是业务事实源，本节不新增未验证的业务结论。
+
+## 验证方式
+
+治理补充使用 `plan-governance-cli check . --strict-readiness`、`git diff --check`、`python -m pytest -q` 和 `bash tests/test-fix-validate.sh` 复核；失败时只回滚本次文档补充，不改变代码、PDF 产物或数据库。
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

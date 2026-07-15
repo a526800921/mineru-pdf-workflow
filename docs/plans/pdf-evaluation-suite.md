@@ -387,3 +387,7 @@ python3 scripts/check_plan_governance.py .
 - [pdf-workflow-enhancement-roadmap](pdf-workflow-enhancement-roadmap.md) — P4 上游路线图与阶段顺序事实源
 - [覆盖率验证口径优化计划](coverage-validation-optimization.md#后续增强候选) — P4a TOC 条目字段方案事实源
 - [MCP 接入设计](../../mcp/README.md) — P4b 可选 `eval_tables` 工具契约
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

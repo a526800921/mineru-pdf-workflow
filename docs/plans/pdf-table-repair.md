@@ -1,9 +1,21 @@
 # 计划：pdf-table-repair 页级表格候选重建
 
+## Step 0 Evidence
+
+基线类型：春风250Sr真实输出包的页锚点、TOC、表格修复、结构化抽取和入库前准备快照。阶段 4 以真实包业务验收和治理检查作为完成门禁，未确认候选不得写回 canonical Markdown。
+
+## 验证方式
+
+执行 `scripts/pdf-check-fixes pdf/春风250Sr`、`python -m pytest -q`、`bash tests/test-fix-validate.sh` 和 `plan-governance-cli check . --strict-readiness`；任一失败时保留原始包并回滚本轮文档或修复记录变更。
+
+## Test Coverage
+
+当前回归证据：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`；真实包 `scripts/pdf-check-fixes pdf/春风250Sr` 通过。该证据用于阶段 4 的仓库级回归确认，不宣称历史阶段具有额外行覆盖率百分比。
+
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 4：独立验收
+- 状态：已完成
+- 当前阶段：阶段 4：独立验收（已完成）
 - 最后更新：2026-07-15
 
 本文档是页级表格“格式化 + 异常证据 + 候选重建”能力的事实源。它依赖 [pdf-table-audit](pdf-table-audit.md) 提供异常页和 PDF 证据，不把表格语义修复混入 `pdf-merge` 的纯 pretty-print，也不把人工判断伪装成全自动事实生成。
@@ -75,7 +87,9 @@
 
 ## 当前阶段
 
-阶段 4：独立验收与治理收尾。旧版合并级 TOC 修复覆盖正文的问题已完成重建：当前 canonical Markdown 已从 138 个非空分段重新生成，TOC、表格修复、下游抽取、人工审核和入库前批次均已重跑。图示编号产生的 29 条纯数字 key 已通过当前 PDF 包的配置策略过滤；179 条候选已确认，3 条联系方式拒绝。计划尚未标记完成的原因是治理检查仍有历史已完成计划的证据缺陷。
+阶段 4：独立验收与治理收尾已完成。旧版合并级 TOC 修复覆盖正文的问题已完成重建：当前 canonical Markdown 已从 138 个非空分段重新生成，TOC、表格修复、下游抽取、人工审核和入库前批次均已重跑。图示编号产生的 29 条纯数字 key 已通过当前 PDF 包的配置策略过滤；179 条候选已确认，3 条联系方式拒绝。
+
+治理收尾依赖 [历史计划治理证据补全](legacy-plan-governance-evidence-remediation.md)，该计划只补治理文档证据，不改变本计划的业务产物。
 
 ### 阶段准入摘要
 
@@ -86,8 +100,8 @@
 | 样本矩阵 | demo20 p14–p16、demo60 p47/p48、春风250Sr p85–p94、p132–p133；每项均记录输入基线、执行命令、预期结果和失败判定 |
 | 验证方式 | 逐样本执行 audit → draft → 人工/VLM文字证据 → apply/reject → `pdf-check-fixes`，并复核 `pdf-extract-data`、`pdf-prepare-ingest` 的 canonical 输入一致性 |
 | 失败/回滚边界 | 来源 hash、页锚点、命中次数或 manifest hash 失败时非零退出；使用临时副本和事务字节级回滚，原始 canonical 包保持不变 |
-| 当前阻塞项 | 业务无阻塞；治理收尾仍受历史已完成计划缺少 Step 0/测试覆盖率证据影响 |
-| 最新独立准入复核 | 2026-07-14，阶段 4，结论：业务产物复核通过，治理收尾未完成，见下方补充复核记录 |
+| 当前阻塞项 | 无 |
+| 最新独立准入复核 | 2026-07-15，阶段 4，结论：业务与治理验收通过，全计划关闭，见下方补充复核记录 |
 
 ### 最新独立准入复核
 
@@ -95,8 +109,8 @@
 |---|---|
 | 日期 | 2026-07-15 |
 | 阶段 | 阶段 4：独立验收 |
-| 结论 | 通过：业务产物独立验收通过；治理收尾未完成，计划暂不关闭 |
-| 证据 | 138/138 页面有正文；TOC 120/120；`pdf-check-fixes` 通过；抽取 182 行，`pdf-prepare-ingest` 为 179 ready、0 not_ready、3 skipped、0 conflicts，纯数字 key 为 0；`ingest_batch.jsonl` 179 条且与 ready 集合一致；312 个 Python 测试和 133/133 shell 回归通过；全局治理检查仍受历史计划证据缺陷影响 |
+| 结论 | 通过：业务与治理验收通过，全计划关闭 |
+| 证据 | 138/138 页面有正文；TOC 120/120；`pdf-check-fixes` 通过；抽取 182 行，`pdf-prepare-ingest` 为 179 ready、0 not_ready、3 skipped、0 conflicts，纯数字 key 为 0；`ingest_batch.jsonl` 179 条且与 ready 集合一致；312 个 Python 测试和 133/133 shell 回归通过；`plan-governance-cli check . --strict-readiness` 通过 |
 | 复核者 | 独立治理复核 |
 
 ## 独立复核记录
@@ -109,6 +123,7 @@
 | 2026-07-14 | 独立治理复核 | 阶段 4：独立验收 | 通过：业务产物重建与入库前准备通过；治理收尾未完成 | 138/138 页面非空、TOC 120/120、`pdf-check-fixes` 通过、抽取 182 行、75 ready/104 not_ready/3 skipped、0 conflicts、纯数字 key 为 0；治理检查仍有历史计划证据错误 |
 | 2026-07-14 | 独立治理复核 | 阶段 4：独立验收 | 通过：用户确认后的入库前批次复核通过；治理收尾未完成 | 用户确认 104 条候选无问题；`pdf-prepare-ingest` 为 179 ready/0 not_ready/3 skipped/0 conflicts，`pdf-export-ingest` 生成 179 条批次，纯数字 key 为 0；治理检查仍有历史计划证据错误 |
 | 2026-07-15 | 独立验收复核 | 阶段 4：独立验收 | 通过：业务产物独立验收通过；治理收尾未完成，计划暂不关闭 | 当前真实包 138/138 页锚点、0 空页块、TOC 120 条；12 条 applied 修复、11 条 proposed draft；182 行抽取为 179 ready/3 skipped，179 条导出集合与 ready 集合一致，0 冲突、0 纯数字 key；`pdf-check-fixes`、312 pytest、133/133 修复回归和工作区检查通过；`plan-governance-cli check .` 仍报告历史已完成计划缺少 Step 0/测试覆盖率证据 |
+| 2026-07-15 | 独立验收复核 | 阶段 4：独立验收 | 通过：业务与治理验收通过，全计划关闭 | 上述真实包业务证据不变；`plan-governance-cli check . --strict-readiness` 通过；`scripts/pdf-check-fixes pdf/春风250Sr`、312 pytest、133/133 修复回归和 `git diff --check` 均通过；治理证据补全计划已完成 |
 
 ## 影响模块或文件
 
@@ -466,14 +481,14 @@ scripts/pdf-prepare-ingest <tmp>
 
 结果：`apply`、`pdf-check-fixes`、`pdf-extract-data`、`pdf-prepare-ingest` 均返回 0；生成 `quick_lookup_draft.csv` 120 行、`ingest_ready.csv` 120 行、`conflicts.csv` 0 组。当前 120 行均为 `not_ready`，原因是既有 `page_numbering.status=needs_review`，不是本次表格修复失败。该证据证明修复后的 canonical Markdown、`manual_fixes.jsonl`、manifest 和入库前处理可以沿同一临时包继续流转，但尚未替代真实正式样本验收。
 
-### 阶段 4：独立验收（2026-07-14）
+### 阶段 4：独立验收（2026-07-15）
 
 - 指定页参数、单页/多页页锚点和跨页 `table_id` 回归通过；
 - draft 未确认时 canonical Markdown 和 manifest 不变；
 - 确认应用后 Markdown、`manual_fixes.jsonl`、manifest hash 一致；
 - malformed HTML、来源 hash 不匹配、命中次数异常和中途失败均完整回滚；
 - VLM 证据只用于文字/数字确认，不出现结构结论越权；
-- `pytest -q`、相关 shell 回归、真实样本检查、治理和 drift 检查通过。
+- `python -m pytest -q`、相关 shell 回归、真实样本检查、`plan-governance-cli check . --strict-readiness` 和 `git diff --check` 通过。
 
 ## 风险与回滚
 

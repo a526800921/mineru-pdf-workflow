@@ -408,3 +408,7 @@ git diff --check
 ## 后续边界
 
 本计划只负责“语义保持的可读性格式化”。表格结构重建、跨页逻辑关系、目录语义修复和字段规范化继续由 `pdf2md-fix` 人工流程或独立计划负责。
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

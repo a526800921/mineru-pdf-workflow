@@ -308,3 +308,7 @@ P3b 不引入新依赖，只做数据准备。下游项目拿 `chunks.jsonl` 自
 - [MCP 接入设计](../../mcp/README.md) — P2 工具契约事实源
 - [自动化 PDF 解析流水线计划](automated-pdf-pipeline.md) — P1-P5 均依赖其 CLI 契约
 - [覆盖率验证口径优化计划](coverage-validation-optimization.md) — TOC 条目级验证设计（P4）
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

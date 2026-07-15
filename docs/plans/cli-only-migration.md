@@ -84,3 +84,7 @@ rg -n -i 'mcp/server|\.mcp\.json|run_pdf_auto|MCP server' README.md skills docs/
 |---|---|---|
 | 是否保留 MCP 历史设计文档 | 保留 `mcp/README.md` 作为迁移记录，不再承载当前契约 | 已确认 |
 | 是否继续维护 MCP 工具兼容层 | 不维护；如未来需要，另立迁移计划和 ADR | 已确认 |
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。

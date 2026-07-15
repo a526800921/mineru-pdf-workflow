@@ -103,3 +103,7 @@ bash -n scripts/pdf-eval-vlm scripts/lib/modelpad-vlm-service scripts/test-vlm-s
 - [x] JSON stdout、失败清理和原有 P4c 测试全部通过。
 - [x] 项目级 skill、用户级 skill、P4c 计划和 `PLAN_MAP.md` 已同步。
 - [x] GitNexus `detect_changes()`、治理检查和 `git diff --check` 通过。
+
+## Test Coverage（测试覆盖率证据）
+
+这是 2026-07-15 的仓库级回归基线：`python -m pytest -q` 为 `312 passed, 5 warnings`；`bash tests/test-fix-validate.sh` 为 `133/133`。该证据用于确认当前仓库回归状态，不冒充本历史计划的行覆盖率百分比。
