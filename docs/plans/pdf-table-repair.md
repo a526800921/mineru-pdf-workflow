@@ -4,7 +4,7 @@
 
 - 状态：实施中
 - 当前阶段：阶段 4：独立验收
-- 最后更新：2026-07-14
+- 最后更新：2026-07-15
 
 本文档是页级表格“格式化 + 异常证据 + 候选重建”能力的事实源。它依赖 [pdf-table-audit](pdf-table-audit.md) 提供异常页和 PDF 证据，不把表格语义修复混入 `pdf-merge` 的纯 pretty-print，也不把人工判断伪装成全自动事实生成。
 
@@ -93,10 +93,10 @@
 
 | 字段 | 内容 |
 |---|---|
-| 日期 | 2026-07-14 |
+| 日期 | 2026-07-15 |
 | 阶段 | 阶段 4：独立验收 |
-| 结论 | 通过：用户确认后的入库前批次复核通过；治理收尾未完成 |
-| 证据 | 138/138 页面有正文；TOC 120/120；`pdf-check-fixes` 通过；抽取 182 行，`pdf-prepare-ingest` 为 179 ready、0 not_ready、3 skipped、0 conflicts，纯数字 key 为 0；`ingest_batch.jsonl` 已重生成 179 条；全量 304 个 Python 测试和 133/133 shell 回归通过 |
+| 结论 | 通过：业务产物独立验收通过；治理收尾未完成，计划暂不关闭 |
+| 证据 | 138/138 页面有正文；TOC 120/120；`pdf-check-fixes` 通过；抽取 182 行，`pdf-prepare-ingest` 为 179 ready、0 not_ready、3 skipped、0 conflicts，纯数字 key 为 0；`ingest_batch.jsonl` 179 条且与 ready 集合一致；312 个 Python 测试和 133/133 shell 回归通过；全局治理检查仍受历史计划证据缺陷影响 |
 | 复核者 | 独立治理复核 |
 
 ## 独立复核记录
@@ -108,6 +108,7 @@
 | 2026-07-14 | 独立治理复核 | 阶段 4：独立验收 | 未通过：canonical Markdown 仍是旧版 TOC 覆盖后的不完整产物 | 138 个分段均非空，canonical 仅 23 页有正文；需重新执行完整合并、修复和下游重跑 |
 | 2026-07-14 | 独立治理复核 | 阶段 4：独立验收 | 通过：业务产物重建与入库前准备通过；治理收尾未完成 | 138/138 页面非空、TOC 120/120、`pdf-check-fixes` 通过、抽取 182 行、75 ready/104 not_ready/3 skipped、0 conflicts、纯数字 key 为 0；治理检查仍有历史计划证据错误 |
 | 2026-07-14 | 独立治理复核 | 阶段 4：独立验收 | 通过：用户确认后的入库前批次复核通过；治理收尾未完成 | 用户确认 104 条候选无问题；`pdf-prepare-ingest` 为 179 ready/0 not_ready/3 skipped/0 conflicts，`pdf-export-ingest` 生成 179 条批次，纯数字 key 为 0；治理检查仍有历史计划证据错误 |
+| 2026-07-15 | 独立验收复核 | 阶段 4：独立验收 | 通过：业务产物独立验收通过；治理收尾未完成，计划暂不关闭 | 当前真实包 138/138 页锚点、0 空页块、TOC 120 条；12 条 applied 修复、11 条 proposed draft；182 行抽取为 179 ready/3 skipped，179 条导出集合与 ready 集合一致，0 冲突、0 纯数字 key；`pdf-check-fixes`、312 pytest、133/133 修复回归和工作区检查通过；`plan-governance-cli check .` 仍报告历史已完成计划缺少 Step 0/测试覆盖率证据 |
 
 ## 影响模块或文件
 
