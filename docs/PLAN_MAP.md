@@ -43,7 +43,7 @@
 | [toc-target-page-coordinate-fix](plans/toc-target-page-coordinate-fix.md) | 已完成 | 全阶段（0-4）已完成，全计划闭环 | 2026-07-13 | toc-page-physical-attribution-fix、pdf-extract-data-table-coverage、pdf-output-package-layout、pdf2md-fix-manual-workflow、阶段 0-4 逐项验收：页码检测/标准化/消费者门禁/真实样本/独立验收通过、310 tests pass、页码专项校验通过 | [阶段 4 再次独立复核](plans/toc-target-page-coordinate-fix.md#阶段-4-再次独立复核2026-07-13通过) |
 | [pdf-table-repair](plans/pdf-table-repair.md) | 实施中 | 阶段 4：独立验收 | 2026-07-14 | pdf-table-audit、pdf-extract-data、pdf-prepare-ingest | canonical 已从 138 个非空分段完整重建，TOC 120/120；包级策略过滤 29 条纯数字 key 后，抽取 182 行，179 条已确认、3 条拒绝，0 冲突，入库前批次已重生成。业务产物通过，治理检查仍有历史已完成计划证据缺陷 | [用户确认后的入库前批次复核](plans/pdf-table-repair.md#用户确认后的入库前批次复核2026-07-14) |
 | [pdf-extract-data-table-coverage](plans/pdf-extract-data-table-coverage.md) | 实施中 | 阶段 1：通用网格展开与 LLM/配置驱动列语义 | 2026-07-14 | structured-data-extraction、data-ingestion-pipeline、pdf2md-fix-manual-workflow、pdf-table-audit、pdf-table-repair、PyMuPDF；当前 PDF 的列映射由包内 JSON 提供 | [Step 0 补充证据](plans/pdf-extract-data-table-coverage.md#step-0-补充证据2026-07-14) |
-| [llm-human-collaboration-migration](plans/llm-human-collaboration-migration.md) | 设计中 | 阶段 5：治理收尾与兼容策略决策 | 2026-07-15 | `pdf2md-fix-manual-workflow`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`cli-only-migration`、ADR 0003 | 阶段 1、阶段 2、阶段 3、阶段 4 已独立验收关闭；阶段 5 尚未完成 Step 0，未启动实施 | [阶段 4 独立验收](plans/llm-human-collaboration-migration.md#阶段-4-独立验收2026-07-15通过) |
+| [llm-human-collaboration-migration](plans/llm-human-collaboration-migration.md) | 已完成 | 阶段 5：治理收尾与兼容策略决策已完成 | 2026-07-15 | `pdf2md-fix-manual-workflow`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`cli-only-migration`、ADR 0003 | 用户已批准并完成废弃 `pdf2md-fix`；项目级/用户级兼容 skill 已删除，活动引用已迁移，主 `pdf2md` skill 同步；原有 PDF 产物和 CLI 不变 | [阶段 5 独立验收](plans/llm-human-collaboration-migration.md#阶段-5-独立验收2026-07-15通过) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -153,7 +153,7 @@
 | PDF 服务生命周期将由 ModelPad app 托管 | 全阶段（0-3）已完成：脚本不再管理服务进程/shared 输出目录，`pdf-auto` 重跑失败安全兜底，`pdf-merge` 图片同名冲突检测 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、运行手册 | 否 | 已解决 |
 | PDF 服务未启动时需要按需调用 ModelPad start/stop | 全阶段（0-3）已完成：helper 封装启停逻辑，三个入口已接入；无服务时自启、用完自停；已有服务时只复用不停止；失败路径可诊断 | `pdf-seg`、`pdf-auto`、`pdf-rerun`、ModelPad API | 否 | 已解决 |
 | `pdf-prepare-ingest` 对真实手册表格产生冲突误报 | `conflict-context-ingestion-fix` 全阶段（0-3）已完成：上下文感知冲突判定 + rowspan 父级识别，春风样本冲突 35→0 组，已知误报全部消除 | `pdf-extract-data`、`pdf-prepare-ingest`、`conflicts.csv`、`ingest_ready.csv` | 否 | 已解决 |
-| LLM/人工协作入口仍分为 `pdf2md` 与 `pdf2md-fix` | 阶段 3 已将 `pdf2md-fix` 收敛为兼容跳转；阶段 4 已验证统一协作闭环，阶段 5 再决定兼容入口最终状态 | skill 文档、用户协作方式、pdf2md-fix 兼容入口 | 否（阶段 4 已完成） | 设计中 |
+| LLM/人工协作入口仍分为 `pdf2md` 与 `pdf2md-fix` | 阶段 3 已收敛为兼容跳转；阶段 4 已验证统一协作闭环；阶段 5 已按用户批准废弃兼容 skill，统一由 `pdf2md` 承担入口 | skill 文档、用户协作方式、历史 pdf2md-fix 兼容入口 | 否 | 已解决 |
 | P4c 多模态 VLM 需本地模型选型与验收基准 | 页面基线、qwen3-vl-8b 单页探针、JSON mode 复测、10 页混合抽样及人工核对均完成 | `pdf-evaluation-suite` P4c、本地 VLM 后端 | 否 | 已解决 |
 | `pdf-table-repair` 阶段 4 治理收尾 | canonical 已从 138 个非空分段重建并完成 TOC/表格修复、抽取、人工审核和入库前批次生成；29 条纯数字 key 已由当前包级策略过滤，179 条已确认、3 条拒绝。治理检查仍报告历史已完成计划缺少 Step 0/测试覆盖率证据 | `pdf-table-repair`、治理检查 | 否（业务）；是（治理收尾） | 实施中 |
 

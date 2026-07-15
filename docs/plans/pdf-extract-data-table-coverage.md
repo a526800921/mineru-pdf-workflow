@@ -55,7 +55,7 @@ Step 0 必须把外部报告中的 250Sr 页码映射到当前项目真实输出
 - `scripts/pdf-check-fixes`：验证抽取候选的来源字段或 manifest 派生产物登记，具体是否扩展由 Step 0 决定。
 - `scripts/pdf-table-fix`：提供异常页和来源证据；页级修复由依赖计划 `pdf-table-repair` 承接，本计划不修改其实现。
 - `tests/`：新增多层表头、两列简表、无关键词表头、歧义表格和漏抽覆盖回归。
-- `skills/pdf2md-fix/SKILL.md`：补充“抽取覆盖缺口 → 候选 → 人工审核”的入口说明；只有公共契约变化时才同步用户级 skill。
+- `skills/pdf2md/SKILL.md`：承载“抽取覆盖缺口 → 候选 → 人工审核”的统一入口说明；原 `pdf2md-fix` skill 已废弃，公共契约变化时同步用户级 `pdf2md` skill。
 - `docs/PLAN_MAP.md`：登记状态、依赖和验收证据。
 
 ## 抽取候选契约（设计中）

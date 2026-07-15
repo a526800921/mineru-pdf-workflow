@@ -77,7 +77,7 @@ MODELPAD_PDF_START_TIMEOUT=120
     ingest_manifest.json
     table_accuracy.csv       ← 表格结构自检评测（P4b，只读）
     vlm_eval.jsonl           ← VLM 图表理解描述（P4c，每页一行 JSON）
-    manual_fixes.jsonl       ← pdf2md-fix 阶段的人工修复事实源（可选）
+    manual_fixes.jsonl       ← pdf2md 人工协作阶段的修复事实源（可选）
     logical_tables.jsonl     ← manual_fixes.jsonl 的可选逻辑表格派生视图
 ```
 
@@ -103,7 +103,7 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
 - `scripts/pdf-eval-vlm /path/to` **可选**写入 `<pdf_dir>/data/vlm_eval.jsonl`（对 `image_or_sparse` 页做本地 VLM 视觉补充；标准模型固定为 `qwen3-vl-8b`，默认自动启停，设 `VLM_API_BASE` 可直连但仍需确认模型身份）。
 - `scripts/pdf-merge <segments_dir>` 合并分段 Markdown，输出带**段级锚点** `<!-- pages N-M -->` 的合并 md。回填旧包时直接重跑此命令。
-- `pdf2md-fix` 位于 `pdf-auto` 完成之后、`pdf-extract-data` 之前；人工修复原地更新 canonical Markdown，并将修复状态、来源 hash、`manual_fixes.jsonl` hash 和当前 Markdown hash 同步写入 `manifest.json`。不生成 `*-fixed.md`。对于扫描结果为空的页，只允许在人工确认的 `rebuild_table`/`cross_page_table` 记录中使用 `allow_empty_page=true`，按页锚点写入新表格并保持幂等。
+- `pdf2md` 的人工协作阶段位于 `pdf-auto` 完成之后、`pdf-extract-data` 之前；人工修复原地更新 canonical Markdown，并将修复状态、来源 hash、`manual_fixes.jsonl` hash 和当前 Markdown hash 同步写入 `manifest.json`。不生成 `*-fixed.md`。对于扫描结果为空的页，只允许在人工确认的 `rebuild_table`/`cross_page_table` 记录中使用 `allow_empty_page=true`，按页锚点写入新表格并保持幂等。
 - `logical_tables.jsonl` 只有存在独立下游消费者时才生成，且必须由 `manual_fixes.jsonl` 派生，不能作为第二个事实源。
 - 目录页由 `toc_repair` 按**物理目录页**归属：条目只归属于其 PDF 原生文本实际出现的物理目录页（完整行/词边界匹配，短标题不命中更长词，如“制动”不命中“前制动手柄”）；无法唯一归属时进入 `review`，不静默猜测。目录输出分三个用途，禁止下游混用：
   - `doc.md`：主文档，保留段级锚点 `<!-- pages N-M -->`，供按页读取、结构化抽取和 section 映射；
@@ -169,7 +169,7 @@ scripts/pdf-export-ingest /path/to
 - 已经格式化完成、没有实际 HTML 变化的 `pretty_print` 候选不会进入 apply 阶段；这类页面只保留人工审计证据；
 - 只有最终 Markdown、目录产物、修复记录和 manifest 完成同步后，才重新运行 `pdf-extract-data` 与 `pdf-prepare-ingest`。
 
-`content_list*.json` 和原始 segments 始终只读。`pdf2md-fix`/`pdf-table-repair` 的职责是提供人工校对证据、页级安全应用和产物同步，不继续扩展为全自动表格语义重建器。
+`content_list*.json` 和原始 segments 始终只读。`pdf2md` 人工协作阶段与 `pdf-table-repair` 负责提供人工校对证据、页级安全应用和产物同步，不继续扩展为全自动表格语义重建器。
 
 ## 工具选择
 
@@ -359,7 +359,7 @@ data/ingest_manifest.json
 
 ## LLM/人工协作阶段（统一主入口）
 
-`pdf2md` 是用户面对的主入口。用户不需要记忆或执行脚本；LLM 负责读取产物、选择工具、维护配置、执行验证和汇报结果。`pdf2md-fix` 已收敛为兼容入口，历史触发方式继续导向本节统一流程；入口最终是否废弃或保留，由 [LLM/人工协作入口迁移计划](../../docs/plans/llm-human-collaboration-migration.md) 阶段 4/5 独立验收决定。
+`pdf2md` 是唯一用户入口。用户不需要记忆或执行脚本；LLM 负责读取产物、选择工具、维护配置、执行验证和汇报结果。原 `pdf2md-fix` 兼容 skill 已按阶段 5 用户批准废弃，不再提供第二个触发入口；历史计划中的名称仅保留为迁移记录和产物字段来源说明。
 
 ### 统一顺序
 

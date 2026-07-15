@@ -16,7 +16,7 @@
 
 - 用户只需要与 `pdf2md` skill 对话，不需要记忆 CLI 参数。
 - `pdf2md` skill 负责识别当前阶段、读取产物、决定下一步、向用户展示需要确认的事实，并编排 CLI。
-- `pdf2md-fix` 当前保留为兼容 skill；后续可按既有复盘报告迁移为 `pdf2md` 的人工协作章节。
+- `pdf2md-fix` 的人工协作能力已经迁入 `pdf2md`；用户已批准废弃旧兼容 skill，后续只维护 `pdf2md` 入口。历史计划和产物中的 `manual_fixes.jsonl` 等名称仅表示修复记录，不表示仍存在第二个 skill 入口。
 
 ### 2. CLI 继续作为确定性执行层
 
