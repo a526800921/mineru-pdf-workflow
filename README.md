@@ -77,6 +77,8 @@ scripts/pdf-export-chunks
 
 当现有 CLI 无法安全处理一次性异常时，LLM 可以编排临时动态辅助脚本，并通过 `scripts/pdf-run-helper` 执行。动态脚本必须先备份、dry-run，限制目标文件范围，执行后只读验证，失败整组回滚；重复出现的问题先补通用 fixture，再考虑晋升为公共 CLI。详细边界见 [ADR 0003](docs/adr/0003-llm-orchestrated-dynamic-assistants.md) 和 [pdf2md skill](skills/pdf2md/SKILL.md)。
 
+脚本项目根目录由 `pdf2md` skill 解析：优先使用 `PDF2MD_PROJECT_ROOT`，再校验当前目录向上查找结果；当前机器的脚本项目是 `/Users/jafish/Documents/work/mineru-pdf-workflow`。PDF 所在目录只承载本次 PDF 的输出包，不作为脚本仓库使用。找不到已存在的公共脚本时，应先报告路径问题，不得在错误仓库中临时创建同名通用脚本；如果是已定位正确项目后发现 CLI 能力不足，则仍可按 ADR 0003 使用受控的临时动态辅助脚本。
+
 ## 推荐流程
 
 ```bash

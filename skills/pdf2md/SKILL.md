@@ -27,8 +27,14 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 ## 前置条件
 
 - PDF 可放在任意路径；所有产物（segments、md、review、manifest、images、data）默认输出到 **PDF 所在目录**，无需将 PDF 复制到本项目。
-- 项目根目录必须先定位，再调用脚本：优先使用当前工作目录，或从当前目录向上查找同时包含 `scripts/pdf-auto` 和 `skills/pdf2md/SKILL.md` 的目录；也可使用 `git rev-parse --show-toplevel` 获取仓库根目录。定位成功后记为绝对路径 `<project>`，所有脚本都通过 `<project>/scripts/<command>` 调用，不假设用户级 skill 目录下存在项目脚本。
+- 项目根目录必须先定位，再调用脚本。解析优先级固定为：
+  1. 使用环境变量 `PDF2MD_PROJECT_ROOT`（如果已设置）；
+  2. 从当前工作目录向上查找同时包含 `scripts/pdf-auto` 和 `skills/pdf2md/SKILL.md` 的目录；
+  3. 当前机器的已登记项目根目录 `/Users/jafish/Documents/work/mineru-pdf-workflow`，但必须再次校验该目录确实包含目标脚本；
+  4. 如果仍找不到，停止并报告缺失路径；不得因为路径错误而在错误仓库中自行创建或改写同名公共 `pdf-*` 脚本。
+- `git rev-parse --show-toplevel` 只能作为候选路径，不能单独视为脚本项目根目录；必须通过 `scripts/pdf-auto` 和 `skills/pdf2md/SKILL.md` 存在性校验。定位成功后记为绝对路径 `<project>`，所有脚本都通过 `<project>/scripts/<command>` 调用，不假设用户级 skill 目录下存在项目脚本。
 - 当前项目的通用脚本目录是 `<project>/scripts/`，公共库在 `<project>/scripts/lib/`；PDF 在项目外时，脚本仍使用项目根目录定位，产物仍写回 PDF 所在目录。
+- 如果已定位到正确项目但现有 CLI 不满足一次性、范围明确的操作，可以按“动态辅助脚本”规则创建临时脚本；临时脚本不得冒充或覆盖公共 `scripts/pdf-*`，必须通过 `scripts/pdf-run-helper` 执行备份、dry-run、allowlist、只读验证和失败回滚。
 - 当前项目没有运行时通用 `templates/` 目录。`docs/reports/probe-template.md` 仅是报告探针模板；PDF 包级抽取配置使用 `<package>/data/extraction_overrides.json`，下游入口 `downstream_delivery.md` 根据实际产物动态生成，不从固定模板猜测文件状态或数量。
 - 自动化 PDF 流程使用 `scripts/pdf-auto <pdf> <segments_dir>`；需要机器可读结果时设置 `PDF_AUTO_JSON=1`。
 - ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9999`。
