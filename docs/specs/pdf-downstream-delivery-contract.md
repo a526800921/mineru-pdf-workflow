@@ -23,7 +23,7 @@
 每个 PDF 输出包在本次流程的最后一个交付阶段都应生成：
 
 ```text
-data/downstream_delivery.md
+downstream_delivery.md
 ```
 
 这是下游的首个阅读入口和交付导航，不是新的业务事实源。它必须根据当前包内实际文件、`manifest.json`、`ingest_manifest.json` 和 `chunks.jsonl` 汇总生成；任何文件变更、重新抽取或重新审核后都必须重新生成。
@@ -38,6 +38,7 @@ data/downstream_delivery.md
   review.md                    # 剩余异常和人工复核清单
   manifest.json                # 文件关系、hash、页码和解析状态
 
+  downstream_delivery.md      # 下游首个阅读入口
   data/
     extraction_overrides.json  # LLM/人工确认的包级抽取配置，可选
     chunks.jsonl               # 向量化前纯文本块，可选
@@ -121,7 +122,7 @@ data/downstream_delivery.md
 
 ### 6.3 消费规则
 
-- 下游首先读取 `data/downstream_delivery.md`，再按其中的实际路径读取资源。
+- 下游首先读取包根目录的 `downstream_delivery.md`，再按其中的实际路径读取资源。
 - 入口文件只做导航和状态汇总；具体记录以 `manifest.json`、`ingest_manifest.json`、`ingest_batch.jsonl`、`chunks.jsonl` 和审核文件为准。
 - 不把入口文件本身、`review.md`、`quick_lookup_draft.csv` 或 `verification.csv` 当作正文、embedding 或入库数据。
 - 如果状态是 `review_required` 或 `blocked`，下游不得把未达门禁的候选当作最终数据；应根据入口文件列出的剩余异常回到 `review.md` 或审核队列。

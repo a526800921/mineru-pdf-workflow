@@ -73,7 +73,7 @@ scripts/pdf-export-chunks
 
 从 `manifest.json.files.markdown` 指定的 canonical Markdown 生成 `data/chunks.jsonl`。不会通过目录遍历猜测主文档，也不会把 `toc.md` 或 `review.md` 作为输入。
 
-每个 PDF 流程结束后，LLM 还会在 `data/downstream_delivery.md` 生成本包交付导航，列出实际可用文件、状态、数量、hash、剩余异常和下游消费顺序。下游应先读取该文件，再消费具体资源。
+每个 PDF 流程结束后，LLM 还会在 PDF 包根目录的 `downstream_delivery.md` 生成本包交付导航，列出实际可用文件、状态、数量、hash、剩余异常和下游消费顺序。下游应先读取该文件，再消费具体资源。
 
 当现有 CLI 无法安全处理一次性异常时，LLM 可以编排临时动态辅助脚本，并通过 `scripts/pdf-run-helper` 执行。动态脚本必须先备份、dry-run，限制目标文件范围，执行后只读验证，失败整组回滚；重复出现的问题先补通用 fixture，再考虑晋升为公共 CLI。详细边界见 [ADR 0003](docs/adr/0003-llm-orchestrated-dynamic-assistants.md) 和 [pdf2md skill](skills/pdf2md/SKILL.md)。
 

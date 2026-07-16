@@ -7,7 +7,7 @@ description: Use when the user wants to convert a PDF to Markdown, parse a PDF, 
 
 本 skill 是 Claude Code 用户级 `pdf2md` skill 的项目事实源。
 
-下游文件职责和交付门禁见：[PDF 下游交付契约](../../docs/specs/pdf-downstream-delivery-contract.md)。每个 PDF 输出包在本次流程的最后一个交付阶段必须生成 `<package>/data/downstream_delivery.md` 作为下游首个阅读入口；下游系统再按该契约选择 `canonical Markdown`、`chunks.jsonl` 或 `ingest_batch.jsonl`，不要直接消费过程草案。
+下游文件职责和交付门禁见项目内 `docs/specs/pdf-downstream-delivery-contract.md`（PDF 下游交付契约）。每个 PDF 输出包在本次流程的最后一个交付阶段必须生成 `<package>/downstream_delivery.md` 作为下游首个阅读入口；下游系统再按该契约选择 `canonical Markdown`、`chunks.jsonl` 或 `ingest_batch.jsonl`，不要直接消费过程草案。
 
 同步目标：
 
@@ -27,7 +27,9 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 ## 前置条件
 
 - PDF 可放在任意路径；所有产物（segments、md、review、manifest、images、data）默认输出到 **PDF 所在目录**，无需将 PDF 复制到本项目。
-- 脚本位于 `<project>/scripts/`，可通过绝对路径调用，也可将 `scripts/` 加入 `PATH`。
+- 项目根目录必须先定位，再调用脚本：优先使用当前工作目录，或从当前目录向上查找同时包含 `scripts/pdf-auto` 和 `skills/pdf2md/SKILL.md` 的目录；也可使用 `git rev-parse --show-toplevel` 获取仓库根目录。定位成功后记为绝对路径 `<project>`，所有脚本都通过 `<project>/scripts/<command>` 调用，不假设用户级 skill 目录下存在项目脚本。
+- 当前项目的通用脚本目录是 `<project>/scripts/`，公共库在 `<project>/scripts/lib/`；PDF 在项目外时，脚本仍使用项目根目录定位，产物仍写回 PDF 所在目录。
+- 当前项目没有运行时通用 `templates/` 目录。`docs/reports/probe-template.md` 仅是报告探针模板；PDF 包级抽取配置使用 `<package>/data/extraction_overrides.json`，下游入口 `downstream_delivery.md` 根据实际产物动态生成，不从固定模板猜测文件状态或数量。
 - 自动化 PDF 流程使用 `scripts/pdf-auto <pdf> <segments_dir>`；需要机器可读结果时设置 `PDF_AUTO_JSON=1`。
 - ModelPad app/API 必须在线；默认 API 为 `http://127.0.0.1:9999`。
 - 项目脚本使用的 MinerU CLI 与 ModelPad PDF 服务保持同版本；当前统一为 MinerU `3.4.4`。
@@ -61,6 +63,7 @@ MODELPAD_PDF_START_TIMEOUT=120
   toc_tree.json            ← 机器权威目录结构（title/target_page/toc_page/depth，可选 printed_page）
   review.md                ← 人工复核清单
   manifest.json            ← 解析状态元数据（含 page_numbering 页码坐标系契约）
+  downstream_delivery.md   ← 下游首个阅读入口（由最后交付阶段生成）
   segments/                ← 分段解析产物（默认每页一段，可设 MINERU_SEGMENT_SIZE 覆盖）
     p0001-0001/
     p0002-0002/
@@ -100,7 +103,7 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-extract-data /path/to` 写入 `<pdf_dir>/data/`。
 - `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
 - `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
-- 本次 PDF 流程的最后一步必须生成 `<pdf_dir>/data/downstream_delivery.md`。该文件是根据当前包实际产物生成的交付导航，汇总文件路径、状态、数量、hash、剩余异常和推荐消费顺序；它不是新的业务事实源。Markdown 修复、重新抽取、审核决定或入库批次变化后必须重新生成。
+- 本次 PDF 流程的最后一步必须生成 `<pdf_dir>/downstream_delivery.md`。该文件是根据当前包实际产物生成的交付导航，汇总文件路径、状态、数量、hash、剩余异常和推荐消费顺序；它不是新的业务事实源。Markdown 修复、重新抽取、审核决定或入库批次变化后必须重新生成。
 - 当现有 CLI 无法安全完成一个明确且有限的 PDF 特定操作时，LLM 可以先组合现有 CLI，再生成一次性或包级动态辅助脚本；运行前必须备份目标派生产物、记录 hash、先 dry-run、限制页锚点/record_id/文件范围，并在失败时整组回滚。动态脚本默认放在临时目录，不直接修改通用 `scripts/`。
 - 用户入口继续是 `pdf2md` skill，项目执行层继续使用 CLI；当前不新增 MCP Server 或 MCP 兼容层。只有出现跨机器远程调用、队列、多客户端发现或权限隔离需求时，才重新评估 MCP。
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
@@ -402,7 +405,7 @@ data/ingest_manifest.json
 每次流程结束后，LLM 必须先读取并生成/更新：
 
 ```text
-<package>/data/downstream_delivery.md
+<package>/downstream_delivery.md
 ```
 
 生成内容必须来自当前包实际文件和 manifest，不得把不存在的文件或记录计数写成 0。该入口至少说明本包状态、canonical Markdown、目录文件、`chunks.jsonl`、`ingest_batch.jsonl`、`ingest_manifest.json`、审核队列、冲突数量和剩余异常。下游先读这个入口，再按其中路径消费资源。
@@ -457,7 +460,7 @@ PDF 证据：第 <页码> 页；<原文/截图/表格范围>
 组合现有 CLI → 生成临时动态辅助脚本 → 同类问题重复后晋升通用 CLI
 ```
 
-动态脚本运行前必须备份目标 Markdown、manifest、相关 JSON/CSV 和修复记录，记录 hash，先执行 dry-run，并限制到页锚点、record_id 或明确文件范围。只允许修改派生产物，禁止修改 PDF、原始 `segments/` 和 `content_list*.json`。失败时整组回滚，重复运行必须幂等；默认脚本保留在临时目录，不直接写入通用 `scripts/`。详细规则见 [ADR 0003](../../docs/adr/0003-llm-orchestrated-dynamic-assistants.md)。
+动态脚本运行前必须备份目标 Markdown、manifest、相关 JSON/CSV 和修复记录，记录 hash，先执行 dry-run，并限制到页锚点、record_id 或明确文件范围。只允许修改派生产物，禁止修改 PDF、原始 `segments/` 和 `content_list*.json`。失败时整组回滚，重复运行必须幂等；默认脚本保留在临时目录，不直接写入通用 `scripts/`。详细规则见项目内 `docs/adr/0003-llm-orchestrated-dynamic-assistants.md`（ADR 0003）。
 
 统一事务包装器为 `scripts/pdf-run-helper`。LLM 先准备临时动态命令，再通过以下边界执行；用户不需要运行这条命令：
 

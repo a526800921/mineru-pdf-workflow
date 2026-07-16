@@ -784,7 +784,7 @@ git diff --check
 为避免下游需要自行猜测输出包中的文件职责，本计划收尾补充正式交付入口：
 
 - 新增 [PDF 下游交付契约](../specs/pdf-downstream-delivery-contract.md)，定义文档、目录、chunks、入库批次、审核文件和过程产物的消费边界。
-- `pdf2md` skill 规定每个 PDF 流程的最后一个交付阶段必须生成 `<package>/data/downstream_delivery.md`，汇总当前包实际文件、状态、数量、hash、剩余异常和推荐消费顺序。
+- `pdf2md` skill 规定每个 PDF 流程的最后一个交付阶段必须生成 `<package>/downstream_delivery.md`，汇总当前包实际文件、状态、数量、hash、剩余异常和推荐消费顺序。
 - 入口文件是交付导航，不是新的业务事实源；具体数据仍以 `manifest.json`、`ingest_manifest.json`、`ingest_batch.jsonl`、`chunks.jsonl` 和审核文件为准。
 - 项目级 skill、用户级 skill、README 和本计划已同步入口文件规则；未新增数据库导入行为，也未改变现有 CLI 的字段和状态语义。
 
