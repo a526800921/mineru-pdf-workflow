@@ -36,7 +36,7 @@
 - 具备幂等性；重复运行不能重复写入或扩大范围。
 - 执行失败时整组回滚，不能只恢复 Markdown 而遗漏 manifest 或配置。
 - apply 完成后必须执行显式、只读、可审计的验证命令；验证失败或验证阶段写入包内文件时，整组回滚。
-- 动态辅助脚本不能授权修改 `review_overrides.csv`、`ingest_ready.csv`、`conflicts.csv`、`ingest_batch.jsonl`、`ingest_manifest.json` 等审批或入库前门禁产物；这些状态只能由既有审核/导出流程在用户确认后更新。
+- 动态辅助脚本不能授权修改 `review_decisions.jsonl`、`escalation_queue.jsonl`、`review_overrides.csv`、`ingest_ready.csv`、`conflicts.csv`、`ingest_batch.jsonl`、`ingest_manifest.json` 等审批或入库前门禁产物；这些状态只能由审核/导出流程在 LLM 明确决定或用户确认后更新。
 - 一次性脚本默认放在临时目录；只有需要复现或再次使用时，才登记为包内辅助脚本并保留命令、输入、输出和 hash。
 
 ### 4. 动态脚本的晋升规则
@@ -44,6 +44,17 @@
 - 只服务单个 PDF、单次异常：保留为临时辅助脚本或包内配置，不进入通用脚本。
 - 同类问题在多个 PDF 重复出现：先补充最小回归测试，再将逻辑晋升为通用 CLI。
 - 晋升后的通用逻辑必须通过 GitNexus 影响分析、回归测试、`pdf-check-fixes` 和治理文档复核。
+
+## 审核契约增量修订（2026-07-16）
+
+在真实 PDF 协作中，用户已明确采用“LLM 默认审核、用户只处理歧义项”的工作方式。该修订不改变 CLI 的确定性边界，也不允许脚本自行推断业务语义：
+
+- `review_decisions.jsonl` 是新的富结构审核输入，记录 `candidate_id`、`record_id`、`review_status`、`review_actor`、`decision_basis`、`review_rule_version`、`candidate_hash` 和理由；
+- LLM 只有在 `decision_basis=evidence_exact` 时才能批准，只有在 `rule_based_non_business` 时才能拒绝；用户的批准/拒绝必须使用 `user_confirmed`；
+- `pdf-prepare-ingest` 只校验并应用外部决定，不能根据文本自行生成 approved；hash 过期、候选不唯一、record_id 不匹配或存在冲突时拒绝放行；
+- `escalation_queue.jsonl` 保存待用户确认的歧义、冲突、证据缺失和身份不稳定项；未处理项保持 `not_ready`；
+- 旧 `review_overrides.csv` 保持兼容，但只允许按唯一 `record_id` 应用；重复 `record_id` 必须拒绝并改用 `candidate_id`，不被补写虚假的 LLM/用户审计信息；新增审核字段追加到 `ingest_ready.csv` 末尾，保持既有字段顺序；
+- 该修订仍保持入库前边界，不执行数据库导入。
 
 ## 为什么当前不需要 MCP
 

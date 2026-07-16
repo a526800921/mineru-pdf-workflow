@@ -228,6 +228,8 @@ def test_gate_artifacts_cannot_be_allowlisted(tmp_path: Path) -> None:
     dynamic = write_helper(tmp_path, "pass\n")
     for filename in (
         "review_overrides.csv",
+        "review_decisions.jsonl",
+        "escalation_queue.jsonl",
         "ingest_ready.csv",
         "conflicts.csv",
         "ingest_batch.jsonl",

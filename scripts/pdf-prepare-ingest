@@ -7,11 +7,13 @@
 输入:
   <package>/data/quick_lookup_draft.csv
   <package>/data/review_overrides.csv    (可选; 阶段 2 人工审核输入)
+  <package>/data/review_decisions.jsonl (可选; LLM/用户富结构审核输入)
   <package>/data/manual_fixes.jsonl      (可选; 阶段 3 fix_data 修正输入)
 
 输出:
   <package>/data/ingest_ready.csv
   <package>/data/conflicts.csv
+  <package>/data/escalation_queue.jsonl
 
 不写入数据库，不修改原草案文件。fix_data 修正仅在内存在成时生效。
 """
@@ -30,6 +32,8 @@ INGEST_FIELDS = [
     "source_block_id", "table_id", "row_index", "parent_key", "key_role",
     "source_row_hash", "created_at", "notes",
     "correction_fix_id", "supersedes_record_id", "superseded_by",
+    "candidate_id", "review_actor", "decision_basis", "review_rule_version",
+    "candidate_hash", "reviewed_at",
 ]
 
 DRAFT_FIELDS = [
@@ -49,6 +53,33 @@ CONFLICT_FIELDS = [
 
 OVERRIDE_FIELDS = ["record_id", "review_status", "notes"]
 VALID_REVIEW_STATUSES = {"approved", "rejected", "needs_review"}
+VALID_REVIEW_ACTORS = {"llm", "user"}
+VALID_DECISION_BASES = {
+    "evidence_exact",
+    "rule_based_non_business",
+    "user_confirmed",
+    "ambiguous",
+    "conflicting_evidence",
+    "missing_evidence",
+    "source_identity_ambiguous",
+}
+DECISION_FIELDS = {
+    "candidate_id",
+    "record_id",
+    "review_status",
+    "review_actor",
+    "decision_basis",
+    "review_rule_version",
+    "candidate_hash",
+    "reason",
+    "reviewed_at",
+}
+ESCALATION_FIELDS = [
+    "candidate_id", "record_id", "page_start", "page_end", "key", "value",
+    "evidence_text", "candidate_hash", "current_candidate", "review_status",
+    "ingest_status", "ambiguity_type", "requires_user", "recommended_action",
+    "reason", "conflict_ids",
+]
 
 STATUS_MAP = {
     "draft": ("draft", "not_ready"),
@@ -75,6 +106,42 @@ def compute_record_id(source_pdf: str, model: str, section_path: str,
                       key: str, value: str, unit: str, source_row_hash: str) -> str:
     raw = f"{source_pdf}|{model}|{section_path}|{key}|{value}|{unit}|{source_row_hash}"
     return sha256(raw)
+
+
+def compute_candidate_id(row: dict, source_row_hash: str) -> str:
+    """按来源位置生成候选身份，不把 key/value 纳入主身份。
+
+    这样同一来源位置在内容修正后仍能关联到原候选；内容变化由
+    candidate_hash 另行阻断过期审核决定。缺少来源位置时退回 source_row_hash，
+    并由 duplicate candidate identity 检查阻止静默批量应用。
+    """
+    location = [
+        row.get("source_pdf", ""),
+        row.get("model", ""),
+        row.get("section_path", ""),
+        row.get("page_start", ""),
+        row.get("page_end", ""),
+        row.get("source_block_id", ""),
+        row.get("table_id", ""),
+        row.get("row_index", ""),
+        row.get("parent_key", ""),
+        row.get("key_role", ""),
+        row.get("pair_index", row.get("subrow_index", "")),
+    ]
+    if not any(location[3:]):
+        location.append(source_row_hash)
+    return sha256("candidate-v1|" + "|".join(str(part) for part in location))
+
+
+def compute_candidate_hash(row: dict, source_row_hash: str) -> str:
+    """计算审核决定绑定的候选内容 hash。"""
+    content = "|".join([
+        row.get("source_pdf", ""), row.get("model", ""),
+        row.get("section_path", ""), row.get("key", ""),
+        row.get("value", ""), row.get("unit", ""),
+        row.get("evidence_text", ""), source_row_hash,
+    ])
+    return sha256("candidate-content-v1|" + content)
 
 
 def read_draft(path: Path) -> list[dict]:
@@ -117,6 +184,79 @@ def read_overrides(path: Path) -> dict[str, dict]:
                 "notes": r.get("notes", "").strip(),
             }
         return overrides
+
+
+def read_review_decisions(path: Path) -> dict[str, dict]:
+    """读取富结构审核决定，按 candidate_id 返回。
+
+    该文件由 LLM/用户协作层产生，脚本只做契约、来源 hash 和安全边界校验，
+    不自行推断 approved。"""
+    if not path.exists():
+        return {}
+
+    decisions: dict[str, dict] = {}
+    with path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                decision = json.loads(line)
+            except json.JSONDecodeError as exc:
+                sys.exit(f"错误：review_decisions.jsonl 第 {line_no} 行不是合法 JSON: {exc}")
+            if not isinstance(decision, dict):
+                sys.exit(f"错误：review_decisions.jsonl 第 {line_no} 行必须是 JSON 对象")
+
+            unknown = sorted(set(decision) - DECISION_FIELDS)
+            if unknown:
+                sys.exit(
+                    f"错误：review_decisions.jsonl 第 {line_no} 行包含未知字段: "
+                    f"{', '.join(unknown)}"
+                )
+
+            missing = sorted(
+                field for field in ("candidate_id", "record_id", "review_status", "review_actor",
+                                    "decision_basis", "review_rule_version",
+                                    "candidate_hash", "reason")
+                if not str(decision.get(field, "")).strip()
+            )
+            if missing:
+                sys.exit(
+                    f"错误：review_decisions.jsonl 第 {line_no} 行缺少字段: {', '.join(missing)}"
+                )
+
+            candidate_id = str(decision["candidate_id"]).strip()
+            if candidate_id in decisions:
+                sys.exit(f"错误：review_decisions.jsonl 存在重复 candidate_id: {candidate_id}")
+
+            review_status = str(decision["review_status"]).strip()
+            actor = str(decision["review_actor"]).strip()
+            basis = str(decision["decision_basis"]).strip()
+            if review_status not in VALID_REVIEW_STATUSES:
+                sys.exit(f"错误：非法 review_status: '{review_status}'")
+            if actor not in VALID_REVIEW_ACTORS:
+                sys.exit(f"错误：非法 review_actor: '{actor}'，允许: {sorted(VALID_REVIEW_ACTORS)}")
+            if basis not in VALID_DECISION_BASES:
+                sys.exit(f"错误：非法 decision_basis: '{basis}'")
+            if actor == "llm" and review_status == "approved" and basis != "evidence_exact":
+                sys.exit("错误：LLM 只有 decision_basis=evidence_exact 才能 approved")
+            if actor == "llm" and review_status == "rejected" and basis != "rule_based_non_business":
+                sys.exit("错误：LLM 只有 decision_basis=rule_based_non_business 才能 rejected")
+            if actor == "user" and review_status in {"approved", "rejected"} and basis != "user_confirmed":
+                sys.exit("错误：用户批准/拒绝必须使用 decision_basis=user_confirmed")
+
+            normalized = dict(decision)
+            normalized["candidate_id"] = candidate_id
+            normalized["review_status"] = review_status
+            normalized["review_actor"] = actor
+            normalized["decision_basis"] = basis
+            normalized["review_rule_version"] = str(decision["review_rule_version"]).strip()
+            normalized["candidate_hash"] = str(decision["candidate_hash"]).strip()
+            normalized["reason"] = str(decision["reason"]).strip()
+            normalized["record_id"] = str(decision.get("record_id", "")).strip()
+            normalized["reviewed_at"] = str(decision.get("reviewed_at", "")).strip()
+            decisions[candidate_id] = normalized
+    return decisions
 
 
 def _check_page_numbering_gate(pkg: Path, rows: list[dict]) -> list[dict]:
@@ -216,6 +356,12 @@ def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
             "created_at": "",
             "notes": dr.get("notes", ""),
         }
+        row["candidate_id"] = compute_candidate_id(row, source_row_hash)
+        row["candidate_hash"] = compute_candidate_hash(row, source_row_hash)
+        row["review_actor"] = ""
+        row["decision_basis"] = ""
+        row["review_rule_version"] = ""
+        row["reviewed_at"] = ""
         row["record_id"] = compute_record_id(
             row["source_pdf"], row["model"], row["section_path"],
             row["key"], row["value"], row["unit"], row["source_row_hash"],
@@ -224,21 +370,171 @@ def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
     return rows
 
 
-def apply_overrides(rows: list[dict], overrides: dict[str, dict]):
-    """应用审核覆盖，校验所有 record_id 必须存在."""
-    valid_ids = {r["record_id"] for r in rows}
-    for rid in overrides:
-        if rid not in valid_ids:
-            sys.exit(f"错误：review_overrides.csv 包含未知 record_id: {rid}")
+def refresh_candidate_hashes(rows: list[dict]) -> None:
+    """在 fix_data 修正后重新计算内容 hash，阻断过期审核决定。"""
+    for row in rows:
+        row["candidate_hash"] = compute_candidate_hash(row, row["source_row_hash"])
 
-    for r in rows:
-        rid = r["record_id"]
-        if rid in overrides:
-            ov = overrides[rid]
-            r["review_status"] = ov["review_status"]
-            if ov["notes"]:
-                existing = r["notes"]
-                r["notes"] = (existing + "; " if existing else "") + ov["notes"]
+
+def apply_overrides(rows: list[dict], overrides: dict[str, dict]):
+    """应用旧 CSV 覆盖；record_id 必须唯一，禁止静默批量应用。"""
+    record_rows: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        record_rows[row["record_id"]].append(row)
+
+    for rid in overrides:
+        matches = record_rows.get(rid, [])
+        if not matches:
+            sys.exit(f"错误：review_overrides.csv 包含未知 record_id: {rid}")
+        if len(matches) != 1:
+            sys.exit(
+                "错误：review_overrides.csv 的 record_id 对应 "
+                f"{len(matches)} 条候选，拒绝静默批量应用: {rid}；"
+                "请改用 review_decisions.jsonl 的 candidate_id"
+            )
+
+    for rid, ov in overrides.items():
+        row = record_rows[rid][0]
+        row["review_status"] = ov["review_status"]
+        if ov["notes"]:
+            existing = row["notes"]
+            row["notes"] = (existing + "; " if existing else "") + ov["notes"]
+
+
+def apply_review_decisions(rows: list[dict], decisions: dict[str, dict]):
+    """按 candidate_id 应用富结构审核决定，并拒绝歧义或过期绑定。"""
+    if not decisions:
+        return
+
+    candidate_rows: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        if row.get("ingest_status") in {"superseded", "suppressed"}:
+            continue
+        candidate_rows[row["candidate_id"]].append(row)
+
+    for candidate_id, decision in decisions.items():
+        matches = candidate_rows.get(candidate_id, [])
+        if not matches:
+            sys.exit(f"错误：review_decisions.jsonl 包含未知 candidate_id: {candidate_id}")
+        if len(matches) != 1:
+            sys.exit(
+                f"错误：candidate_id 对应 {len(matches)} 条候选，拒绝静默批量应用: {candidate_id}"
+            )
+
+        row = matches[0]
+        supplied_record_id = decision.get("record_id", "")
+        if supplied_record_id and supplied_record_id != row["record_id"]:
+            sys.exit(
+                f"错误：candidate_id 与 record_id 不匹配: {candidate_id}"
+            )
+        if decision["candidate_hash"] != row["candidate_hash"]:
+            sys.exit(
+                f"错误：candidate_hash 已过期，拒绝应用审核决定: {candidate_id}"
+            )
+
+        # 旧 review_overrides 若已写入不同状态，必须显式解决冲突。
+        if row.get("review_status") not in {"draft", decision["review_status"]}:
+            sys.exit(
+                f"错误：review_decisions 与 review_overrides 状态冲突: {candidate_id}"
+            )
+
+        row["review_status"] = decision["review_status"]
+        row["review_actor"] = decision["review_actor"]
+        row["decision_basis"] = decision["decision_basis"]
+        row["review_rule_version"] = decision["review_rule_version"]
+        row["reviewed_at"] = decision["reviewed_at"]
+        reason = decision["reason"]
+        if reason:
+            existing = row["notes"]
+            marker = f"review_reason={reason}"
+            row["notes"] = (existing + "; " if existing else "") + marker
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def build_escalation_queue(rows: list[dict], conflicts: list[dict]) -> list[dict]:
+    """生成只读升级队列；不改变任何审核或入库状态。"""
+    conflict_by_record: dict[str, list[str]] = defaultdict(list)
+    for conflict in conflicts:
+        for record_id in conflict["record_ids"].split(";"):
+            record_id = record_id.strip()
+            if record_id:
+                conflict_by_record[record_id].append(conflict["conflict_id"])
+
+    candidate_counts = defaultdict(int)
+    record_counts = defaultdict(int)
+    for row in rows:
+        candidate_counts[row["candidate_id"]] += 1
+        record_counts[row["record_id"]] += 1
+
+    queue = []
+    for row in rows:
+        if row.get("ingest_status") in {"superseded", "suppressed", "skipped"}:
+            continue
+
+        reasons: list[str] = []
+        recommended_action = "llm_review"
+        requires_user = False
+        conflict_ids = conflict_by_record.get(row["record_id"], [])
+        if row.get("review_status") == "draft":
+            reasons.append("llm_review_pending")
+        elif row.get("review_status") == "needs_review":
+            reasons.append("review_needs_user")
+            requires_user = True
+            recommended_action = "user_confirm"
+        if candidate_counts[row["candidate_id"]] > 1:
+            reasons.append("duplicate_candidate_identity")
+            requires_user = True
+            recommended_action = "user_confirm"
+        if record_counts[row["record_id"]] > 1:
+            reasons.append("duplicate_record_identity")
+            requires_user = True
+            recommended_action = "user_confirm"
+        if conflict_ids:
+            reasons.append("unresolved_conflict")
+            requires_user = True
+            recommended_action = "user_confirm"
+        for field in ("evidence_text", "key", "value"):
+            if not row.get(field):
+                reasons.append(f"missing_{field}")
+                requires_user = True
+                recommended_action = "user_confirm"
+
+        if row.get("ingest_status") == "not_ready" and not reasons:
+            reasons.append("ingest_gate_blocked")
+            requires_user = True
+            recommended_action = "user_confirm"
+
+        if not reasons:
+            continue
+        queue.append({
+            "candidate_id": row["candidate_id"],
+            "record_id": row["record_id"],
+            "page_start": row.get("page_start", ""),
+            "page_end": row.get("page_end", ""),
+            "key": row.get("key", ""),
+            "value": row.get("value", ""),
+            "evidence_text": row.get("evidence_text", ""),
+            "candidate_hash": row.get("candidate_hash", ""),
+            "current_candidate": {
+                "key": row.get("key", ""),
+                "value": row.get("value", ""),
+                "unit": row.get("unit", ""),
+            },
+            "review_status": row.get("review_status", ""),
+            "ingest_status": row.get("ingest_status", ""),
+            "ambiguity_type": ";".join(reasons),
+            "requires_user": requires_user,
+            "recommended_action": recommended_action,
+            "reason": row.get("notes", ""),
+            "conflict_ids": ";".join(conflict_ids),
+        })
+    return queue
 
 
 def build_conflicts(rows: list[dict]) -> list[dict]:
@@ -576,8 +872,10 @@ def main():
     pkg = Path(sys.argv[1]).resolve()
     draft_path = pkg / "data" / "quick_lookup_draft.csv"
     override_path = pkg / "data" / "review_overrides.csv"
+    decision_path = pkg / "data" / "review_decisions.jsonl"
     ingest_path = pkg / "data" / "ingest_ready.csv"
     conflict_path = pkg / "data" / "conflicts.csv"
+    escalation_path = pkg / "data" / "escalation_queue.jsonl"
 
     draft_rows = read_draft(draft_path)
     ingest_rows = generate_ingest_rows(draft_rows)
@@ -591,12 +889,20 @@ def main():
 
     if has_fix_data:
         ingest_rows = apply_corrections(ingest_rows, fix_entries)
+        refresh_candidate_hashes(ingest_rows)
 
     # Apply review overrides if present
     has_overrides = override_path.exists()
     if has_overrides:
         overrides = read_overrides(override_path)
         apply_overrides(ingest_rows, overrides)
+
+    # Apply rich LLM/user decisions if present. The file is an input and is
+    # never inferred or rewritten by this deterministic script.
+    has_decisions = decision_path.exists()
+    if has_decisions:
+        decisions = read_review_decisions(decision_path)
+        apply_review_decisions(ingest_rows, decisions)
 
     # Build conflicts
     conflicts = build_conflicts(ingest_rows)
@@ -620,9 +926,12 @@ def main():
     # 当 page_numbering 未验证时，阻止所有 ready 记录（最终安全检查）
     ingest_rows = _check_page_numbering_gate(pkg, ingest_rows)
 
+    escalation_queue = build_escalation_queue(ingest_rows, conflicts)
+
     # Write outputs
     write_csv(ingest_path, INGEST_FIELDS, ingest_rows)
     write_csv(conflict_path, CONFLICT_FIELDS, conflicts)
+    _write_jsonl(escalation_path, escalation_queue)
 
     # 阶段 3：同步 manifest.json 的 fixes 块
     if has_fix_data:
@@ -657,6 +966,14 @@ def main():
     print(f"  conflicts.csv: {len(conflicts)} 组冲突")
     if has_overrides:
         print(f"  review_overrides 已应用")
+    if has_decisions:
+        llm_count = sum(1 for r in ingest_rows if r.get("review_actor") == "llm")
+        user_count = sum(1 for r in ingest_rows if r.get("review_actor") == "user")
+        print(f"  review_decisions 已应用 (LLM: {llm_count}, 用户: {user_count})")
+    print(
+        f"  escalation_queue.jsonl: {len(escalation_queue)} 条 "
+        f"(需用户确认: {sum(1 for r in escalation_queue if r['requires_user'])})"
+    )
     if has_fix_data:
         total_corrections = sum(len(v) for v in fix_entries.values())
         print(f"  fix_data 修正已应用: {total_corrections} 条")

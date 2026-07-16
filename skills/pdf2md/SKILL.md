@@ -106,9 +106,9 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `pdf2md` 的人工协作阶段位于 `pdf-auto` 完成之后、`pdf-extract-data` 之前；人工修复原地更新 canonical Markdown，并将修复状态、来源 hash、`manual_fixes.jsonl` hash 和当前 Markdown hash 同步写入 `manifest.json`。不生成 `*-fixed.md`。对于扫描结果为空的页，只允许在人工确认的 `rebuild_table`/`cross_page_table` 记录中使用 `allow_empty_page=true`，按页锚点写入新表格并保持幂等。
 - `logical_tables.jsonl` 只有存在独立下游消费者时才生成，且必须由 `manual_fixes.jsonl` 派生，不能作为第二个事实源。
 - 目录页由 `toc_repair` 按**物理目录页**归属：条目只归属于其 PDF 原生文本实际出现的物理目录页（完整行/词边界匹配，短标题不命中更长词，如“制动”不命中“前制动手柄”）；无法唯一归属时进入 `review`，不静默猜测。目录输出分三个用途，禁止下游混用：
-  - `doc.md`：主文档，保留段级锚点 `<!-- pages N-M -->`，供按页读取、结构化抽取和 section 映射；
-  - `toc.md`：无锚点连续目录列表，供人工阅读和前端渲染；不含任何页级锚点，不重新解析或猜测页码；
-  - `toc_tree.json`：机器权威目录结构，每条含 `title`、`target_page`（条目指向正文页）、`toc_page`（条目所在物理目录页）、`depth`；`pdf-extract-data` 用 `target_page` 做 section 映射。
+  - `doc.md`：主文档，保留段级锚点 `<!-- pages N-M -->`，供按页读取、结构化抽取和 section 映射；其中嵌入的目录块展示印刷页码，页锚点仍使用物理页码；
+  - `toc.md`：无锚点连续目录列表，供人工阅读和前端渲染；不含任何页级锚点，不重新解析或猜测页码；如果存在 `printed_page`，展示印刷页码，否则回退到物理页码；
+  - `toc_tree.json`：机器权威目录结构，每条含 `title`、`target_page`（条目指向正文物理页）、`toc_page`（条目所在物理目录页）、`depth`，可选保留 `printed_page`（原始印刷页码）；`pdf-extract-data` 用 `target_page` 做 section 映射。
 - 当 PDF 同时存在内置大纲、主目录和末尾字母索引时，`toc_repair` 按内置大纲顺序解决重复标题，选择覆盖最多大纲条目的主目录连续页，并补入相邻的“目录条目 + 正文”混合页；字母索引不覆盖成伪目录。合并级修复只替换实际目录页锚点块，不按目录首尾页连续覆盖中间正文页。
 - 目录修复必须把 `doc.md`、`toc.md`、`toc_tree.json`、`review.md`（如复核结论变化）和 `manifest.json` 作为一个同步发布单元：`manifest.files.toc` 指向 `toc.md`，`manifest.files.toc_tree` 指向 `toc_tree.json`，并登记 `manifest.hash.toc_md_sha256` 与 `manifest.hash.toc_tree_json_sha256`。不得只改主 Markdown 或只改展示目录；原始 `segments/**/content_list*.json` 只读，不能作为人工修复目标。
 - **页码坐标系契约**：`toc_tree.json` 的 `target_page` 必须统一为 PDF 物理页码（与 `<!-- pages N-M -->` 段锚点一致）。`manifest.json` 的 `page_numbering` 块记录映射关系：
@@ -254,7 +254,7 @@ scripts/pdf-export-chunks <package_dir>
 
 `pdf-extract-data` 是 `pdf2md` 协作流程中的入库前数据准备工具，不是第二套自动修复入口，也不是把车型语义硬编码进脚本的项目。LLM 负责读取已确认的 canonical Markdown、PDF 证据、`review.md` 和当前配置，判断是否存在漏抽或列语义问题，并生成或更新包内 `data/extraction_overrides.json`；脚本只负责通用 HTML 网格展开、来源定位、候选生成和状态计算。
 
-用户只需要确认以下事实：表格是否属于业务数据、跨页关系、列语义、key/value/unit，以及候选的采纳、拒绝或暂缓。LLM 根据用户确认同步 `extraction_overrides.json` 和 `review_overrides.csv`，重新运行抽取、入库前审核和批次导出，并汇报变更、hash、冲突和剩余异常。用户不需要运行脚本或手工编辑 JSON。
+用户只需要确认 PDF 事实、表格关系、列语义和 LLM 无法分辨的候选。LLM 默认审核证据明确的候选：可用 `evidence_exact` 自动批准明确业务记录，可用 `rule_based_non_business` 自动拒绝明确的页脚、表头、脚注或残片；存在多种解释、来源冲突、证据缺失或候选身份不稳定时，才写入 `escalation_queue.jsonl` 请求用户确认。LLM 将全部决定写入 `review_decisions.jsonl`；`pdf-prepare-ingest` 读取该文件和旧 `review_overrides.csv`，执行状态门禁；用户不需要运行脚本或手工编辑 JSON。
 
 具体 PDF 的列规则只能留在该输出包的 `extraction_overrides.json`，不能写入通用 `scripts/pdf-extract-data`。当前春风250Sr的表格闭环已完成；未来只有出现新的真实漏抽样本时，才新增 fixture 或推进通用能力，不以扩大自动化覆盖率作为默认目标。
 
@@ -324,9 +324,11 @@ scripts/pdf-prepare-ingest <pdf所在目录>
 ```text
 data/ingest_ready.csv
 data/conflicts.csv
+data/review_decisions.jsonl  ← LLM/用户审核决定和决策依据
+data/escalation_queue.jsonl  ← 仅保留需要用户确认的歧义、冲突和证据缺失项
 ```
 
-人工审核覆盖文件可选：
+兼容旧包的人工审核覆盖文件可选：
 
 ```csv
 record_id,review_status,notes
@@ -344,6 +346,21 @@ record_id,review_status,notes
 ```bash
 scripts/pdf-prepare-ingest <pdf所在目录>
 ```
+
+新的富结构审核决定由 LLM 维护：
+
+```json
+{"candidate_id":"…","record_id":"…","review_status":"approved","review_actor":"llm","decision_basis":"evidence_exact","review_rule_version":"llm-review-v1","candidate_hash":"…","reason":"证据与候选一致","reviewed_at":""}
+```
+
+规则：
+
+- `review_actor=llm` 只有 `decision_basis=evidence_exact` 可以批准，只有 `rule_based_non_business` 可以拒绝；
+- `review_actor=user` 的批准/拒绝必须使用 `decision_basis=user_confirmed`；
+- `candidate_hash` 不匹配、candidate_id 不唯一或 record_id 不匹配时，脚本拒绝应用决定；
+- 旧 `review_overrides.csv` 继续兼容，但不补写虚假的 LLM/用户审计字段；它只允许按唯一 `record_id` 应用，重复 `record_id` 会拒绝执行并提示改用 `candidate_id`；
+- `escalation_queue.jsonl` 会将重复 `record_id` 标记为 `duplicate_record_identity`，要求用户确认，不能由旧 CSV 静默批量批准；
+- `ingest_ready.csv` 新增的 `candidate_id`、`review_actor`、`decision_basis`、`review_rule_version`、`candidate_hash`、`reviewed_at` 字段追加在旧字段之后，不改变旧列位置。
 
 导出可交付批次：
 
@@ -378,7 +395,9 @@ pdf-auto
   → 按页锚点修复 TOC、表格、缺失文本和章节归属
   → 同步 manual_fixes.jsonl、manifest 和目录三件套
   → pdf-extract-data（必要时读取 extraction_overrides.json）
-  → 用户审核结构化候选并由 LLM 更新 review_overrides.csv
+  → LLM 自动审核明确候选，生成 review_decisions.jsonl
+  → 只把 escalation_queue.jsonl 中的歧义项交给用户确认
+  → LLM 写入用户决定并重新运行入库前审核
   → pdf-prepare-ingest
   → pdf-export-ingest
   → 交付入库前数据包，不导入数据库
@@ -388,15 +407,15 @@ pdf-auto
 
 ### 人工确认边界
 
-用户只确认 PDF 中的事实和业务语义：
+LLM 默认处理证据明确的候选；用户只确认 PDF 中的事实和业务语义例外：
 
 - 是否确实缺少文字、表头或表格行；
 - 连续页面是否属于同一逻辑表格，以及表头/列语义是什么；
 - TOC 条目应归属哪个物理目录页；
 - 结构化候选的 key/value/unit/section_path 是否符合 PDF；
-- 候选记录应 `approved`、`rejected` 还是继续 `needs_review`。
+- 候选记录存在多种合理解释时应 `approved`、`rejected` 还是继续 `needs_review`。
 
-LLM 不得把推断当成事实，不得自动批准待审核候选，不得把 VLM 输出直接作为最终事实。用户确认采用以下格式：
+LLM 不得把推断当成事实，不得批准缺证据/有冲突/身份不稳定的候选，不得把 VLM 输出直接作为最终事实。LLM 的明确决定必须保留候选 hash、规则版本和理由；用户确认采用以下格式：
 
 ```text
 【需要确认】<确认项标题>
@@ -404,10 +423,10 @@ LLM 不得把推断当成事实，不得自动批准待审核候选，不得把 
 PDF 证据：第 <页码> 页；<原文/截图/表格范围>
 当前候选：<Markdown、表格或结构化候选>
 请确认：确认 / 修改为…… / 拒绝 / 保留待复核
-确认后更新：<manual_fixes.jsonl | extraction_overrides.json | review_overrides.csv>
+确认后更新：<manual_fixes.jsonl | extraction_overrides.json | review_decisions.jsonl>
 ```
 
-三类文件职责不能混用：`manual_fixes.jsonl` 记录内容/表格事实修复，`extraction_overrides.json` 记录表格列语义和包级抽取策略，`review_overrides.csv` 只记录结构化记录审核状态。
+四类文件职责不能混用：`manual_fixes.jsonl` 记录内容/表格事实修复，`extraction_overrides.json` 记录表格列语义和包级抽取策略，`review_decisions.jsonl` 记录 LLM/用户审核决定及依据，`review_overrides.csv` 只作为旧包的结构化审核状态兼容输入。
 
 ### 动态辅助脚本边界
 
@@ -430,7 +449,7 @@ scripts/pdf-run-helper \
   -- <动态命令及参数>
 ```
 
-包装器会用 `PDF_HELPER_MODE=dry-run`、`PDF_HELPER_MODE=apply` 依次调用动态命令，再用 `PDF_HELPER_MODE=validate` 调用显式只读验证命令，并注入 `PDF_HELPER_PACKAGE`、`PDF_HELPER_ALLOWLIST`、`PDF_HELPER_RUN_ID`。dry-run 改变任意包内文件、apply 改变 allowlist 之外的文件、命令或验证失败、验证阶段发生写入时，整包恢复执行前快照；输出 JSON 摘要，记录命令、验证命令、各模式退出码、变更路径、前后清单 hash、结果和回滚状态。allowlist 只能包含派生产物文件，不能包含 PDF、`segments/`、`content_list*.json` 或目录，也不能包含 `review_overrides.csv`、`ingest_ready.csv`、`conflicts.csv`、`ingest_batch.jsonl`、`ingest_manifest.json` 等审批/入库前门禁产物。动态脚本默认放临时目录；需要复用时由 LLM 登记命令、输入/输出、hash 和验证命令，重复问题先补 fixture 再晋升通用 CLI。
+包装器会用 `PDF_HELPER_MODE=dry-run`、`PDF_HELPER_MODE=apply` 依次调用动态命令，再用 `PDF_HELPER_MODE=validate` 调用显式只读验证命令，并注入 `PDF_HELPER_PACKAGE`、`PDF_HELPER_ALLOWLIST`、`PDF_HELPER_RUN_ID`。dry-run 改变任意包内文件、apply 改变 allowlist 之外的文件、命令或验证失败、验证阶段发生写入时，整包恢复执行前快照；输出 JSON 摘要，记录命令、验证命令、各模式退出码、变更路径、前后清单 hash、结果和回滚状态。allowlist 只能包含派生产物文件，不能包含 PDF、`segments/`、`content_list*.json` 或目录，也不能包含 `review_overrides.csv`、`review_decisions.jsonl`、`escalation_queue.jsonl`、`ingest_ready.csv`、`conflicts.csv`、`ingest_batch.jsonl`、`ingest_manifest.json` 等审批/入库前门禁产物。动态脚本默认放临时目录；需要复用时由 LLM 登记命令、输入/输出、hash 和验证命令，重复问题先补 fixture 再晋升通用 CLI。
 
 ### LLM 交付摘要
 
@@ -467,4 +486,5 @@ scripts/pdf-eval-vlm /path/to/package
 | PDF 服务启动超时 | 检查 ModelPad 中 `pdf` 模型状态，必要时调大 `MODELPAD_PDF_START_TIMEOUT` |
 | `needs_review` 但用户要先看结果 | 可降低 `PDF_VALIDATE_THRESHOLD` 或手动运行 `scripts/pdf-merge <segments_dir>` |
 | `review_overrides.csv` 报非法字段 | 只允许 `record_id,review_status,notes` |
+| 旧 CSV 的 `record_id` 对应多条候选 | 脚本拒绝静默批量应用；查看 `escalation_queue.jsonl`，由 LLM 生成按 `candidate_id` 绑定的决定 |
 | 没有导出批次记录 | 检查 `ingest_ready.csv` 中是否存在 `review_status=approved` 且 `ingest_status=ready` |

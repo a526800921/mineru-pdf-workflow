@@ -52,6 +52,8 @@ FORBIDDEN_TOP_LEVEL = {"segments", "content_list"}
 FORBIDDEN_FILE_PREFIXES = ("content_list",)
 PROTECTED_GATE_ARTIFACTS = {
     "review_overrides.csv",
+    "review_decisions.jsonl",
+    "escalation_queue.jsonl",
     "ingest_ready.csv",
     "conflicts.csv",
     "ingest_batch.jsonl",

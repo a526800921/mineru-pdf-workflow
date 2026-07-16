@@ -44,6 +44,7 @@
 | [pdf-table-repair](plans/pdf-table-repair.md) | 已完成 | 阶段 4：独立验收（已完成） | 2026-07-15 | pdf-table-audit、pdf-extract-data、pdf-prepare-ingest、legacy-plan-governance-evidence-remediation | canonical 已从 138 个非空分段完整重建，TOC 120/120；包级策略过滤 29 条纯数字 key 后，抽取 182 行，179 条已确认、3 条拒绝，0 冲突，入库前批次已重生成。业务与治理独立验收通过，全计划关闭 | [阶段 4 独立验收复核](plans/pdf-table-repair.md#阶段-4-独立验收2026-07-15) |
 | [pdf-extract-data-table-coverage](plans/pdf-extract-data-table-coverage.md) | 已完成 | 阶段 1：当前 PDF 的 LLM/人工协作闭环（已完成） | 2026-07-15 | structured-data-extraction、data-ingestion-pipeline、pdf2md-fix-manual-workflow、pdf-table-audit、pdf-table-repair、PyMuPDF；具体 PDF 列语义由包内 JSON 提供，脚本只做通用抽取和校验 | [独立验收](plans/pdf-extract-data-table-coverage.md#独立验收2026-07-15) |
 | [llm-human-collaboration-migration](plans/llm-human-collaboration-migration.md) | 已完成 | 阶段 5：治理收尾与兼容策略决策已完成 | 2026-07-15 | `pdf2md-fix-manual-workflow`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`cli-only-migration`、ADR 0003 | 用户已批准并完成废弃 `pdf2md-fix`；项目级/用户级兼容 skill 已删除，活动引用已迁移，主 `pdf2md` skill 同步；原有 PDF 产物和 CLI 不变 | [阶段 5 独立验收](plans/llm-human-collaboration-migration.md#阶段-5-独立验收2026-07-15通过) |
+| [llm-first-review-workflow-hardening](plans/llm-first-review-workflow-hardening.md) | 实施中 | 阶段 2：稳定候选身份和 override 兼容 | 2026-07-16 | `llm-human-collaboration-migration`、`data-ingestion-pipeline`、`pdf-extract-data-table-coverage`、ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1、阶段 2 实现和独立验收通过；阶段 3-5 尚未启动，阶段 3仍需单独完成 Step 0 和准入复核 | [阶段 2 独立验收](plans/llm-first-review-workflow-hardening.md#阶段-2-独立验收2026-07-16) |
 | [legacy-plan-governance-evidence-remediation](plans/legacy-plan-governance-evidence-remediation.md) | 已完成 | 阶段 1：历史已完成计划证据补全（已完成） | 2026-07-15 | plan-governance-cli、现有 23 个已完成专项计划 | 23 个历史计划的 Step 0/验证/测试覆盖治理入口已补全；严格治理检查、真实 PDF 包检查和当前回归均通过；未改变代码、PDF 产物、业务状态或历史完成结论 | [独立验收](plans/legacy-plan-governance-evidence-remediation.md#独立验收2026-07-15) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
@@ -76,6 +77,7 @@
 24. `pdf-extract-data-table-coverage`（结构化抽取漏项补全与审核门禁）
 25. `toc-target-page-coordinate-fix`（印刷页码与 PDF 物理页码坐标系修复）
 26. `llm-human-collaboration-migration`（统一 `pdf2md` 入口、迁移 `pdf2md-fix`、固化用户/LLM/CLI/动态脚本协作边界）
+27. `llm-first-review-workflow-hardening`（LLM 优先审核、升级队列、候选身份、通用抽取修复和 canonical chunks 导出）
 
 ## 依赖关系
 
@@ -129,6 +131,8 @@
 | pdf2md-fix-manual-workflow | pdf-auto-repair-before-merge | 复用现有 TOC 段级/合并级修复顺序，最终 manifest hash 必须覆盖所有 Markdown 后处理 |
 | llm-human-collaboration-migration | pdf2md-fix-manual-workflow、pdf-table-repair、pdf-extract-data-table-coverage、data-ingestion-pipeline | 将已完成的解析后修复、表格审核和入库前准备收敛为 LLM 编排的单一协作入口；不改变各专项计划的字段和状态事实源 |
 | llm-human-collaboration-migration | cli-only-migration、ADR 0003 | 沿用 CLI-only 执行边界，增加受控动态辅助脚本的协作和回滚契约，不新增 MCP |
+| llm-first-review-workflow-hardening | llm-human-collaboration-migration、data-ingestion-pipeline、pdf-extract-data-table-coverage | 在统一 `pdf2md` 入口上调整审核契约，补充 LLM 自动审核与用户升级队列；不改写旧计划的历史完成结论 |
+| llm-first-review-workflow-hardening | ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1 已修订 ADR 并完成独立验收；阶段 2 处理真实运行报告暴露的重复 `record_id` 兼容风险；报告提供 386 行入库前候选、365 chunks 和重复 `record_id` 基线 |
 
 ## 替代、合并和废弃
 
@@ -158,6 +162,7 @@
 | P4c 多模态 VLM 需本地模型选型与验收基准 | 页面基线、qwen3-vl-8b 单页探针、JSON mode 复测、10 页混合抽样及人工核对均完成 | `pdf-evaluation-suite` P4c、本地 VLM 后端 | 否 | 已解决 |
 | `pdf-table-repair` 阶段 4 治理收尾 | canonical 已从 138 个非空分段重建并完成 TOC/表格修复、抽取、人工审核和入库前批次生成；29 条纯数字 key 已由当前包级策略过滤，179 条已确认、3 条拒绝。业务与治理验收通过 | `pdf-table-repair`、legacy-plan-governance-evidence-remediation | 否 | 已解决 |
 | 历史已完成计划缺少 Step 0/测试覆盖证据 | 23 个历史计划的治理入口已补全；严格检查通过，补全未回写业务实现或伪造行覆盖率 | 23 个历史专项计划、治理检查 | 否 | 已解决 |
+| 阶段 2 的重复身份与旧 override 兼容保护正在实施 | 阶段 1 的 `review_decisions.jsonl`、`escalation_queue.jsonl`、candidate hash 门禁、两份 skill 和 ADR 已同步；当前只改通用脚本与 fixture，不重跑真实 PDF 包 | `pdf-prepare-ingest`、`review_decisions.jsonl`、`escalation_queue.jsonl`、`skills/pdf2md/SKILL.md` | 否 | 实施中 |
 
 ## 完成证据
 
