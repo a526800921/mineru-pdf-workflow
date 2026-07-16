@@ -22,6 +22,8 @@
 
 - 解析、合并、校验、按页修复、抽取、审核状态计算和批次导出继续由 `scripts/` 执行。
 - CLI 不承担某个 PDF 的业务语义判断，不自动批准 `needs_review`，不把 VLM 输出直接当最终事实。
+- 向量化前置的 `pdf-export-chunks` 只能读取 `manifest.json.files.markdown` 指向的包内 canonical Markdown；不得通过目录遍历猜测主文档，也不得把 `toc.md`、`review.md` 或其他 Markdown 作为 fallback。manifest 缺失、非法或目标不存在时必须失败且不生成新的 chunks 产物。
+- 该 chunks 门禁只约束输入选择，不改变既有切块字段、页锚点、HTML 表格展开、图片替换和 token 上限契约。
 - 项目继续遵循 ADR 0002 的 CLI-only 决策，不新增 MCP Server 或 MCP 兼容层。
 
 ### 3. 允许 LLM 生成受控动态辅助脚本

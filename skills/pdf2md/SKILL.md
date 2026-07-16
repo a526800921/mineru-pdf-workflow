@@ -248,6 +248,8 @@ scripts/pdf-export-chunks <package_dir>
 
 将合并 Markdown 预处理为 `data/chunks.jsonl`（纯文本块，按 `##` 切分、HTML 表格展开、图片替换、token 上限 384）。
 
+chunks 导出只读取 `manifest.json.files.markdown` 指定的 canonical Markdown；`toc.md`、`review.md` 或目录遍历得到的其他 Markdown 不能作为输入。manifest 缺失、损坏、未配置 `files.markdown`、路径指向包外或目标不存在时，命令必须非零退出且不生成新的 `chunks.jsonl`，不得猜测或回退到其他 Markdown。该门禁只约束输入选择，既有切块字段、页锚点和 384 token 上限保持不变。
+
 ## 结构化数据与入库准备
 
 ### 人/LLM 协作定位（当前冻结）
@@ -257,6 +259,12 @@ scripts/pdf-export-chunks <package_dir>
 用户只需要确认 PDF 事实、表格关系、列语义和 LLM 无法分辨的候选。LLM 默认审核证据明确的候选：可用 `evidence_exact` 自动批准明确业务记录，可用 `rule_based_non_business` 自动拒绝明确的页脚、表头、脚注或残片；存在多种解释、来源冲突、证据缺失或候选身份不稳定时，才写入 `escalation_queue.jsonl` 请求用户确认。LLM 将全部决定写入 `review_decisions.jsonl`；`pdf-prepare-ingest` 读取该文件和旧 `review_overrides.csv`，执行状态门禁；用户不需要运行脚本或手工编辑 JSON。
 
 具体 PDF 的列规则只能留在该输出包的 `extraction_overrides.json`，不能写入通用 `scripts/pdf-extract-data`。当前春风250Sr的表格闭环已完成；未来只有出现新的真实漏抽样本时，才新增 fixture 或推进通用能力，不以扩大自动化覆盖率作为默认目标。
+
+阶段 3 的通用抽取增强规则：
+
+- 冒号行先分类为 `business_candidate`、`non_business` 或 `ambiguous`；明确的 URL、电话、警告和脚注继续过滤，`ambiguous` 保留为 `needs_review` 候选并在 notes 中记录分类原因。
+- 包内 `data/extraction_overrides.json` 可为一张表声明 `pair_groups`，每组使用 `key_column` 和 `value_columns` 指定独立 key/value；一行多组会拆成多条候选，`row_index` 使用 `原行.子行`，notes 保留 `pair_group` 来源。
+- 未配置 `pair_groups` 时保持原有抽取行为；列越界或配置不完整时跳过该组，不由脚本猜列；pair_groups 候选默认 `needs_review`，不能绕过审核门禁。
 
 生成结构化草案：
 

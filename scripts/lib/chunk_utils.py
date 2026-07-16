@@ -557,6 +557,41 @@ def _split_by_sentence(
 
 # ---- 导出入口 ----
 
+def _resolve_canonical_markdown(package_dir: Path, manifest: dict) -> Path:
+    """按 manifest.files.markdown 解析包内 canonical Markdown。
+
+    chunks 导出不能通过目录遍历猜测主文档：toc.md、review.md 和其他
+    Markdown 都可能与正文并存。路径必须是包内相对文件，并拒绝通过
+    绝对路径、`..` 或包内 symlink 逃逸到包外。
+    """
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        raise ValueError("manifest.json 缺少有效的 files 对象")
+
+    markdown = files.get("markdown")
+    if not isinstance(markdown, str) or not markdown.strip():
+        raise ValueError("manifest.json.files.markdown 未配置")
+
+    relative_path = Path(markdown)
+    if relative_path.is_absolute():
+        raise ValueError("manifest.json.files.markdown 必须是包内相对路径")
+
+    package_root = package_dir.resolve()
+    md_path = (package_root / relative_path).resolve()
+    try:
+        md_path.relative_to(package_root)
+    except ValueError as exc:
+        raise ValueError(
+            "manifest.json.files.markdown 不得指向包外路径"
+        ) from exc
+
+    if not md_path.is_file():
+        raise FileNotFoundError(
+            f"files.markdown 指向的 canonical Markdown 不存在：{markdown}"
+        )
+
+    return md_path
+
 def export_chunks(
     package_dir: Path,
     output_path: Optional[Path] = None,
@@ -570,26 +605,26 @@ def export_chunks(
     Returns:
         (chunks列表, 输出文件路径)
     """
-    # 读取 manifest 获取 model 名
+    # manifest 同时提供模型名和唯一的 canonical Markdown 来源。
     manifest_path = package_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"manifest.json 不存在：{manifest_path}")
+
     model_name = package_dir.name
-    if manifest_path.is_file():
-        try:
-            with open(manifest_path, encoding="utf-8") as f:
-                manifest = json.load(f)
-            model_name = manifest.get("model", model_name)
-        except Exception:
-            pass
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"manifest.json 解析失败：{exc}") from exc
 
-    # 读取合并 Markdown
-    md_path = None
-    for f in package_dir.glob("*.md"):
-        if f.name != "review.md":
-            md_path = f
-            break
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest.json 顶层必须是对象")
 
-    if md_path is None:
-        raise FileNotFoundError(f"未找到合并 Markdown 文件：{package_dir}")
+    model = manifest.get("model", model_name)
+    if isinstance(model, str) and model.strip():
+        model_name = model
+
+    md_path = _resolve_canonical_markdown(package_dir, manifest)
 
     md_text = md_path.read_text(encoding="utf-8", errors="replace")
 

@@ -26,8 +26,11 @@ COLON_BAD_PATTERNS = [
     re.compile(r"^注意[：:]"), re.compile(r"^警告[：:]"), re.compile(r"^提示[：:]"),
     re.compile(r"^注[：:]"), re.compile(r"信号词"), re.compile(r"信号"),
     re.compile(r"http[s]?://"), re.compile(r"^[\.\s…]+"),
-    re.compile(r"^\d+\.\d+"), re.compile(r"请.{5,}"),
+    re.compile(r"^\d+\.\d+$"), re.compile(r"请.{5,}"),
 ]
+COLON_NON_BUSINESS_KEYS = {"注意", "警告", "提示", "注"}
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+PHONE_RE = re.compile(r"(?:电话|手机|联系电话)?\s*\d{3,4}[- ]\d{7,8}")
 UNIT_RE = re.compile(r"[\s]*[（(]?([a-zA-Z·/℃²³%]+(?:·[a-zA-Z]+)?)[\s）)]?$")
 DIGIT_RE = re.compile(r"\d+\.?\d*")
 
@@ -338,12 +341,22 @@ def extract_unit(value: str) -> tuple[str, str]:
 
 
 def is_valid_colon_line(key: str, value: str) -> bool:
-    for pat in COLON_BAD_PATTERNS:
-        if pat.search(key) or pat.search(value):
-            return False
-    if len(key) < 2 or len(value) < 1:
-        return False
-    return True
+    return classify_colon_line(key, value) == "business_candidate"
+
+
+def classify_colon_line(key: str, value: str) -> str:
+    """将冒号行分类为业务候选、明确非业务或需要复核。"""
+    key = key.strip()
+    value = value.strip()
+    if not key or not value or len(key) < 2 or len(value) > 200:
+        return "ambiguous"
+    if key in COLON_NON_BUSINESS_KEYS:
+        return "non_business"
+    if EMAIL_RE.search(value) or PHONE_RE.search(value):
+        return "non_business"
+    if any(pat.search(key) or pat.search(value) for pat in COLON_BAD_PATTERNS):
+        return "ambiguous"
+    return "business_candidate"
 
 
 def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str,
@@ -360,7 +373,8 @@ def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str
             continue
         key = m.group(1).strip()
         value = m.group(2).strip()
-        if not is_valid_colon_line(key, value):
+        colon_class = classify_colon_line(key, value)
+        if colon_class == "non_business":
             continue
         if should_skip_numeric_key(key, numeric_key_policy):
             continue
@@ -375,9 +389,9 @@ def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str
             "key": key, "value": clean_val, "unit": unit,
             "page_start": pg_start, "page_end": pg_end,
             "evidence_text": line_orig[:200],
-            "confidence": "medium" if (has_digit and unit) else "low",
-            "status": "needs_review",
-            "notes": "colon_line" + ("+unit" if unit else ""),
+            "confidence": "medium" if colon_class == "business_candidate" and has_digit and unit else "low",
+            "status": "draft" if colon_class == "business_candidate" else "needs_review",
+            "notes": "colon_line;colon_class=" + colon_class + ("+unit" if unit else ""),
             "source_block_id": f"paragraph:{counters['paragraph']}",
             "table_id": "",
             "row_index": "",
@@ -664,6 +678,66 @@ def load_extraction_overrides(pkg: Path) -> dict[str, dict]:
     return result
 
 
+def build_pair_group_specs(row: list[str], override: dict) -> list[tuple[int, str, str, str]]:
+    """按包内 pair_groups 配置生成 (子行号, key, marker, value) 规格。"""
+    groups = override.get("pair_groups")
+    if not isinstance(groups, list):
+        return []
+
+    specs = []
+    for pair_index, group in enumerate(groups, 1):
+        if not isinstance(group, dict):
+            continue
+        try:
+            key_idx = int(group["key_column"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if key_idx < 0 or key_idx >= len(row):
+            continue
+
+        value_columns = group.get("value_columns", {})
+        if isinstance(value_columns, dict):
+            labeled_columns = value_columns.items()
+        elif isinstance(value_columns, list):
+            labeled_columns = ((str(idx), column) for idx, column in enumerate(value_columns))
+        else:
+            continue
+
+        value_parts = []
+        valid_group = True
+        for label, column in labeled_columns:
+            try:
+                column_idx = int(column)
+            except (TypeError, ValueError):
+                valid_group = False
+                break
+            if column_idx < 0 or column_idx >= len(row):
+                valid_group = False
+                break
+            cell = row[column_idx].strip()
+            if cell:
+                value_parts.append(f"{label}={cell}")
+        if not valid_group:
+            continue
+
+        marker_idx = group.get("marker_column", override.get("marker_column"))
+        marker = ""
+        if marker_idx is not None:
+            try:
+                marker_idx = int(marker_idx)
+            except (TypeError, ValueError):
+                continue
+            if marker_idx < 0 or marker_idx >= len(row):
+                continue
+            marker = row[marker_idx].strip()
+
+        key = row[key_idx].strip()
+        value = "；".join(value_parts)
+        if key and value:
+            specs.append((pair_index, key, marker, value))
+    return specs
+
+
 def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
                            page_map: dict, counters: dict,
                            page_section_map: dict | None = None,
@@ -701,83 +775,94 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
 
         # rowspan 父级映射（来自 build_html_parent_maps）
         rowspan_parents = parent_maps[table_idx] if table_idx < len(parent_maps) else {}
+        pair_groups = override.get("pair_groups") if override else None
 
         for row_idx, row in enumerate(data_rows):
-            if len(row) < max(key_idx, val_idx) + 1:
+            if not pair_groups and len(row) < max(key_idx, val_idx) + 1:
                 continue
-            key = row[key_idx].strip()
-            if should_skip_numeric_key(key, numeric_key_policy):
+            if override and override.get("category_row") == "all_cells_equal" and is_uniform_nonempty_row(row):
+                # colspan=6 的分类行，例如“电气”“制动”，不是业务记录。
+                current_category = row[0].strip()
                 continue
-            marker = ""
-            if override:
-                if marker_idx is not None and int(marker_idx) < len(row):
-                    marker = row[int(marker_idx)].strip()
-                if override.get("category_row") == "all_cells_equal" and is_uniform_nonempty_row(row):
-                    # colspan=6 的分类行，例如“电气”“制动”，不是业务记录。
-                    current_category = row[0].strip()
+
+            if pair_groups:
+                pair_specs = build_pair_group_specs(row, override)
+            else:
+                marker = ""
+                if override:
+                    if marker_idx is not None and int(marker_idx) < len(row):
+                        marker = row[int(marker_idx)].strip()
+                    value_parts = []
+                    for label, idx in value_columns.items():
+                        idx = int(idx)
+                        if idx < len(row) and row[idx].strip():
+                            value_parts.append(f"{label}={row[idx].strip()}")
+                    value_str = "；".join(value_parts)
+                else:
+                    value_str = " / ".join(
+                        row[i] for i in range(len(row)) if i != key_idx and row[i].strip()
+                    )
+                pair_specs = [(0, row[key_idx].strip(), marker, value_str)]
+
+            for pair_index, key, marker, value_str in pair_specs:
+                if should_skip_numeric_key(key, numeric_key_policy):
                     continue
-                value_parts = []
-                for label, idx in value_columns.items():
-                    idx = int(idx)
-                    if idx < len(row) and row[idx].strip():
-                        value_parts.append(f"{label}={row[idx].strip()}")
-                value_str = "；".join(value_parts)
-            else:
-                value_str = " / ".join(
-                    row[i] for i in range(len(row)) if i != key_idx and row[i].strip()
-                )
-            if not key or not value_str or len(key) > 60:
-                continue
+                if not key or not value_str or len(key) > 60:
+                    continue
 
-            clean_val, unit = extract_unit(value_str)
+                clean_val, unit = extract_unit(value_str)
 
-            # 按 HTML 行号表获取行号，跳过表头 (row_idx+1 因为第 0 个 <tr> 是表头)
-            if table_idx < len(html_row_lines) and row_idx + 1 < len(html_row_lines[table_idx]):
-                line_no = html_row_lines[table_idx][row_idx + 1]
-            else:
-                line_no = 0
+                # 按 HTML 行号表获取行号，跳过表头 (row_idx+1 因为第 0 个 <tr> 是表头)
+                if table_idx < len(html_row_lines) and row_idx + 1 < len(html_row_lines[table_idx]):
+                    line_no = html_row_lines[table_idx][row_idx + 1]
+                else:
+                    line_no = 0
 
-            pg_start, pg_end = get_page_range(line_no, page_map)
-            sec_path = get_section_path(line_no, sections, pg_start, page_section_map)
+                pg_start, pg_end = get_page_range(line_no, page_map)
+                sec_path = get_section_path(line_no, sections, pg_start, page_section_map)
 
-            # parent_key：保养表使用展开后的分类行，其余沿用原逻辑。
-            parent_key = ""
-            if override:
-                parent_key = current_category
-            else:
-                parent_key = rowspan_parents.get(row_idx, "")
-            if not parent_key:
-                first_col_values = [r[0].strip() if len(r) > 0 else "" for r in data_rows]
-                if (
-                    key_idx > 0 and len(row) > 0
-                    and len(set(first_col_values)) < len(first_col_values)
-                    and len(first_col_values) > 2
-                ):
-                    first_cell = row[0].strip()
-                    if first_cell and first_cell != key:
-                        parent_key = first_cell
+                # parent_key：保养表使用展开后的分类行，其余沿用原逻辑。
+                parent_key = ""
+                if override:
+                    parent_key = current_category
+                else:
+                    parent_key = rowspan_parents.get(row_idx, "")
+                if not parent_key:
+                    first_col_values = [r[0].strip() if len(r) > 0 else "" for r in data_rows]
+                    if (
+                        key_idx > 0 and len(row) > 0
+                        and len(set(first_col_values)) < len(first_col_values)
+                        and len(first_col_values) > 2
+                    ):
+                        first_cell = row[0].strip()
+                        if first_cell and first_cell != key:
+                            parent_key = first_cell
 
-            confidence = "medium" if (key_idx == 0 or override) else "low"
-            status = "draft" if confidence == "medium" else "needs_review"
-            evidence_key = f"{marker} {key}".strip() if marker else key
-            notes = "html_table"
-            if override:
-                notes += f";extraction_override={table_id}"
-                if marker:
-                    notes += f";marker={marker}"
-            rows.append({
-                "source_pdf": source_pdf, "model": model, "section_path": sec_path,
-                "key": key, "value": clean_val, "unit": unit,
-                "page_start": pg_start, "page_end": pg_end,
-                "evidence_text": f"{evidence_key}: {value_str}"[:200],
-                "confidence": confidence, "status": status,
-                "notes": notes,
-                "source_block_id": f"html_table:{counters['html_table']}",
-                "table_id": table_id,
-                "row_index": str(row_idx + 1),
-                "parent_key": parent_key,
-                "key_role": classify_key_role(key),
-            })
+                confidence = "low" if pair_groups else ("medium" if (key_idx == 0 or override) else "low")
+                status = "needs_review" if pair_groups else ("draft" if confidence == "medium" else "needs_review")
+                evidence_key = f"{marker} {key}".strip() if marker else key
+                notes = "html_table"
+                if override:
+                    notes += f";extraction_override={table_id}"
+                    if marker:
+                        notes += f";marker={marker}"
+                row_index = str(row_idx + 1)
+                if pair_groups:
+                    row_index = f"{row_index}.{pair_index}"
+                    notes += f";pair_group={pair_index}"
+                rows.append({
+                    "source_pdf": source_pdf, "model": model, "section_path": sec_path,
+                    "key": key, "value": clean_val, "unit": unit,
+                    "page_start": pg_start, "page_end": pg_end,
+                    "evidence_text": f"{evidence_key}: {value_str}"[:200],
+                    "confidence": confidence, "status": status,
+                    "notes": notes,
+                    "source_block_id": f"html_table:{counters['html_table']}",
+                    "table_id": table_id,
+                    "row_index": row_index,
+                    "parent_key": parent_key,
+                    "key_role": classify_key_role(key),
+                })
 
     return rows
 

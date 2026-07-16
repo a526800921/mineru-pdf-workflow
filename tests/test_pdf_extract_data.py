@@ -87,3 +87,71 @@ def test_numeric_keys_can_be_suppressed_by_package_policy():
     )
     assert html_rows == []
     assert colon_rows == []
+
+
+def test_colon_classification():
+    assert MODULE.classify_colon_line("额定功率", "11.8 kW") == "business_candidate"
+    assert MODULE.classify_colon_line("注意", "请勿在行驶中操作") == "non_business"
+    assert MODULE.classify_colon_line("联系电话", "400-1234567") == "non_business"
+    assert MODULE.classify_colon_line("版本", "1.0") == "ambiguous"
+
+
+def test_colon_ambiguous_is_retained_for_review():
+    md = """
+<!-- pages 12-12 -->
+版本：1.0
+注意：请勿在行驶中操作
+额定功率：11.8 kW
+"""
+    rows = MODULE.extract_colon_rows(
+        md, [], "sample.pdf", "sample", {1: (12, 12)}, MODULE.new_block_counters(),
+    )
+
+    assert [row["key"] for row in rows] == ["版本", "额定功率"]
+    assert rows[0]["status"] == "needs_review"
+    assert "colon_class=ambiguous" in rows[0]["notes"]
+    assert rows[1]["status"] == "draft"
+    assert "colon_class=business_candidate" in rows[1]["notes"]
+
+
+def test_pair_groups_expand_multiple_pairs():
+    md = """
+<!-- pages 20-20 -->
+<table>
+  <tr><th>项目 A</th><th>值 A</th><th>项目 B</th><th>值 B</th></tr>
+  <tr><td>前制动</td><td>手柄</td><td>后制动</td><td>踏板</td></tr>
+</table>
+"""
+    override = {
+        "header_rows": 1,
+        "pair_groups": [
+            {"key_column": 0, "value_columns": {"说明": 1}},
+            {"key_column": 2, "value_columns": {"说明": 3}},
+        ],
+    }
+    rows = MODULE.extract_html_table_rows(
+        md, [], "sample.pdf", "sample", {1: (20, 20)}, MODULE.new_block_counters(),
+        table_overrides={"html_table:1": override},
+    )
+
+    assert [row["key"] for row in rows] == ["前制动", "后制动"]
+    assert [row["row_index"] for row in rows] == ["1.1", "1.2"]
+    assert [row["value"] for row in rows] == ["说明=手柄", "说明=踏板"]
+    assert all(row["status"] == "needs_review" for row in rows)
+    assert all("pair_group=" in row["notes"] for row in rows)
+    assert rows[0]["source_block_id"] == rows[1]["source_block_id"]
+
+
+def test_pair_groups_out_of_range_columns_are_skipped():
+    md = """
+<table><tr><th>项目</th><th>值</th></tr><tr><td>A</td><td>B</td></tr></table>
+"""
+    override = {
+        "pair_groups": [{"key_column": 0, "value_columns": {"说明": 8}}],
+    }
+    rows = MODULE.extract_html_table_rows(
+        md, [], "sample.pdf", "sample", {}, MODULE.new_block_counters(),
+        table_overrides={"html_table:1": override},
+    )
+
+    assert rows == []

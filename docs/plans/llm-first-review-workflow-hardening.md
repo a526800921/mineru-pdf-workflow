@@ -2,8 +2,8 @@
 
 ## 计划状态
 
-- 状态：实施中
-- 当前阶段：阶段 2：稳定候选身份和 override 兼容
+- 状态：已完成
+- 当前阶段：阶段 5：skill、ADR 与真实 PDF 验收
 - 最后更新：2026-07-16
 
 本文档是 `llm-first-review-workflow-hardening` 的实施细节事实源。计划状态、当前阶段、依赖、推荐顺序、阻塞项和证据入口以 [PLAN_MAP](../PLAN_MAP.md) 为准。
@@ -138,13 +138,258 @@ candidate_id = hash(source_pdf_hash + source_block_id + table_id + row_index + p
 | 阶段 0：审核契约与候选身份冻结 | 冻结审核策略、数据契约和真实基线 | 本计划、基线命令、准入证据 | 已完成 |
 | 阶段 1：审核决策与升级队列 | 审核决策与升级队列 | `review_decisions.jsonl`、`escalation_queue.jsonl`、兼容映射 | 已完成 |
 | 阶段 2：稳定候选身份和 override 兼容 | 稳定候选身份和 override 兼容 | `candidate_id`、重复身份门禁、迁移/回滚说明 | 已完成 |
-| 阶段 3 | 通用抽取增强 | 冒号分类、`pair_groups`、子行来源 | 设计中 |
-| 阶段 4 | canonical Markdown chunks 导出修复 | manifest 主文档选择、回归 fixture | 设计中 |
-| 阶段 5 | skill、ADR、用户级 skill 同步和真实 PDF 验收 | 更新后的协作入口和验收证据 | 设计中 |
+| 阶段 3：通用抽取增强 | 通用抽取增强 | 冒号分类、`pair_groups`、子行来源 | 已完成 |
+| 阶段 4：canonical Markdown chunks 导出修复 | canonical Markdown chunks 导出修复 | manifest 主文档选择、回归 fixture | 已完成 |
+| 阶段 5：skill、ADR 与真实 PDF 验收 | skill、ADR、用户级 skill 同步和真实 PDF 验收 | 更新后的协作入口和验收证据 | 已完成 |
 
 ## 当前阶段
 
-阶段 0、阶段 1 和阶段 2 已完成。阶段 3 尚未启动；本次验收闭环的当前阶段指针仍为阶段 2：稳定候选身份和 override 兼容。
+阶段 0、阶段 1、阶段 2、阶段 3 和阶段 4 已完成。当前进入阶段 5；无后续阶段。
+
+### 阶段 5 准入摘要
+
+| 字段 | 内容 |
+|---|---|
+| 准入状态 | 待实施 |
+| Step 0 | 已核对两份 `pdf2md` skill 已通过 `cmp` 同步；已确认 ADR 0003 尚未写入 canonical chunks 输入契约；真实 Aura 已具备临时输出只读验收证据（365 chunks、页码 1-191、最大 379 token，未覆盖包内产物）。 |
+| 样本矩阵 | ADR 公共契约反向检索；项目级/用户级 skill `cmp`；真实 Aura manifest 与临时 chunks 导出；全量 pytest、修复回归和治理严格检查。 |
+| 验证方式 | `rg` 反向引用检查、`cmp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md`、真实 Aura 临时输出命令、`python3 -m pytest -q`、`bash tests/test-fix-validate.sh`、`plan-governance-cli check . --strict-readiness` 和 `git diff --check`。 |
+| 失败/回滚边界 | 只补 ADR 和治理证据，不再改变 Stage 4 代码；两份 skill 不一致或真实包只读验收失败时保持阶段 5 未完成；不覆盖真实包，不写 PDF、segments、canonical Markdown、审核决定、入库候选或数据库。 |
+| 当前阻塞项 | 无；只需补 ADR 的公共契约记录并完成最终验收。 |
+| 最新独立准入复核 | 2026-07-16，阶段 5，结论“通过：达到待实施标准”，复核者 Codex；证据为 skill 同步、ADR 缺口和真实 Aura 临时输出基线。 |
+
+### 阶段 5 当前目标
+
+- 将 canonical chunks 的 manifest 输入硬门禁写入 ADR 0003，和 skill/实现保持同一事实源边界。
+- 独立确认项目级 skill、用户级 skill、ADR、计划和 CLI 行为一致。
+- 以真实 Aura 只读临时导出作为最终 PDF 验收，不覆盖原有 `data/chunks.jsonl`。
+
+### 最新独立准入复核
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-16 |
+| 阶段 | 阶段 5：skill、ADR 与真实 PDF 验收 |
+| 结论 | 通过：达到待实施标准 |
+| 证据 | 两份 skill 已同步，ADR 缺口已定位，真实 Aura 临时导出基线已固定；目标、范围、非目标、验证命令、失败边界和无真实包写入约束均明确。 |
+| 复核者 | Codex |
+
+### 阶段 5 实施证据（2026-07-16）
+
+- ADR 0003 已补充 canonical chunks 公共契约：只读 `manifest.json.files.markdown`，禁止 TOC/目录遍历 fallback，manifest 错误时不生成新 chunks，并明确切块算法不变。
+- `skills/pdf2md/SKILL.md` 与 `/Users/jafish/.claude/skills/pdf2md/SKILL.md` 内容一致，均记录相同门禁；项目继续保持 `pdf2md skill + CLI`、不新增 MCP Server 的边界。
+- 真实 Aura 只读验收使用临时输出路径：365 chunks，覆盖页码 1-191，最大 379 token，未覆盖包内 `data/chunks.jsonl`；manifest 指向 `春风_150_Aura_manual.md` 而非 `toc.md`。
+
+### 阶段 5 独立验收（2026-07-16）
+
+结论：通过，阶段 5 完成；本计划闭环。
+
+独立核对结果：
+
+- `rg` 反向引用确认 ADR、两份 skill、实现和本计划均使用 manifest canonical Markdown 契约，没有旧草案重新成为事实源。
+- `cmp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md` 通过；`plan-governance-cli check . --strict-readiness` 和 `git diff --check` 通过。
+- 全量 pytest 342 passed、修复回归 133/133；真实 Aura 临时导出 365 chunks、页码 1-191、最大 379 token。
+- 未修改真实 PDF 包、PDF、segments、canonical Markdown、审核决定、`ingest_ready.csv` 或数据库；本阶段只同步 ADR/治理文档并复核只读导出。
+
+复核者：独立验收复核（Codex）。
+
+### 阶段 4 准入摘要
+
+| 字段 | 内容 |
+|---|---|
+| 准入状态 | 已完成 |
+| Step 0 | 已复现 `export_chunks()` 按目录遍历选择 Markdown 的缺陷：含 `toc.md` 的包可能只导出目录 chunks；manifest 指定主 Markdown 可生成完整正文 chunks。阶段 4 冻结 manifest 主文档硬门禁。 |
+| 样本矩阵 | manifest 指向 `manual.md` 且同包存在 `toc.md` 的最小 fixture；manifest 缺失/JSON 非法；`files.markdown` 缺失、越界或目标不存在；输出内容排除 TOC 且保留正文页锚点；每项均登记可执行命令、预期结果、失败判定和输出位置。 |
+| 验证方式 | `python3 -m pytest -q tests/test_chunk_utils.py`、全量 pytest、`bash tests/test-fix-validate.sh`、合成包 CLI 验收、治理严格检查、diff 检查和两份 skill 同步检查。 |
+| 失败/回滚边界 | 只改变 canonical Markdown 选择，不改变 `chunk_markdown()` 切分、清洗和 token 规则；manifest 不可用时非零退出且不写 `chunks.jsonl`；不回退到 `toc.md` 或任意目录 Markdown；失败时删除本次输出或恢复执行前快照，不接触 PDF、segments、审核决定和入库产物。 |
+| 当前阻塞项 | 无；阶段 5 尚未启动。真实 Aura 包未被覆盖，使用临时输出完成只读导出验证。 |
+| 最新独立准入复核 | 2026-07-16，阶段 4，结论“通过：达到待实施标准”，复核者 Codex；证据为真实 Aura 误选 TOC 基线、最小失败 fixture、manifest 契约和回滚边界。 |
+
+### 阶段 4 当前目标
+
+- 只允许从 `manifest.json.files.markdown` 指向的 canonical Markdown 生成 `data/chunks.jsonl`。
+- manifest 缺失、损坏、缺少 `files.markdown`、路径越界或目标不存在时明确失败，不猜测主文档。
+- 保持现有 chunks 字段、`##`/页锚点切分、HTML 表格展开、图片替换和 384 token 上限不变。
+- 用最小 fixture 锁定 `toc.md` 永远不会成为 chunks 输入，并保留对真实 Aura 包的只读复核命令。
+
+### 阶段 4 Step 0：canonical Markdown 选择失败基线
+
+状态：已完成，达到实施标准。
+
+#### Step 0 证据
+
+基线类型：真实运行快照 + 最小失败 fixture + 公共输出契约检查。
+
+当前 `scripts/lib/chunk_utils.py:export_chunks()` 读取 manifest 仅用于 `model`，随后使用 `package_dir.glob("*.md")` 取第一个非 `review.md` 文件。由于 `toc.md` 也是合法 Markdown，这一选择与目录顺序相关，已在 Aura 包复现为仅生成 6 个 TOC chunks；同一分块函数直接读取 manifest 指定主 Markdown 可生成 365 个、覆盖 1-191 页的 chunks。
+
+冻结规则：
+
+- `manifest.json` 是 chunks 导出的输入选择契约；`files.markdown` 必须是包内相对路径，解析后必须位于包根目录内且文件存在。
+- 不读取 `toc.md`、`review.md` 或目录遍历候选作为 fallback；manifest 缺失或字段非法时直接抛出可诊断错误。
+- 只改输入路径选择；`chunk_markdown()` 和 chunks JSONL 字段/默认输出位置保持不变。
+- 阶段 4 不改真实 Aura 产物；合成 fixture 负责可执行回归，真实包只读检查负责确认 `manifest.files.markdown` 指向预期正文。
+
+#### 阶段 4 Step 0 样本/fixture 矩阵
+
+| 样本/场景 | 可执行命令 | 预期结果 | 失败判定 | 输出位置 |
+|---|---|---|---|---|
+| manifest 主文档优先 | `python3 -m pytest -q tests/test_chunk_utils.py -k manifest_markdown` | 即使 `toc.md` 排在目录遍历前，chunks 内容来自 manifest 指向的正文 | chunks 包含 TOC 内容或正文缺失 | pytest 输出、临时包 `data/chunks.jsonl` |
+| manifest 缺失/损坏 | `python3 -m pytest -q tests/test_chunk_utils.py -k manifest_required` | 非零失败且不生成 chunks | 静默选择任意 Markdown 或写出半成品 | pytest 输出、临时包 |
+| 路径安全 | `python3 -m pytest -q tests/test_chunk_utils.py -k markdown_path` | 缺失、目录越界、绝对路径和非文件目标均失败 | 读取包外或错误目标 | pytest 输出 |
+| 输出兼容 | `python3 -m pytest -q tests/test_chunk_utils.py -k output_contract` | chunks 字段和 token 上限保持现有契约，正文页锚点可追溯 | 字段漂移、超限或页码丢失 | pytest 输出 |
+| 真实包只读复核 | `python3 - <<'PY'` 读取 Aura `manifest.json.files.markdown` 并确认目标存在，不写包 | manifest 指向正文文件，输出可作为后续只读 CLI 验收基线 | 指向 `toc.md`、缺失或包外路径 | 命令输出 |
+
+#### 阶段 4 Step 0 验证方式
+
+- 先运行最小 fixture，确认当前实现能够复现目录选择风险或以测试捕获该风险；
+- 实施后验证 manifest 主文档、manifest 错误、路径安全和输出兼容四组测试；
+- 用合成包执行 `scripts/pdf-export-chunks`，检查 JSON 模式、输出文件和正文/TOC 内容边界；
+- 对真实 Aura 包只读读取 manifest 和目标路径，不覆盖已有 `data/chunks.jsonl`；
+- 完成阶段后运行全量 pytest、修复回归、治理严格检查、diff 检查、GitNexus 变更检测和两份 skill `cmp`。
+
+#### 阶段 4 Step 0 完成条件
+
+- canonical Markdown 选择不再依赖目录遍历，缺失/非法 manifest 明确失败；
+- `toc.md` 误选有最小回归 fixture，输出契约和切块算法保持兼容；
+- 真实 Aura 只读检查确认 manifest 主文档存在且不是 TOC；
+- 最新独立准入复核明确达到“待实施”标准。
+
+### 最新独立准入复核
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-16 |
+| 阶段 | 阶段 4：canonical Markdown chunks 导出修复 |
+| 结论 | 通过：达到待实施标准 |
+| 证据 | 已复现 Aura 的 TOC 误选基线，冻结 manifest 主文档硬门禁、路径安全、失败不写出和切块算法不变边界；最小 fixture 矩阵、验证命令和真实包只读检查均已登记。 |
+| 复核者 | Codex |
+
+### 阶段 4 实施证据（2026-07-16）
+
+- `scripts/lib/chunk_utils.py` 新增 manifest canonical Markdown 解析：必须存在有效 `manifest.json.files.markdown`，只接受包内相对路径，并拒绝包外路径、非法目标和 symlink 逃逸。
+- 删除目录遍历选择逻辑；`toc.md`、`review.md` 或其他 Markdown 不再有机会成为 chunks 输入。manifest 失败发生在输出文件创建前，不生成新的 `data/chunks.jsonl`。
+- `chunk_markdown()`、HTML 表格展开、图片替换、页锚点、chunks 字段和 384 token 上限均未改变；新增 `tests/test_chunk_utils.py` 覆盖 canonical 选择、manifest 错误、路径安全和输出契约。
+- 项目级 `skills/pdf2md/SKILL.md` 已更新 canonical 输入门禁，并已同步到 `/Users/jafish/.claude/skills/pdf2md/SKILL.md`。
+- 合成包 CLI JSON 验证通过；真实 Aura 包使用临时输出路径只读验证：365 chunks、页码覆盖 1-191、最大 379 token，未覆盖包内已有产物。
+- 验证结果：`tests/test_chunk_utils.py` 8 passed；全量 pytest 342 passed、5 warnings；`bash tests/test-fix-validate.sh` 133/133；manifest 只读检查通过。
+
+### 阶段 4 独立验收（2026-07-16）
+
+结论：通过，阶段 4 完成。
+
+独立核对结果：
+
+- 反向核对实现确认 chunks 输入只来自 `manifest.files.markdown`；不存在任意 `glob("*.md")` fallback，TOC 误选最小 fixture 通过。
+- manifest 缺失、JSON 损坏、`files.markdown` 缺失、绝对路径、包外路径和不存在目标均在写出前失败，测试确认没有半成品 `chunks.jsonl`。
+- 输出契约未漂移：id/content/page/section/token_count 保持不变，真实 Aura 临时导出为 365 chunks、覆盖 1-191 页、最大 379 token。
+- 独立命令结果：阶段 4 定向 fixture 8 passed；全量 pytest 342 passed；修复回归 133/133；CLI JSON 和两份 skill `cmp` 通过；严格治理检查和 diff 检查通过。
+- 未覆盖真实 Aura 包内 `data/chunks.jsonl`，未修改 PDF、segments、canonical Markdown、审核决定、ingest_ready.csv 或数据库。
+
+复核者：独立验收复核（Codex）。
+
+### 测试覆盖率
+
+本计划未设置百分比覆盖率门槛，采用可执行 fixture 与端到端回归作为覆盖证据：
+
+- `tests/test_chunk_utils.py`：8 passed，覆盖 manifest canonical 选择、manifest 缺失/损坏、路径安全、输出契约和无半成品输出。
+- 全量 `python3 -m pytest -q`：342 passed，5 warnings。
+- `bash tests/test-fix-validate.sh`：133/133 通过。
+- 真实 Aura 临时 CLI 导出：365 chunks，覆盖页码 1-191，最大 379 token；未覆盖包内既有产物。
+
+### 阶段 3 准入摘要
+
+| 字段 | 内容 |
+|---|---|
+| 准入状态 | 已完成 |
+| Step 0 | 已确认当前 `extract_colon_rows` 只有布尔过滤、会静默丢弃部分非业务/歧义冒号行；当前 `extract_html_table_rows` 没有通用 `pair_groups` 拆分；现有默认表格和冒号 fixture 作为兼容基线 |
+| 样本矩阵 | 冒号 business/non_business/ambiguous 分类、歧义候选生成、`pair_groups` 多组拆分、默认抽取不变、现有维护表 span 回归；每项有可执行 pytest 命令、预期结果、失败判定和输出位置 |
+| 验证方式 | 阶段 3 定向 pytest、`tests/test_pdf_extract_data.py`、全量 pytest、修复回归、治理严格检查、diff 检查和两份 skill 同步检查 |
+| 失败/回滚边界 | 仅改通用抽取派生草案，不改 canonical Markdown、PDF、segments 或审核决定；pair_groups 配置错误时不生成该子候选，也不猜列或静默回退；冒号分类不改变明确非业务过滤和默认路径 |
+| 当前阻塞项 | 无阶段 3 阻塞；本阶段不引入真实 PDF 特定列语义，不改变 `record_id` 或 ready 门禁 |
+| 最新独立准入复核 | 2026-07-16，阶段 3，结论“通过：达到待实施标准”，复核者 Codex；证据为现有抽取回归、最小失败 fixture、兼容字段边界和回滚矩阵 |
+
+### 阶段 3 当前目标
+
+- 将冒号行从单一布尔过滤改为 `business_candidate`、`non_business`、`ambiguous` 三类；明确歧义行保留为 `needs_review` 候选，非业务行继续过滤。
+- 为包内 `extraction_overrides.json` 增加通用 `pair_groups` 语义：一行多个 key/value 组拆成独立候选，子行通过 `row_index` 和 notes 保留来源关系。
+- 保持默认抽取路径、现有字段顺序、`record_id` 计算和 `pdf-prepare-ingest` 门禁兼容；pair_groups 候选默认不得自动进入 ready。
+
+### 阶段 3 Step 0：通用抽取增强基线
+
+状态：已完成，达到实施标准。
+
+#### Step 0 证据
+
+基线类型：现有抽取回归 + 最小失败 fixture + 公共字段兼容检查。
+
+当前实现的可观察缺口：`is_valid_colon_line` 只能返回允许/拒绝，URL、警告、版本号和说明句等不同原因无法区分；`extract_html_table_rows` 只按单个 key 列生成一行，`value_columns` 会把多组信息合并成一个 value，没有独立子候选身份。阶段 3 只补通用分类和配置驱动拆分，不写入任何 PDF 特定语义。
+
+冻结规则：
+
+- 冒号分类只影响候选生成标记：明确 URL、邮箱、警告、页脚和脚注保持 `non_business` 过滤；无法安全归类的短行生成 `needs_review` 候选并保留原因，不自动批准。
+- `pair_groups` 只由包内配置传入，每组至少有 `key_column` 和一个 `value_columns`；每组生成一条候选，`row_index` 使用 `原行.子行`，notes/evidence 保留 `pair_group` 来源。
+- 未配置 `pair_groups` 时保持既有 HTML/Markdown 抽取行为；配置不完整或列越界时跳过该组，不静默猜列。
+- 不新增品牌、车型、固定页码或业务列名到通用脚本；不改变 `record_id`、`candidate_id` 和 ready 状态门禁。
+
+#### 阶段 3 Step 0 样本/fixture 矩阵
+
+| 样本/场景 | 可执行命令 | 预期结果 | 失败判定 | 输出位置 |
+|---|---|---|---|---|
+| 冒号分类 | `python3 -m pytest -q tests/test_pdf_extract_data.py -k colon_classification` | business/non_business/ambiguous 分类稳定 | URL/警告被当业务，或普通候选被误过滤 | pytest 输出 |
+| 歧义冒号候选 | `python3 -m pytest -q tests/test_pdf_extract_data.py -k colon_ambiguous` | 生成 `needs_review`，notes 保留分类原因 | 歧义行静默丢弃或进入 draft/ready | pytest 输出 |
+| `pair_groups` 多组拆分 | `python3 -m pytest -q tests/test_pdf_extract_data.py -k pair_groups` | 一行多组生成独立候选，子行来源和 row_index 可追溯 | 多组被合并、列越界静默错列或身份相同 | pytest 输出 |
+| 默认抽取兼容 | `python3 -m pytest -q tests/test_pdf_extract_data.py -k 'maintenance or numeric_keys'` | 既有 span、分类行和数字 key 策略不变 | 既有候选数量/字段语义变化 | pytest 输出 |
+| 既有回归 | `python3 -m pytest -q && bash tests/test-fix-validate.sh` | 全量测试和 133/133 回归通过 | 任一既有流程失败 | pytest/shell 输出 |
+
+#### 阶段 3 Step 0 验证方式
+
+- 先运行现有 `tests/test_pdf_extract_data.py`，固定默认抽取和 span 展开基线；
+- 实施后逐项运行冒号分类、歧义候选、pair_groups 和默认兼容 fixture；
+- 核对 pair_groups 不改变 `quick_lookup_draft.csv` 既有字段顺序，不生成审核决定、不改 ready 门禁；
+- 运行全量 pytest、修复回归、严格治理检查、diff 检查和 skill 同步检查。
+
+#### 阶段 3 Step 0 完成条件
+
+- 冒号三分类和歧义 `needs_review` 行有可执行回归，明确非业务仍被过滤；
+- pair_groups 多组拆分、子行来源、列越界安全边界有可执行回归；
+- 默认抽取、record_id/candidate_id 和下游审核门禁保持兼容；
+- 最新独立准入复核明确达到“待实施”标准。
+
+### 最新独立准入复核
+
+| 字段 | 内容 |
+|---|---|
+| 日期 | 2026-07-16 |
+| 阶段 | 阶段 3：通用抽取增强 |
+| 结论 | 通过：达到待实施标准 |
+| 证据 | 已核对当前抽取实现、现有测试、已完成抽取覆盖计划和阶段 3边界；最小失败 fixture、样本矩阵、验证命令、失败/回滚边界和公共字段兼容策略均已明确 |
+| 复核者 | Codex |
+
+### 阶段 3 实施证据（2026-07-16）
+
+本阶段已完成首轮通用实现，整体计划状态仍保持 `实施中`，后续阶段不因本阶段完成自动进入实施：
+
+- `classify_colon_line` 将冒号行区分为 `business_candidate`、`non_business` 和 `ambiguous`；明确非业务继续过滤，歧义行保留为 `needs_review` 并写入分类 notes。
+- `build_pair_group_specs` 支持包内 `pair_groups` 配置；多组 key/value 拆成独立候选，使用 `row_index=原行.子行` 和 `pair_group` notes 保留来源，配置列越界时跳过该组。
+- 未配置 `pair_groups` 时沿用原有表格抽取路径；未修改 `record_id`、`candidate_id`、审核决定和 ready 门禁。
+- 项目级 `skills/pdf2md/SKILL.md` 与用户级 skill 已同步阶段 3 的抽取规则。
+- 验证结果：阶段 3 定向 fixture 7 passed；`tests/test_pdf_extract_data.py` 7 passed；全量 pytest 334 passed；`bash tests/test-fix-validate.sh` 133/133；严格治理检查、diff 检查和 skill `cmp` 通过。
+- 未运行真实 PDF 抽取，未修改 canonical Markdown、原始 PDF、segments、审核产物或数据库。
+
+### 阶段 3 独立验收（2026-07-16）
+
+结论：通过，阶段 3 完成。
+
+独立核对结果：
+
+- 冒号分类命令分别通过：business/non_business/ambiguous 分类 1 passed；歧义候选保留为 `needs_review` 1 passed；既有维护表和数字 key 兼容 3 passed。
+- `pair_groups` 多组拆分和列越界安全命令 2 passed；输出使用独立 `row_index=原行.子行`，保留 `pair_group` notes，默认状态为 `needs_review`。
+- `py_compile` 和 `tests/test_pdf_extract_data.py` 通过（7 passed）；全量 pytest 334 passed；修复回归 133/133。
+- 严格治理检查、diff 检查、两份 skill 同步和反向引用检查通过；未发现旧草案重新成为事实源。
+- GitNexus 变更检测为 medium，原因是工作区既有 TOC/统计改动；无 HIGH/CRITICAL。`scripts/pdf-extract-data` 无扩展名函数未被索引，以源码调用点和抽取回归替代影响证据。
+- 未运行真实 PDF 抽取，未修改 canonical Markdown、PDF、segments、审核决定或数据库。
+
+复核者：独立验收复核（Codex）。
 
 ### 阶段 2 准入摘要
 
@@ -249,8 +494,13 @@ candidate_id = hash(source_pdf_hash + source_block_id + table_id + row_index + p
 
 | 日期 | 复核者 | 阶段 | 结论 | 证据 |
 |---|---|---|---|---|
+| 2026-07-16 | 独立验收复核 | 阶段 5：skill、ADR 与真实 PDF 验收 | 通过：达到待实施标准 | 独立验收确认 ADR、两份 skill、CLI 契约和真实 Aura 只读导出一致；342 项全量 pytest、133/133 修复回归、365 chunks 临时导出和未写真实包证据 |
+| 2026-07-16 | 独立验收复核 | 阶段 4：canonical Markdown chunks 导出修复 | 通过：达到待实施标准 | 独立验收确认阶段完成；8 项 chunks fixture、342 项全量 pytest、133/133 修复回归、真实 Aura 临时输出 365 chunks、skill 同步和未覆盖真实包产物证据 |
+| 2026-07-16 | Codex | 阶段 4：canonical Markdown chunks 导出修复 | 通过：达到待实施标准 | 已复现 Aura 的 TOC 误选基线，冻结 manifest 主文档硬门禁、路径安全、失败不写出和切块算法不变边界；最小 fixture 矩阵、验证命令和真实包只读检查均已登记 |
+| 2026-07-16 | Codex | 阶段 3：通用抽取增强 | 通过：达到待实施标准 | 现有抽取回归、最小失败 fixture、兼容字段边界和回滚矩阵已冻结 |
 | 2026-07-16 | Codex | 阶段 2：稳定候选身份和 override 兼容 | 通过：达到待实施标准 | 重复身份阻断、旧 CSV 唯一兼容、candidate-v1 稳定和回滚边界已冻结 |
 | 2026-07-16 | 独立验收复核 | 阶段 2：稳定候选身份和 override 兼容 | 通过：达到待实施标准 | 独立验收确认阶段完成；6 项阶段 2 定向 fixture、15 项入库准备测试、330 项全量 pytest、133/133 修复回归、严格治理检查、skill 同步和未写真实 PDF/数据库证据 |
+| 2026-07-16 | 独立验收复核 | 阶段 3：通用抽取增强 | 通过：达到待实施标准 | 独立验收确认阶段完成；冒号分类、歧义候选、pair_groups、默认兼容、7 项抽取测试、334 项全量 pytest、133/133 修复回归、治理和 skill 同步检查通过 |
 
 ## 阶段 1 实施与验收记录
 
@@ -485,7 +735,7 @@ candidate_id = hash(source_pdf_hash + source_block_id + table_id + row_index + p
 
 ## 阶段 2-5 的准入提示
 
-后续阶段的 Step 0、样本矩阵和完成条件必须在进入各阶段前分别补齐。阶段 2 已完成自己的 Step 0 和独立准入复核，当前正在实施；阶段 3-5 仍保持 `设计中`。任何公共字段或状态变化都要先同步本计划、`PLAN_MAP.md`、相关 ADR/migration 和两份 `pdf2md` skill。
+阶段 0-5 均已完成。后续若出现新的公共字段、状态、兼容策略或真实 PDF 行为变化，必须另立计划并补齐 Step 0、样本矩阵、验证方式和独立准入复核；同时同步本计划引用的 ADR/migration 和两份 `pdf2md` skill。
 
 ## 风险与回滚
 
@@ -525,9 +775,9 @@ git diff --check
 
 ## 当前阻塞项
 
-无阶段 2 阻塞项。
+无阻塞项；本计划阶段 0-5 已完成。
 
-当前边界：candidate-v1 计算方式保持不变；candidate-v2 跨版本迁移、真实 PDF 重跑和后续抽取增强不属于阶段 2，必须在后续阶段单独补齐 Step 0 和准入复核。
+当前边界：本计划已完成阶段 0-5；canonical chunks 只读 manifest 指定主 Markdown，仍不改变 candidate-v1、抽取字段、审核决定、真实 PDF 产物或数据库。后续新变化需要另立计划并补齐 Step 0 和准入复核。
 
 ## 后续独立复核记录
 
