@@ -15,6 +15,7 @@ from lib.toc_repair import (
     repair,
     repair_merged,
     _build_merged_toc_block,
+    _replace_toc_page_blocks,
     _extract_entries_from_page,
     _assign_to_toc_pages,
     _compute_depths,
@@ -348,6 +349,30 @@ class TestBuildMergedTocBlock(unittest.TestCase):
         indent_line = [l for l in toc_lines if "子项" in l]
         self.assertTrue(any(l.startswith("  -") for l in indent_line))
 
+    def test_toc_block_prefers_printed_page(self):
+        """主 Markdown 目录块展示印刷页码。"""
+        by_page = {
+            1: [{"title": "前言", "depth": 0, "page": 9, "printed_page": 8}],
+        }
+        block = _build_merged_toc_block(1, 1, by_page)
+        self.assertIn("- 前言 8", block)
+        self.assertNotIn("- 前言 9", block)
+
+    def test_replace_toc_page_blocks_prefers_printed_page(self):
+        """替换主 Markdown 目录页时展示印刷页码。"""
+        doc = fitz.open()
+        doc.new_page()
+        try:
+            md = "<!-- pages 1-1 -->\n\n旧目录\n"
+            by_page = {
+                1: [{"title": "前言", "depth": 0, "page": 9, "printed_page": 8}],
+            }
+            repaired = _replace_toc_page_blocks(md, [1], by_page, doc)
+        finally:
+            doc.close()
+        self.assertIn("- 前言 8", repaired)
+        self.assertNotIn("- 前言 9", repaired)
+
 
 class TestPhysicalPageAttribution(unittest.TestCase):
     """阶段1：目录条目物理页归属（完整行/词边界匹配 + 提取即归属）。
@@ -523,6 +548,24 @@ class TestMergedAndCompatPaths(unittest.TestCase):
         ]
         md = _build_toc_md(entries)
         self.assertLess(md.index("前言 8"), md.index("制动 130"))
+
+    def test_toc_md_prefers_printed_page(self):
+        """toc.md 展示印刷页码，缺少印刷页码时回退到物理页码。"""
+        from lib.toc_repair import _build_toc_md
+        entries = [
+            {
+                "title": "前言",
+                "page": 9,
+                "printed_page": 8,
+                "toc_page": 2,
+                "depth": 0,
+            },
+            {"title": "序列号", "page": 13, "toc_page": 2, "depth": 0},
+        ]
+        md = _build_toc_md(entries)
+        self.assertIn("- 前言 8", md)
+        self.assertIn("- 序列号 13", md)
+        self.assertNotIn("- 前言 9", md)
 
     def test_repair_merged_writes_toc_md(self):
         """repair_merged 成功后在包根目录生成无锚点 toc.md。"""

@@ -7,6 +7,8 @@ description: Use when the user wants to convert a PDF to Markdown, parse a PDF, 
 
 本 skill 是 Claude Code 用户级 `pdf2md` skill 的项目事实源。
 
+下游文件职责和交付门禁见：[PDF 下游交付契约](../../docs/specs/pdf-downstream-delivery-contract.md)。每个 PDF 输出包在本次流程的最后一个交付阶段必须生成 `<package>/data/downstream_delivery.md` 作为下游首个阅读入口；下游系统再按该契约选择 `canonical Markdown`、`chunks.jsonl` 或 `ingest_batch.jsonl`，不要直接消费过程草案。
+
 同步目标：
 
 ```text
@@ -98,6 +100,7 @@ MODELPAD_PDF_START_TIMEOUT=120
 - `scripts/pdf-extract-data /path/to` 写入 `<pdf_dir>/data/`。
 - `scripts/pdf-prepare-ingest /path/to` 写入 `<pdf_dir>/data/ingest_ready.csv` 和 `conflicts.csv`。
 - `scripts/pdf-export-ingest /path/to` 写入 `<pdf_dir>/data/ingest_batch.jsonl` 和 `ingest_manifest.json`。
+- 本次 PDF 流程的最后一步必须生成 `<pdf_dir>/data/downstream_delivery.md`。该文件是根据当前包实际产物生成的交付导航，汇总文件路径、状态、数量、hash、剩余异常和推荐消费顺序；它不是新的业务事实源。Markdown 修复、重新抽取、审核决定或入库批次变化后必须重新生成。
 - 当现有 CLI 无法安全完成一个明确且有限的 PDF 特定操作时，LLM 可以先组合现有 CLI，再生成一次性或包级动态辅助脚本；运行前必须备份目标派生产物、记录 hash、先 dry-run、限制页锚点/record_id/文件范围，并在失败时整组回滚。动态脚本默认放在临时目录，不直接修改通用 `scripts/`。
 - 用户入口继续是 `pdf2md` skill，项目执行层继续使用 CLI；当前不新增 MCP Server 或 MCP 兼容层。只有出现跨机器远程调用、队列、多客户端发现或权限隔离需求时，才重新评估 MCP。
 - `scripts/pdf-eval-tables /path/to` 写入 `<pdf_dir>/data/table_accuracy.csv`（表格结构自检评测，只读评测产物；选段复用 pdf-merge 口径）。
@@ -393,6 +396,16 @@ data/ingest_manifest.json
 ## LLM/人工协作阶段（统一主入口）
 
 `pdf2md` 是唯一用户入口。用户不需要记忆或执行脚本；LLM 负责读取产物、选择工具、维护配置、执行验证和汇报结果。原 `pdf2md-fix` 兼容 skill 已按阶段 5 用户批准废弃，不再提供第二个触发入口；历史计划中的名称仅保留为迁移记录和产物字段来源说明。
+
+### 下游交付入口
+
+每次流程结束后，LLM 必须先读取并生成/更新：
+
+```text
+<package>/data/downstream_delivery.md
+```
+
+生成内容必须来自当前包实际文件和 manifest，不得把不存在的文件或记录计数写成 0。该入口至少说明本包状态、canonical Markdown、目录文件、`chunks.jsonl`、`ingest_batch.jsonl`、`ingest_manifest.json`、审核队列、冲突数量和剩余异常。下游先读这个入口，再按其中路径消费资源。
 
 ### 统一顺序
 

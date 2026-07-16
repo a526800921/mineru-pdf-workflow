@@ -222,7 +222,7 @@ def _build_merged_toc_block(
             lines.append("## 目录\n")
         for e in by_page.get(page, []):
             indent = "  " * e["depth"]
-            lines.append(f"{indent}- {e['title']} {e['page']}")
+            lines.append(f"{indent}- {e['title']} {_display_page(e)}")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -303,7 +303,9 @@ def _replace_toc_page_blocks(
         for page in pages:
             for entry in by_page.get(page, []):
                 indent = "  " * entry["depth"]
-                lines.append(f"{indent}- {entry['title']} {entry['page']}")
+                lines.append(
+                    f"{indent}- {entry['title']} {_display_page(entry)}"
+                )
         generated = "\n".join(lines) + "\n"
 
         # 相邻混合页可能同时包含免责声明等正文；只删除其旧目录行。
@@ -444,6 +446,11 @@ def repair_merged(pdf_path: Path, merged_md_path: Path, validate_tmp: str) -> in
 
 # ── 公共 ───────────────────────────────────────────────────────────
 
+def _display_page(entry: dict) -> int:
+    """返回面向人工目录展示的页码，优先使用印刷页码。"""
+    return entry.get("printed_page", entry["page"])
+
+
 def _build_markdown(entries: list[dict]) -> str:
     """生成带缩进的 Markdown TOC。"""
     lines = ["## 目录\n"]
@@ -458,8 +465,13 @@ def _build_toc_md(entries: list[dict]) -> str:
 
     结构与段级 Markdown 一致，仅用途不同：toc.md 是供人工阅读/前端渲染的
     干净展示视图，不含任何 <!-- pages N-M --> 段级锚点，也不重新解析或猜测页码。
+    展示页码优先使用印刷页码；没有印刷页码时回退到物理页码。
     """
-    return _build_markdown(entries)
+    lines = ["## 目录\n"]
+    for e in entries:
+        indent = "  " * e["depth"]
+        lines.append(f"{indent}- {e['title']} {_display_page(e)}")
+    return "\n".join(lines) + "\n"
 
 
 def _write_toc_md(pkg_root: Path, entries: list[dict]):

@@ -1,158 +1,27 @@
 {
   "report": "pdf-table-audit 阶段 3 真实样本统计矩阵",
-  "date": "2026-07-13",
+  "date": "2026-07-15",
   "generated_by": "scripts/pdf-table-audit-stats",
   "packages": {
-    "demo20": {
-      "page_fallback_pages": 11,
-      "candidates": 4,
-      "type_distribution": {
-        "mixed": 2,
-        "native_missing": 2
-      },
-      "signal_distribution": {
-        "excessive_columns": 2,
-        "excessive_empty_td": 2,
-        "native_table_text_missing": 2,
-        "text_coverage_low": 2,
-        "volume_inflation": 2
-      },
+    "春风_150_Aura": {
+      "page_fallback_pages": 48,
+      "candidates": 0,
+      "type_distribution": {},
+      "signal_distribution": {},
       "native_missing_all_have_missing_text": true,
-      "manual_fixes_total": 2,
-      "manual_fixes_with_candidate_ref": 2,
-      "candidate_ref_total": 4,
-      "candidate_ref_resolved": 4,
-      "candidate_ref_pages": [
-        14,
-        15,
-        16
-      ],
+      "manual_fixes_total": 58,
+      "manual_fixes_with_candidate_ref": 0,
+      "candidate_ref_total": 0,
+      "candidate_ref_resolved": 0,
+      "candidate_ref_pages": [],
       "manual_fixes_hash_registered": true,
-      "candidate_hash_registered": true,
-      "vlm_file_exists": true,
-      "vlm_hash_registered": true,
-      "vlm_ok_rows": 6,
-      "vlm_failed_rows": 2,
-      "vlm_pages": [
-        1,
-        10,
-        12,
-        13,
-        14,
-        15,
-        16,
-        19
-      ],
-      "external_report_coverage": null
-    },
-    "demo60": {
-      "page_fallback_pages": 23,
-      "candidates": 16,
-      "type_distribution": {
-        "mixed": 6,
-        "native_missing": 9,
-        "text_omission": 1
-      },
-      "signal_distribution": {
-        "excessive_columns": 6,
-        "excessive_empty_td": 6,
-        "native_table_text_missing": 9,
-        "text_coverage_low": 7,
-        "volume_inflation": 6
-      },
-      "native_missing_all_have_missing_text": true,
-      "manual_fixes_total": 4,
-      "manual_fixes_with_candidate_ref": 4,
-      "candidate_ref_total": 4,
-      "candidate_ref_resolved": 4,
-      "candidate_ref_pages": [
-        37,
-        47,
-        48,
-        50
-      ],
-      "manual_fixes_hash_registered": true,
-      "candidate_hash_registered": true,
-      "vlm_file_exists": true,
-      "vlm_hash_registered": true,
-      "vlm_ok_rows": 32,
-      "vlm_failed_rows": 1,
-      "vlm_pages": [
-        1,
-        10,
-        12,
-        13,
-        19,
-        21,
-        23,
-        25,
-        31,
-        32,
-        33,
-        34,
-        35,
-        36,
-        37,
-        38,
-        39,
-        42,
-        43,
-        44,
-        45,
-        47,
-        48,
-        49,
-        50,
-        51,
-        52,
-        53,
-        54,
-        55,
-        56,
-        57,
-        58
-      ],
-      "external_report_coverage": null
-    },
-    "春风250Sr": {
-      "page_fallback_pages": 37,
-      "candidates": 29,
-      "type_distribution": {
-        "mixed": 4,
-        "native_missing": 25
-      },
-      "signal_distribution": {
-        "excessive_columns": 4,
-        "excessive_empty_td": 2,
-        "native_table_text_missing": 25,
-        "text_coverage_low": 4,
-        "volume_inflation": 4
-      },
-      "native_missing_all_have_missing_text": true,
-      "manual_fixes_total": 13,
-      "manual_fixes_with_candidate_ref": 5,
-      "candidate_ref_total": 7,
-      "candidate_ref_resolved": 7,
-      "candidate_ref_pages": [
-        13,
-        14,
-        15,
-        90,
-        94
-      ],
-      "manual_fixes_hash_registered": true,
-      "candidate_hash_registered": true,
+      "candidate_hash_registered": false,
       "vlm_file_exists": false,
       "vlm_hash_registered": false,
       "vlm_ok_rows": 0,
       "vlm_failed_rows": 0,
       "vlm_pages": [],
-      "external_report_coverage": {
-        "total_report_pages": 9,
-        "covered": 9,
-        "rate": "9/9",
-        "missing": []
-      }
+      "external_report_coverage": null
     }
   }
 }
