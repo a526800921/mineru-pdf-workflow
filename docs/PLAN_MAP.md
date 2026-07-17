@@ -45,6 +45,7 @@
 | [pdf-extract-data-table-coverage](plans/pdf-extract-data-table-coverage.md) | 已完成 | 阶段 1：当前 PDF 的 LLM/人工协作闭环（已完成） | 2026-07-15 | structured-data-extraction、data-ingestion-pipeline、pdf2md-fix-manual-workflow、pdf-table-audit、pdf-table-repair、PyMuPDF；具体 PDF 列语义由包内 JSON 提供，脚本只做通用抽取和校验 | [独立验收](plans/pdf-extract-data-table-coverage.md#独立验收2026-07-15) |
 | [llm-human-collaboration-migration](plans/llm-human-collaboration-migration.md) | 已完成 | 阶段 5：治理收尾与兼容策略决策已完成 | 2026-07-15 | `pdf2md-fix-manual-workflow`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`cli-only-migration`、ADR 0003 | 用户已批准并完成废弃 `pdf2md-fix`；项目级/用户级兼容 skill 已删除，活动引用已迁移，主 `pdf2md` skill 同步；原有 PDF 产物和 CLI 不变 | [阶段 5 独立验收](plans/llm-human-collaboration-migration.md#阶段-5-独立验收2026-07-15通过) |
 | [llm-first-review-workflow-hardening](plans/llm-first-review-workflow-hardening.md) | 已完成 | 阶段 5：skill、ADR 与真实 PDF 验收（已完成） | 2026-07-16 | `llm-human-collaboration-migration`、`data-ingestion-pipeline`、`pdf-extract-data-table-coverage`、ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1-5 实现和独立验收通过；canonical chunks 契约及 PDF 包根目录 `downstream_delivery.md` 下游交付入口已同步到 ADR、两份 skill 和交付契约，真实 Aura 只读验收通过 | [阶段 5 独立验收](plans/llm-first-review-workflow-hardening.md#阶段-5-独立验收2026-07-16) |
+| [pdf2md-skill-sequential-workflow](plans/pdf2md-skill-sequential-workflow.md) | 已完成 | 阶段 1：顺序入口与阶段门禁改写（已完成） | 2026-07-17 | 已完成的 PDF 解析、人工协作、结构化抽取、入库和下游交付计划；`skills/pdf2md/SKILL.md` | 将已有能力收敛为阶段 0～9 的单一执行入口，不改变 CLI、Schema 或安全边界 | [完成证据](plans/pdf2md-skill-sequential-workflow.md#阶段-1-独立验收证据2026-07-17) |
 | [legacy-plan-governance-evidence-remediation](plans/legacy-plan-governance-evidence-remediation.md) | 已完成 | 阶段 1：历史已完成计划证据补全（已完成） | 2026-07-15 | plan-governance-cli、现有 23 个已完成专项计划 | 23 个历史计划的 Step 0/验证/测试覆盖治理入口已补全；严格治理检查、真实 PDF 包检查和当前回归均通过；未改变代码、PDF 产物、业务状态或历史完成结论 | [独立验收](plans/legacy-plan-governance-evidence-remediation.md#独立验收2026-07-15) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
@@ -78,6 +79,7 @@
 25. `toc-target-page-coordinate-fix`（印刷页码与 PDF 物理页码坐标系修复）
 26. `llm-human-collaboration-migration`（统一 `pdf2md` 入口、迁移 `pdf2md-fix`、固化用户/LLM/CLI/动态脚本协作边界）
 27. `llm-first-review-workflow-hardening`（LLM 优先审核、升级队列、候选身份、通用抽取修复和 canonical chunks 导出）
+28. `pdf2md-skill-sequential-workflow`（将已完成能力收敛为顺序执行入口和阶段门禁）
 
 ## 依赖关系
 
@@ -133,6 +135,7 @@
 | llm-human-collaboration-migration | cli-only-migration、ADR 0003 | 沿用 CLI-only 执行边界，增加受控动态辅助脚本的协作和回滚契约，不新增 MCP |
 | llm-first-review-workflow-hardening | llm-human-collaboration-migration、data-ingestion-pipeline、pdf-extract-data-table-coverage | 在统一 `pdf2md` 入口上调整审核契约，补充 LLM 自动审核与用户升级队列；不改写旧计划的历史完成结论 |
 | llm-first-review-workflow-hardening | ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1 已修订 ADR 并完成独立验收；阶段 2 处理真实运行报告暴露的重复 `record_id` 兼容风险；报告提供 386 行入库前候选、365 chunks 和重复 `record_id` 基线 |
+| pdf2md-skill-sequential-workflow | 已完成的 PDF 相关专项计划、ADR 0003、PDF 下游交付契约 | 只调整 `pdf2md` skill 的顺序、阶段和门禁说明，不改变现有 CLI、Schema、输出包或安全边界 |
 
 ## 替代、合并和废弃
 

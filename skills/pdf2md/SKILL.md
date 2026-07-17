@@ -24,6 +24,131 @@ cp skills/pdf2md/SKILL.md /Users/jafish/.claude/skills/pdf2md/SKILL.md
 
 涉及 PDF 解析流程、输出包结构、CLI JSON 契约、ModelPad PDF 服务编排、结构化数据/入库导出流程的更新，必须先更新本文件，再同步到 Claude Code 用户级 skill。若当次无法同步，必须在相关计划的未决问题或风险中记录原因和补同步动作。
 
+## 执行顺序总览
+
+严格按阶段推进；每阶段完成后先检查门禁，再进入下一阶段。不要因为某个产物已存在就跳过对应校验。用户只需确认 PDF 事实、表格关系、列语义和歧义候选，LLM 负责读取产物、编排 CLI、维护配置、执行验证和汇报结果。
+
+### 交付等级
+
+- **Markdown**：执行阶段 0～3。
+- **复核后的 Markdown**：执行阶段 0～5。
+- **结构化草案**：执行阶段 0～6。
+- **入库候选**：执行阶段 0～7。
+- **最终下游交付包**：执行阶段 0～9。
+
+用户没有指定更高交付等级时，完成目标等级后停止，不要无条件运行后续入库步骤。
+
+### 阶段 0：确认任务和工作区
+
+目标：确认 PDF 路径、项目根目录、输出包目录和交付等级。
+
+执行：定位 `<project>`，检查 `<project>/scripts/pdf-auto` 和本文件；确认 PDF 可读；把产物目录固定为 PDF 所在目录；根据用户目标选择交付等级。
+
+使用：文件读取、路径校验；不运行解析 CLI。
+
+成功条件：项目根目录和 PDF 绝对路径明确，交付终点明确。失败时停止，不在错误仓库创建或改写脚本。
+
+### 阶段 1：检查解析环境
+
+目标：确认 ModelPad PDF 服务和 MinerU 版本可用。
+
+执行：检查 ModelPad API；确认 `pdf` 模型为运行中且返回数字端口；服务未运行时由 CLI 按既有规则启动和回收；必要时先运行 `pdf-seg` 生成分段。
+
+使用：`<project>/scripts/pdf-seg <pdf>`、ModelPad API；机器调用可设置 `PDF_AUTO_JSON=1`。
+
+成功条件：输入 hash、页数和解析配置可建立 manifest，PDF 服务可用。服务不可用时停止并报告诊断。
+
+### 阶段 2：自动解析和基础合并
+
+目标：生成 canonical Markdown、manifest 和自动复核报告。
+
+执行：已有有效 `segments/` 时运行 `pdf-auto`；否则先运行 `pdf-seg`，再运行 `pdf-auto`。让自动流程完成 TOC 处理、覆盖率检查、页级 fallback 判定和 Markdown 合并。
+
+使用：`<project>/scripts/pdf-auto <pdf> <segments_dir>`；需要 JSON 时使用 `PDF_AUTO_JSON=1`。
+
+成功条件：生成 `<package>/<stem>.md`、`manifest.json`、`review.md`、TOC 产物和有效 `segments/`。只要脚本返回 `error/failed`，就停止后续阶段。
+
+### 阶段 3：质量分类和证据读取
+
+目标：区分可接受结果、已采纳 fallback、需要人工确认的页面和失败页面。
+
+执行：先读取 `manifest.json`、`review.md` 和 canonical Markdown；再按页查看异常证据。只对 `text` 页的真实解析问题考虑 high 重跑；目录、表格、图片/稀疏页通常进入 review_only；需要视觉补充时才运行 VLM。
+
+使用：`pdf-read-page`、`pdf-search-content`、`pdf-rerun`、可选 `pdf-eval-tables` 和 `pdf-eval-vlm`。
+
+成功条件：每个异常页都有分类、证据和下一步；用户需要确认的事项已按“问题—PDF 证据—当前候选—确认后更新产物”格式列出。质量异常未分类时不得进入结构化抽取。
+
+### 阶段 4：人工/LLM 修复
+
+目标：按页锚点修复 TOC、表格、缺失文字和章节归属，并保留修复事实。
+
+执行：先自动处理确定性低风险问题；复杂表头、列语义、跨页表格、空扫描页和图片表格必须请求用户确认。修复记录写入 `manual_fixes.jsonl`；表格抽取策略写入 `data/extraction_overrides.json`，不得混用。
+
+使用：`pdf-table-repair`、`pdf-table-fix`、`pdf-run-helper`；必要时组合现有 CLI 或生成一次性动态辅助脚本。
+
+成功条件：所有修复均有页锚点/来源 hash/命中范围；原始 PDF、`segments/` 和 `content_list*.json` 未修改；未确认内容保留 `needs_review`。
+
+### 阶段 5：同步 canonical 交付单元
+
+目标：使 Markdown、TOC、修复记录和 manifest 成为一致的发布单元。
+
+执行：修复后重新合并或回填 canonical Markdown；同步 `toc.md`、`toc_tree.json`、`review.md`（如结论变化）和 manifest 文件/hash；验证页码坐标系和目录归属。
+
+使用：`pdf-merge`、`pdf-check-fixes`、`pdf-read-page`。
+
+成功条件：canonical Markdown 由 `manifest.files.markdown` 指向；TOC 三件套、页锚点、修复记录和 hash 一致。未通过时不得运行 `pdf-extract-data`。
+
+### 阶段 6：生成结构化候选
+
+目标：从已确认的 canonical Markdown 生成通用结构化草案。
+
+执行：读取 Markdown、TOC、review 和包内抽取配置；必要时先更新 `extraction_overrides.json`，再运行抽取。不要把车型、页码或业务列语义硬编码进公共脚本。
+
+使用：`pdf-extract-data`。
+
+成功条件：生成 `quick_lookup_draft.csv`、`verification.csv`、`fixtures_result.md`；候选具有来源页、块、表格、行和稳定身份信息。
+
+### 阶段 7：LLM 审核和用户升级
+
+目标：批准证据明确的候选，拒绝明确的非业务候选，只把真正歧义项交给用户。
+
+执行：LLM 将明确决定写入 `review_decisions.jsonl`；将多种合理解释、来源冲突、证据缺失和身份不稳定项写入 `escalation_queue.jsonl`。用户只确认升级队列，不直接编辑审核 CSV 或 hash。
+
+使用：`review_decisions.jsonl`、`escalation_queue.jsonl`；审核完成后重新读取决定并验证候选 hash。
+
+成功条件：审核者、决策依据、规则版本、候选 hash 和理由完整；未确认项仍为 `needs_review/not_ready`。
+
+### 阶段 8：入库准备和批次导出
+
+目标：生成可供外部系统消费的入库前批次，不执行数据库写入。
+
+执行：先运行 `pdf-prepare-ingest` 计算状态和冲突，再检查页码门禁、审核决定和升级队列；只有 `approved + ready` 且 `page_numbering.status=verified` 时运行导出。
+
+使用：`pdf-prepare-ingest`、`pdf-export-ingest`。
+
+成功条件：`ingest_ready.csv`、`conflicts.csv`、`ingest_batch.jsonl` 和 `ingest_manifest.json` 一致；未验证页码或存在未处理门禁时，导出必须拒绝。
+
+### 阶段 9：下游交付
+
+目标：提供下游可发现、可校验的最终导航。
+
+执行：需要向量化时运行 `pdf-export-chunks`，且只读取 manifest 指定的 canonical Markdown；最后根据当前包实际文件和 manifest 生成或更新 `downstream_delivery.md`。
+
+使用：`pdf-export-chunks`、`downstream_delivery.md` 生成流程、`pdf-check-fixes`。
+
+成功条件：交付入口标明包状态、实际存在的文件、数量、hash、剩余异常和推荐消费顺序；任何 Markdown、TOC、抽取、审核或批次变化后重新生成。
+
+### 阶段门禁
+
+```text
+G0 输入门禁：项目根目录、PDF、输出目录和交付等级明确
+G1 解析门禁：ModelPad/MinerU 可用，canonical Markdown 和 manifest 已生成
+G2 质量门禁：所有异常页已分类，需确认事项已有证据
+G3 修复门禁：Markdown、TOC、修复记录和 manifest 已同步
+G4 数据门禁：page_numbering=verified，审核决定与候选 hash 一致
+G5 交付门禁：批次 manifest 和 downstream_delivery.md 与实际文件一致
+```
+
 ## 前置条件
 
 - PDF 可放在任意路径；所有产物（segments、md、review、manifest、images、data）默认输出到 **PDF 所在目录**，无需将 PDF 复制到本项目。
@@ -147,12 +272,17 @@ MODELPAD_PDF_START_TIMEOUT=120
   - `pdf-check-fixes`：校验 `page_numbering` 块 schema（必含字段、枚举值、offset 完整性、toc 文件 hash 一致性）。旧包缺失时不报 error。
 - 不再使用旧的 `<pdf_stem>-output/`、`merged.md` 约定。
 
-## 核心流程
+## 阶段命令速查
+
+上方“执行顺序总览”是唯一的流程入口；本节只提供 CLI 速查，不能跳过阶段门禁或改变阶段顺序。
 
 ```bash
-# PDF 可以在任意路径，产物跟着 PDF 走
+# 阶段 1～2：解析
 scripts/pdf-seg /path/to/doc.pdf
 scripts/pdf-auto /path/to/doc.pdf /path/to/segments
+
+# 阶段 6～8：结构化抽取和入库前导出
+# 仅在阶段 5 的 canonical/TOC/manifest 门禁通过后运行
 scripts/pdf-extract-data /path/to
 scripts/pdf-prepare-ingest /path/to
 scripts/pdf-export-ingest /path/to
