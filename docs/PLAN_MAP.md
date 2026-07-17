@@ -47,6 +47,7 @@
 | [llm-first-review-workflow-hardening](plans/llm-first-review-workflow-hardening.md) | 已完成 | 阶段 5：skill、ADR 与真实 PDF 验收（已完成） | 2026-07-16 | `llm-human-collaboration-migration`、`data-ingestion-pipeline`、`pdf-extract-data-table-coverage`、ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1-5 实现和独立验收通过；canonical chunks 契约及 PDF 包根目录 `downstream_delivery.md` 下游交付入口已同步到 ADR、两份 skill 和交付契约，真实 Aura 只读验收通过 | [阶段 5 独立验收](plans/llm-first-review-workflow-hardening.md#阶段-5-独立验收2026-07-16) |
 | [pdf2md-skill-sequential-workflow](plans/pdf2md-skill-sequential-workflow.md) | 已完成 | 阶段 1：顺序入口与阶段门禁改写（已完成） | 2026-07-17 | 已完成的 PDF 解析、人工协作、结构化抽取、入库和下游交付计划；`skills/pdf2md/SKILL.md` | 将已有能力收敛为阶段 0～9 的单一执行入口，不改变 CLI、Schema 或安全边界 | [完成证据](plans/pdf2md-skill-sequential-workflow.md#阶段-1-独立验收证据2026-07-17) |
 | [legacy-plan-governance-evidence-remediation](plans/legacy-plan-governance-evidence-remediation.md) | 已完成 | 阶段 1：历史已完成计划证据补全（已完成） | 2026-07-15 | plan-governance-cli、现有 23 个已完成专项计划 | 23 个历史计划的 Step 0/验证/测试覆盖治理入口已补全；严格治理检查、真实 PDF 包检查和当前回归均通过；未改变代码、PDF 产物、业务状态或历史完成结论 | [独立验收](plans/legacy-plan-governance-evidence-remediation.md#独立验收2026-07-15) |
+| [pdf2md-skill-phase-centric-reorganization](plans/pdf2md-skill-phase-centric-reorganization.md) | 已完成 | 阶段 3：独立可读性验收（已完成） | 2026-07-17 | `pdf2md-skill-sequential-workflow`、已完成的 PDF 解析/修复/抽取/入库/下游交付计划、ADR 0003 | 将现有主题章节迁入阶段正文，避免 LLM 在阶段入口和后部契约之间来回拼接；不改变公共行为 | [完成证据](plans/pdf2md-skill-phase-centric-reorganization.md#阶段-3-完成证据-2026-07-17) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -80,6 +81,7 @@
 26. `llm-human-collaboration-migration`（统一 `pdf2md` 入口、迁移 `pdf2md-fix`、固化用户/LLM/CLI/动态脚本协作边界）
 27. `llm-first-review-workflow-hardening`（LLM 优先审核、升级队列、候选身份、通用抽取修复和 canonical chunks 导出）
 28. `pdf2md-skill-sequential-workflow`（将已完成能力收敛为顺序执行入口和阶段门禁）
+29. `pdf2md-skill-phase-centric-reorganization`（将详细契约归位到对应阶段，消除并行阅读路径）
 
 ## 依赖关系
 
@@ -136,6 +138,7 @@
 | llm-first-review-workflow-hardening | llm-human-collaboration-migration、data-ingestion-pipeline、pdf-extract-data-table-coverage | 在统一 `pdf2md` 入口上调整审核契约，补充 LLM 自动审核与用户升级队列；不改写旧计划的历史完成结论 |
 | llm-first-review-workflow-hardening | ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1 已修订 ADR 并完成独立验收；阶段 2 处理真实运行报告暴露的重复 `record_id` 兼容风险；报告提供 386 行入库前候选、365 chunks 和重复 `record_id` 基线 |
 | pdf2md-skill-sequential-workflow | 已完成的 PDF 相关专项计划、ADR 0003、PDF 下游交付契约 | 只调整 `pdf2md` skill 的顺序、阶段和门禁说明，不改变现有 CLI、Schema、输出包或安全边界 |
+| pdf2md-skill-phase-centric-reorganization | pdf2md-skill-sequential-workflow、ADR 0003、PDF 下游交付契约 | 只重排 skill 信息架构；阶段正文成为唯一主流程，详细契约不再按主题另起一套平行流程 |
 
 ## 替代、合并和废弃
 
