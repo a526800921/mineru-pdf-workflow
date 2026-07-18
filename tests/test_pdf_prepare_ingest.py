@@ -259,6 +259,19 @@ def test_unknown_candidate_identity_is_rejected():
         MODULE.apply_review_decisions([row], {invalid["candidate_id"]: invalid})
 
 
+def test_user_decision_can_resolve_needs_review_without_record_override():
+    row = one_row()
+    row["review_status"] = "needs_review"
+    row["ingest_status"] = "not_ready"
+    apply_and_status([row], {row["candidate_id"]: decision(
+        row, "approved", "user", "user_confirmed",
+    )})
+
+    assert row["review_status"] == "approved"
+    assert row["review_actor"] == "user"
+    assert row["ingest_status"] == "ready"
+
+
 def test_candidate_identity_stable():
     first = one_row(source_block_id="table:1", row_index="2")
     second = one_row(source_block_id="table:1", row_index="2")
@@ -279,6 +292,18 @@ def test_duplicate_candidate_identity_is_escalated():
     assert len(queue) == 2
     assert all(item["requires_user"] for item in queue)
     assert all("duplicate_candidate_identity" in item["ambiguity_type"] for item in queue)
+
+
+def test_source_position_collision_is_disambiguated_by_content():
+    rows = MODULE.generate_ingest_rows([
+        draft_row(key="M5 螺栓，螺母", value="5±1", source_block_id="table:117",
+                  table_id="table:117", row_index="1"),
+        draft_row(key="M5 螺钉", value="5±1", source_block_id="table:117",
+                  table_id="table:117", row_index="1"),
+    ])
+
+    assert rows[0]["candidate_id"] != rows[1]["candidate_id"]
+    assert all("-" in row["candidate_id"] for row in rows)
 
 
 def test_prepare_main_writes_audit_fields_and_empty_escalation_queue(tmp_path: Path):

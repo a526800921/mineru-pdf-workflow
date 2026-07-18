@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+"""对账 canonical Markdown HTML 表格源行与 quick_lookup_draft.csv。
+
+该工具只生成抽取覆盖 sidecar，不修改候选草案、审核决定或入库产物。
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import html
+import json
+import re
+import sys
+import tempfile
+from collections import Counter, defaultdict
+from pathlib import Path
+
+
+TABLE_RE = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
+ROW_RE = re.compile(r"<tr\b[^>]*>.*?</tr>", re.IGNORECASE | re.DOTALL)
+CELL_RE = re.compile(
+    r"<(td|th)\b([^>]*)>(.*?)</(?:td|th)>",
+    re.IGNORECASE | re.DOTALL,
+)
+ATTR_RE = re.compile(r"\b([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*['\"]([^'\"]*)['\"]")
+PAGE_RE = re.compile(r"<!--\s*pages?\s*(\d+)\s*[-–—]\s*(\d+)\s*-->")
+HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+CSV_FIELDS = [
+    "coverage_id", "source_pdf", "source_block_id", "table_id",
+    "source_row_index", "page_start", "page_end", "source_text",
+    "candidate_count", "candidate_row_indices", "coverage_status",
+    "disposition", "action", "notes",
+]
+RESOLVED_DISPOSITIONS = {"candidate_added", "non_business", "image_only", "full_text_only"}
+
+
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(text)
+        handle.flush()
+    temporary.replace(path)
+
+
+def write_csv_atomic(path: Path, rows: list[dict[str, str]]) -> None:
+    output = []
+    with tempfile.NamedTemporaryFile(
+        mode="w", newline="", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+        handle.flush()
+    temporary.replace(path)
+
+
+def read_csv(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        return [
+            {str(key).strip(): (value or "") for key, value in row.items()}
+            for row in csv.DictReader(handle)
+        ]
+
+
+def read_package_inputs(package: Path) -> tuple[str, str, list[dict[str, str]], dict[str, dict]]:
+    data_dir = package / "data"
+    manifest_path = package / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    markdown_rel = manifest.get("files", {}).get("markdown")
+    markdown_path = package / markdown_rel if markdown_rel else next(
+        (path for path in sorted(package.glob("*.md")) if path.name != "review.md"), None
+    )
+    if markdown_path is None or not markdown_path.exists():
+        raise ValueError(f"找不到 canonical Markdown: {package}")
+    draft_path = data_dir / "quick_lookup_draft.csv"
+    if not draft_path.exists():
+        raise ValueError(f"找不到 quick_lookup_draft.csv: {draft_path}")
+    draft_rows = read_csv(draft_path)
+    if not draft_rows:
+        raise ValueError(f"quick_lookup_draft.csv 为空: {draft_path}")
+    overrides_path = data_dir / "extraction_overrides.json"
+    overrides = {}
+    if overrides_path.exists():
+        payload = json.loads(overrides_path.read_text(encoding="utf-8"))
+        tables = payload.get("tables", {}) if isinstance(payload, dict) else {}
+        if isinstance(tables, dict):
+            overrides = {str(key): value for key, value in tables.items() if isinstance(value, dict)}
+    source_pdf = manifest.get("files", {}).get("pdf", "") or package.name + ".pdf"
+    return markdown_path.read_text(encoding="utf-8", errors="replace"), source_pdf, draft_rows, overrides
+
+
+def page_at_line(line_no: int, page_markers: list[tuple[int, int, int]]) -> tuple[str, str]:
+    result = ("", "")
+    for marker_line, start, end in page_markers:
+        if marker_line > line_no:
+            break
+        result = (str(start), str(end))
+    return result
+
+
+def strip_html(value: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(HTML_TAG_RE.sub("", value))).strip()
+
+
+def parse_source_rows(markdown: str) -> list[dict[str, str]]:
+    lines = markdown.splitlines()
+    page_markers = []
+    for line_no, line in enumerate(lines, 1):
+        match = PAGE_RE.search(line)
+        if match:
+            page_markers.append((line_no, int(match.group(1)), int(match.group(2))))
+
+    source_rows = []
+    for table_number, table_match in enumerate(TABLE_RE.finditer(markdown), 1):
+        table_id = f"html_table:{table_number}"
+        table_text = table_match.group(0)
+        table_has_thead = bool(re.search(r"<thead\b", table_text, re.IGNORECASE))
+        table_line = markdown[:table_match.start()].count("\n") + 1
+        rows = list(ROW_RE.finditer(table_text))
+        for raw_index, row_match in enumerate(rows, 1):
+            row_html = row_match.group(0)
+            cells = []
+            has_th = False
+            max_colspan = 1
+            for cell_match in CELL_RE.finditer(row_html):
+                tag, attrs, raw_text = cell_match.groups()
+                attrs_map = dict(ATTR_RE.findall(attrs))
+                try:
+                    colspan = max(1, int(attrs_map.get("colspan", "1")))
+                except ValueError:
+                    colspan = 1
+                max_colspan = max(max_colspan, colspan)
+                has_th = has_th or tag.lower() == "th"
+                cells.append(strip_html(raw_text))
+            row_line = table_line + table_text[:row_match.start()].count("\n")
+            nonempty = [cell for cell in cells if cell]
+            source_text = " | ".join(nonempty)
+            source_rows.append({
+                "source_pdf": source_pdf_placeholder,
+                "source_block_id": table_id,
+                "table_id": table_id,
+                "source_row_index": str(raw_index),
+                "page_start": page_at_line(row_line, page_markers)[0],
+                "page_end": page_at_line(row_line, page_markers)[1],
+                "source_text": source_text,
+                "has_th": str(has_th).lower(),
+                "has_thead": str(table_has_thead).lower(),
+                "max_colspan": str(max_colspan),
+                "cell_count": str(len(cells)),
+            })
+    return source_rows
+
+
+def candidate_raw_index(row: dict[str, str], override: dict) -> str | None:
+    raw_row = str(row.get("row_index", "")).strip().split(".", 1)[0]
+    if not raw_row.isdigit() or int(raw_row) < 0:
+        return None
+    try:
+        header_rows = int(override.get("header_rows", 1))
+    except (TypeError, ValueError):
+        header_rows = 1
+    return str(header_rows + int(raw_row))
+
+
+def source_to_candidate_table_ids(markdown: str) -> dict[str, str]:
+    """映射覆盖审计的原始表号到抽取器的候选表号。
+
+    `pdf-extract-data` 对只有一行的 HTML 表直接跳过且不递增计数器，
+    因此 canonical Markdown 的原始表号在遇到这类表后会与 candidate
+    `table_id` 错位。覆盖审计必须复用这一计数规则，否则会把已有候选
+    误报为缺口。
+    """
+    mapping = {}
+    candidate_index = 0
+    for source_index, table_match in enumerate(TABLE_RE.finditer(markdown), 1):
+        if len(ROW_RE.findall(table_match.group(0))) < 2:
+            continue
+        candidate_index += 1
+        mapping[f"html_table:{source_index}"] = f"html_table:{candidate_index}"
+    return mapping
+
+
+def classify_source_row(row: dict[str, str], header_rows: int, header_is_explicit: bool) -> str:
+    raw_index = int(row["source_row_index"])
+    if (header_is_explicit or row["has_thead"] == "true") and raw_index <= header_rows:
+        return "non_business"
+    texts = [text.strip() for text in row["source_text"].split(" | ") if text.strip()]
+    if not texts:
+        return "non_business"
+    if len(set(texts)) == 1 and (row["has_th"] == "true" or int(row["max_colspan"]) > 1):
+        return "non_business"
+    return "missing_candidate"
+
+
+def build_rows(markdown: str, source_pdf: str, draft_rows: list[dict[str, str]],
+               overrides: dict[str, dict], previous: dict[str, dict[str, str]]) -> list[dict[str, str]]:
+    global source_pdf_placeholder
+    source_pdf_placeholder = source_pdf
+    source_rows = parse_source_rows(markdown)
+    source_table_mapping = source_to_candidate_table_ids(markdown)
+    candidates: defaultdict[tuple[str, str], list[str]] = defaultdict(list)
+    for draft in draft_rows:
+        table_id = draft.get("table_id", "").strip() or draft.get("source_block_id", "").strip()
+        if not table_id:
+            continue
+        raw_index = candidate_raw_index(draft, overrides.get(table_id, {}))
+        if raw_index is not None:
+            candidates[(table_id, raw_index)].append(draft.get("row_index", "").strip())
+
+    output = []
+    for source in source_rows:
+        table_id = source["table_id"]
+        candidate_table_id = source_table_mapping.get(table_id, table_id)
+        old_id = sha256_text("coverage-v1|" + "|".join(
+            source[key] for key in ("source_pdf", "table_id", "source_row_index", "source_text")
+        ))
+        match = candidates.get((candidate_table_id, source["source_row_index"]), [])
+        try:
+            table_override = overrides.get(candidate_table_id, {})
+            header_rows = int(table_override.get("header_rows", 1))
+        except (TypeError, ValueError):
+            table_override = overrides.get(candidate_table_id, {})
+            header_rows = 1
+        status = "covered" if match else classify_source_row(
+            source, header_rows, bool(table_override)
+        )
+        old = previous.get(old_id, {})
+        disposition = old.get("disposition", "")
+        action = old.get("action", "")
+        notes = old.get("notes", "")
+        if status == "covered":
+            action = "无需处理"
+        elif status == "non_business" and not disposition:
+            disposition = "non_business"
+            action = "明确不生成业务候选"
+        elif status == "missing_candidate" and not action:
+            action = "检查 extraction_overrides.json 或补充候选"
+        output.append({
+            "coverage_id": old_id,
+            "source_pdf": source["source_pdf"],
+            "source_block_id": source["source_block_id"],
+            "table_id": table_id,
+            "source_row_index": source["source_row_index"],
+            "page_start": source["page_start"],
+            "page_end": source["page_end"],
+            "source_text": source["source_text"],
+            "candidate_count": str(len(match)),
+            "candidate_row_indices": ";".join(match),
+            "coverage_status": status,
+            "disposition": disposition,
+            "action": action,
+            "notes": notes,
+        })
+    return output
+
+
+def unresolved(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        row for row in rows
+        if row["coverage_status"] in {"missing_candidate", "unparseable", "needs_review"}
+        and row["disposition"] not in RESOLVED_DISPOSITIONS
+    ]
+
+
+def write_report(path: Path, package: Path, rows: list[dict[str, str]]) -> None:
+    counts = Counter(row["coverage_status"] for row in rows)
+    gaps = unresolved(rows)
+    table_groups: defaultdict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        table_groups[row["table_id"]].append(row)
+    lines = [
+        "# 抽取覆盖审计报告", "", f"- package: `{package}`", f"- HTML 源行：{len(rows)}", "",
+        "## 覆盖统计", "",
+    ]
+    for status, count in sorted(counts.items()):
+        lines.append(f"- `{status}`：{count}")
+    lines.extend([
+        f"- 未解决缺口：{len(gaps)}", "", "## 表级摘要", "",
+        "| table | page | source_rows | covered | missing | non_business | unresolved |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ])
+    for table_id in sorted(table_groups, key=lambda value: int(value.split(":")[-1])):
+        table_rows = table_groups[table_id]
+        page = f"{table_rows[0]['page_start']}-{table_rows[0]['page_end']}"
+        table_counts = Counter(row["coverage_status"] for row in table_rows)
+        table_unresolved = sum(row in gaps for row in table_rows)
+        lines.append(
+            f"| {table_id} | {page} | {len(table_rows)} | "
+            f"{table_counts['covered']} | {table_counts['missing_candidate']} | "
+            f"{table_counts['non_business']} | {table_unresolved} |"
+        )
+    lines.extend(["", "## 需要处理的缺口", ""])
+    if gaps:
+        lines.extend([
+            "| page | table | source_row | source_text | status | disposition | action |",
+            "|---|---|---:|---|---|---|---|",
+        ])
+        for row in gaps:
+            values = [
+                f"{row['page_start']}-{row['page_end']}", row["table_id"], row["source_row_index"],
+                row["source_text"], row["coverage_status"], row["disposition"], row["action"],
+            ]
+            lines.append("| " + " | ".join(value.replace("|", "\\|") for value in values) + " |")
+    else:
+        lines.append("无未解决缺口。")
+    lines.extend(["", "## 使用规则", "", "每个源行必须有候选或明确处置；`--gate` 不允许未处置的 missing_candidate、unparseable 或 needs_review 进入阶段 8。"])
+    write_text_atomic(path, "\n".join(lines) + "\n")
+
+
+def write_gap_queue(path: Path, rows: list[dict[str, str]]) -> None:
+    gaps = unresolved(rows)
+    content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in gaps)
+    write_text_atomic(path, content)
+
+
+def run(package: Path, gate: bool) -> dict[str, int]:
+    markdown, source_pdf, draft_rows, overrides = read_package_inputs(package)
+    coverage_path = package / "data" / "extraction_coverage.csv"
+    previous = {row.get("coverage_id", ""): row for row in read_csv(coverage_path) if row.get("coverage_id")}
+    rows = build_rows(markdown, source_pdf, draft_rows, overrides, previous)
+    write_csv_atomic(coverage_path, rows)
+    write_report(package / "data" / "extraction-coverage-report.md", package, rows)
+    write_gap_queue(package / "data" / "extraction_gap_queue.jsonl", rows)
+    gaps = unresolved(rows)
+    if gate and gaps:
+        raise ValueError(f"覆盖审计未通过：存在 {len(gaps)} 条未处置缺口，详见 data/extraction-coverage-report.md")
+    return {"total": len(rows), "covered": sum(row["coverage_status"] == "covered" for row in rows), "gaps": len(gaps)}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("package", type=Path)
+    parser.add_argument("--gate", action="store_true", help="缺口未处置时返回非零")
+    args = parser.parse_args()
+    try:
+        stats = run(args.package.resolve(), args.gate)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    print("抽取覆盖审计完成")
+    print(f"  源行: {stats['total']}")
+    print(f"  已覆盖: {stats['covered']}")
+    print(f"  未解决缺口: {stats['gaps']}")
+
+
+if __name__ == "__main__":
+    main()

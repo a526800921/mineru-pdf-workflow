@@ -28,7 +28,7 @@ description: Use when the user wants to convert a PDF to Markdown, parse a PDF, 
 | 复核后的 Markdown | 0～5 | canonical Markdown、TOC 三件套、修复记录、manifest |
 | 结构化草案 | 0～6 | `data/quick_lookup_draft.csv`、`verification.csv` |
 | 入库候选 | 0～8 | `data/ingest_ready.csv`、`conflicts.csv` |
-| 最终下游交付 | 0～9 | `downstream_delivery.md`、可选 chunks/入库批次 |
+| 最终下游交付 | 0～9 | `downstream_delivery.md`、默认 chunks/入库批次 |
 
 ---
 
@@ -294,7 +294,15 @@ allowlist 只能包含包内派生产物；禁止授权 PDF、segments、`conten
 
 生成：`data/quick_lookup_draft.csv`、`verification.csv`、`fixtures_result.md`。候选至少保留来源 PDF、model、section_path、key/value/unit、page_start/page_end、evidence_text、confidence、status、notes，以及 `source_block_id`、`table_id`、`row_index`、`parent_key`、`key_role`。
 
-支持包内 `pair_groups` 配置；每组用 `key_column` 和 `value_columns` 指定独立 key/value，一行多组拆成子行，默认 `needs_review`，列越界或配置不完整时跳过，不猜列。
+生成草案后必须运行抽取覆盖审计：
+
+```bash
+<project>/scripts/pdf-audit-extraction-coverage <package>
+```
+
+该审计逐行对账 canonical Markdown 中的 HTML 表格与 `quick_lookup_draft.csv`，生成 `data/extraction_coverage.csv`、`data/extraction-coverage-report.md` 和 `data/extraction_gap_queue.jsonl`。对账保留 canonical 的原始表号/行号，同时按 `pdf-extract-data` 的计数规则映射候选表号：抽取器跳过只有一行的 HTML 表时，不能把后续候选误报为缺口。每个源行必须有明确处置：`covered`、`non_business`、`full_text_only`、`image_only`、`unparseable` 或 `needs_review`；不能把“没有候选”默认为“没有业务意义”。覆盖 sidecar 不增加候选字段，不参与 `candidate_id` 计算。
+
+支持包内 `pair_groups` 配置；每组用 `key_column` 和 `value_columns` 指定独立 key/value，一行多组拆成子行，默认 `needs_review`，列越界或配置不完整时跳过，不猜列。表级 `key_prefix` 只用于把已确认的数字序号转换为可审核业务 key，不改变包级 `policies.numeric_key`。
 
 冒号行先分类为 `business_candidate`、`non_business` 或 `ambiguous`；明确 URL、电话、警告和脚注过滤，`ambiguous` 保留为待审核候选。`■/▲` 等标记应按配置进入证据/备注，不得未经确认成为业务 key；`policies.numeric_key=skip` 只在包级配置中显式启用。
 
@@ -320,16 +328,19 @@ LLM 默认审核证据明确的候选；用户只处理真正歧义项。
 
 LLM 读取 canonical Markdown、PDF 证据和阶段 6 候选；维护 `review_decisions.jsonl`、`escalation_queue.jsonl`，不让通用脚本猜测或自动批准业务语义。
 
-1. 读取 canonical Markdown、PDF 证据、`review.md`、抽取配置和候选。
-2. 明确 key/value/evidence 一致、来源唯一、无冲突的业务候选，写入 `review_decisions.jsonl` 批准。
-3. 明确页脚、表头、脚注、HTML 残片、地址、电话、邮箱或无业务意义标记，写入决定并拒绝。
-4. 多种合理解释、跨页/合并单元格语义不确定、冲突、证据缺失、候选身份重复或不稳定时，写入 `escalation_queue.jsonl`，交给用户确认。
+1. 先读取 `extraction-coverage-report.md` 和 `extraction_gap_queue.jsonl`，逐表处理缺口：修正 `extraction_overrides.json`、补充候选、确认 `non_business`，或保留为 `image_only`/待用户确认。
+2. 读取 canonical Markdown、PDF 证据、`review.md`、抽取配置和候选。
+3. 明确 key/value/evidence 一致、来源唯一、无冲突的业务候选，写入 `review_decisions.jsonl` 批准。
+4. 明确页脚、表头、脚注、HTML 残片、地址、电话、邮箱或无业务意义标记，写入决定并拒绝。
+5. 多种合理解释、跨页/合并单元格语义不确定、冲突、证据缺失、候选身份重复或不稳定时，写入 `escalation_queue.jsonl`，交给用户确认。
 
 LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non_business` 才能拒绝；用户决定使用 `user_confirmed`。不得把 VLM 输出直接作为最终事实。
 
 ### 审核文件和身份
 
-`review_decisions.jsonl` 每条至少含 `candidate_id`、`record_id`、`review_status`、`review_actor`、`decision_basis`、`review_rule_version`、`candidate_hash`、`reason`、`reviewed_at`。
+`review_decisions.jsonl` 每条至少含 `candidate_id`、`record_id`、`review_status`、`review_actor`、`decision_basis`、`review_rule_version`、`candidate_hash`、`reason`、`reviewed_at`。`review_actor=user` 的用户确认可以直接把 `needs_review` 候选推进为 `approved/rejected`，仍必须通过唯一 `candidate_id` 和 `candidate_hash` 校验；LLM 决定不能绕过原有状态门禁。
+
+若同一来源位置的不同业务 `key/value` 产生重复 `candidate_id`，上游只在 `row_index` 明确且内容摘要可唯一消歧时追加确定性内容摘要；来源位置不完整或内容完全相同时继续升级人工，不静默放行。
 
 `escalation_queue.jsonl` 至少含候选身份、页段、证据、当前候选、歧义类型、选项和推荐动作。用户确认后由 LLM 写入正式决定；用户不需要运行脚本或手工维护 hash。
 
@@ -339,13 +350,15 @@ LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non
 
 `review_decisions.jsonl`、`escalation_queue.jsonl`，以及兼容旧包的 `review_overrides.csv`（仅作为输入，不是新的审计事实源）。
 
+抽取覆盖 sidecar 是阶段 6/7 的过程与门禁证据，不替代候选 CSV 或审核决定。
+
 ### 门禁
 
 未处理的升级项、冲突、证据缺失或身份不稳定项保持 `needs_review/not_ready`。只有审核决定完整、候选 hash 一致且用户确认项已处理，才能进入阶段 8。
 
 ---
 
-## 阶段 8：入库准备和批次导出
+## 阶段 8：入库准备、parent_key 上游补全和批次导出
 
 ### 目标与 tool
 
@@ -353,10 +366,29 @@ LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non
 
 ```bash
 <project>/scripts/pdf-prepare-ingest <package>
+<project>/scripts/pdf-enrich-parent-context <package>
 <project>/scripts/pdf-export-ingest <package>
 ```
 
-`pdf-prepare-ingest` 写入 `data/ingest_ready.csv`、`conflicts.csv`，读取 `review_decisions.jsonl` 和兼容的 `review_overrides.csv`。`pdf-export-ingest` 写入 `data/ingest_batch.jsonl`、`ingest_manifest.json`。
+在 `pdf-prepare-ingest` 之前必须先执行覆盖门禁：
+
+```bash
+<project>/scripts/pdf-audit-extraction-coverage <package> --gate
+```
+
+只要仍有未处置的 `missing_candidate`、`unparseable` 或 `needs_review`，就停止入库准备；明确处置为 `non_business`、`full_text_only` 或 `image_only` 的源行可以通过，但必须保留在覆盖报告中。
+
+`pdf-prepare-ingest` 写入 `data/ingest_ready.csv`、`conflicts.csv`，读取 `review_decisions.jsonl` 和兼容的 `review_overrides.csv`。审核身份和 ready 状态在这里冻结。
+
+随后必须运行 `pdf-enrich-parent-context`，再运行 `pdf-export-ingest`。该上游补全阶段读取审核后的 `data/ingest_ready.csv` 和可选的包内 `data/parent_context_overrides.csv`：
+
+```text
+candidate_id,parent_key,context_source,notes
+```
+
+它只补空的 `parent_key`，保留已有非空值；覆盖冲突、未知候选、重复定位或非法字段时失败且不写回。覆盖优先按唯一 `candidate_id` 定位；历史兼容场景可按 `record_id` 定位，但该 `record_id` 必须唯一。没有覆盖文件时，历史输入中的重复 `record_id` 原样保留，只做 parent 字段处理和列重排。它不重新计算 `candidate_id`、`record_id` 或 `candidate_hash`，不改变审核状态、入库状态、业务 key/value/unit 和来源字段，并生成 `data/parent-context-enrichment-report.md`。最终 `ingest_ready.csv` 中的 `parent_key` 位于业务 `key` 前，后续 JSONL 原样传递该字段。
+
+`pdf-export-ingest` 写入 `data/ingest_batch.jsonl`、`ingest_manifest.json`。下游只消费批次中的 `parent_key`，不再在下游临时补列。
 
 ### 两道门禁
 
@@ -375,21 +407,21 @@ LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non
 
 ### 人工确认
 
-阶段 8 不新增业务判断；只消费阶段 7 已确认的审核决定。任何状态异常都回到对应阶段处理。
+阶段 8 不重新审核业务 key/value。若需要人工或 LLM 补充父级，优先通过 `parent_context_overrides.csv` 提交唯一 `candidate_id` 对应的直接父级；只有唯一 `record_id` 才允许兼容定位。不确定的记录保持空值并由报告列出。任何状态异常都回到对应阶段处理。
 
 ---
 
-## 阶段 9：下游交付和可选 chunks
+## 阶段 9：下游交付和默认 chunks
 
 ### 目标与 tool
 
-需要向量化时运行：
+每次达到阶段 9 都必须运行：
 
 ```bash
 <project>/scripts/pdf-export-chunks <package>
 ```
 
-它只读取 `manifest.json.files.markdown` 指定的 canonical Markdown；不得选择 `toc.md`、`review.md` 或目录遍历结果。manifest 缺失、损坏、缺少 `files.markdown`、路径越界或目标不存在时必须非零退出，且不生成新的 chunks。既有字段、页锚点、HTML 表格展开、图片替换和 384 token 上限保持不变。
+它只读取 `manifest.json.files.markdown` 指定的 canonical Markdown；不得选择 `toc.md`、`review.md` 或目录遍历结果。manifest 缺失、损坏、缺少 `files.markdown`、路径越界或目标不存在时必须非零退出，且阶段 9 阻断、不生成新的交付入口。既有字段、页锚点、HTML 表格展开、图片替换和 384 token 上限保持不变。chunks 生成成功后，才允许继续生成或更新 `downstream_delivery.md`。
 
 ### 最后生成交付入口
 
@@ -407,7 +439,7 @@ Markdown、TOC、修复记录、抽取配置、审核决定或入库批次发生
 
 - 正文/追溯：canonical Markdown + manifest。
 - 目录导航：`toc_tree.json`；不要从 `toc.md` 重新解析页码。
-- 向量化：`data/chunks.jsonl`，每行含 `id`、`content`、`page`、`section`、`token_count`，默认上限 384 token。
+- 向量化：默认生成 `data/chunks.jsonl`，每行含 `id`、`content`、`page`、`section`、`token_count`，默认上限 384 token。
 - 入库前批次：`data/ingest_batch.jsonl` + `ingest_manifest.json`。
 - `quick_lookup_draft.csv`、`verification.csv`、`fixtures_result.md`、`table_accuracy.csv`、`vlm_eval.jsonl` 和原始 segments 是过程/评测产物，除非消费者明确登记，不作为最终接口。
 

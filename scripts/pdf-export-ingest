@@ -23,6 +23,13 @@ import sys
 from pathlib import Path
 
 
+LEGACY_CANDIDATE_FIELDS = ("candidate_id", "candidate_hash")
+LEGACY_STABLE_FIELDS = (
+    "record_id", "source_pdf", "model", "section_path", "key", "value", "unit",
+    "evidence_text", "source_row_hash",
+)
+
+
 def sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
@@ -46,6 +53,101 @@ def read_conflicts(path: Path) -> list[dict]:
         sys.exit(f"错误：找不到 conflicts.csv: {path}")
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def read_existing_batch(path: Path) -> dict[str, dict]:
+    """读取旧 batch，用于兼容历史 ready 缺少候选字段的包。"""
+    if not path.exists():
+        return {}
+    rows = {}
+    with path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"旧 ingest_batch.jsonl 第 {line_no} 行不是合法 JSON: {exc}") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"旧 ingest_batch.jsonl 第 {line_no} 行必须是 JSON 对象")
+            record_id = str(row.get("record_id", "")).strip()
+            if not record_id:
+                raise ValueError(f"旧 ingest_batch.jsonl 第 {line_no} 行缺少 record_id")
+            if record_id in rows:
+                raise ValueError(f"旧 ingest_batch.jsonl 存在重复 record_id: {record_id}")
+            rows[record_id] = row
+    return rows
+
+
+def carry_legacy_candidate_fields(pkg: Path, ingest_rows: list[dict]) -> list[dict]:
+    """保留历史 batch 中的候选字段，不把旧字段回写到 ready。
+
+    仅处理当前 ready 缺少 candidate_id/candidate_hash、旧 batch 有对应记录，
+    且稳定业务字段完全一致的情况。这样旧 Aura 这类 ready/batch 字段版本
+    不一致的包可以安全重导；内容漂移或无法对应时直接失败。
+    """
+    ready_rows = [
+        row for row in ingest_rows
+        if row.get("review_status") == "approved" and row.get("ingest_status") == "ready"
+    ]
+    if not ready_rows or all(
+        all(str(row.get(field, "")).strip() for field in LEGACY_CANDIDATE_FIELDS)
+        for row in ready_rows
+    ):
+        return ingest_rows
+
+    old_batch = read_existing_batch(pkg / "data" / "ingest_batch.jsonl")
+    if not old_batch:
+        return ingest_rows
+
+    has_legacy_fields = any(
+        all(str(row.get(field, "")).strip() for field in LEGACY_CANDIDATE_FIELDS)
+        for row in old_batch.values()
+    )
+    if not has_legacy_fields:
+        return ingest_rows
+
+    enriched = []
+    for row in ingest_rows:
+        updated = dict(row)
+        if not (
+            row.get("review_status") == "approved"
+            and row.get("ingest_status") == "ready"
+            and not all(str(row.get(field, "")).strip() for field in LEGACY_CANDIDATE_FIELDS)
+        ):
+            enriched.append(updated)
+            continue
+
+        record_id = str(row.get("record_id", "")).strip()
+        previous = old_batch.get(record_id)
+        if previous is None:
+            raise ValueError(
+                "当前 ready 记录缺少候选字段，且旧 batch 无法命中 record_id: "
+                f"{record_id}"
+            )
+        previous_has = [bool(str(previous.get(field, "")).strip())
+                        for field in LEGACY_CANDIDATE_FIELDS]
+        if not any(previous_has):
+            # 旧 batch 该记录本来就没有候选字段，保持历史契约，不猜测补值。
+            enriched.append(updated)
+            continue
+        if not all(previous_has):
+            missing = [field for field, present in zip(LEGACY_CANDIDATE_FIELDS, previous_has)
+                       if not present]
+            raise ValueError(
+                f"旧 batch 候选字段不完整（{', '.join(missing)}）: {record_id}"
+            )
+        if any(str(row.get(field, "")) != str(previous.get(field, ""))
+               for field in LEGACY_STABLE_FIELDS):
+            raise ValueError(
+                "当前 ready 与旧 batch 的稳定字段不一致，拒绝复用候选字段: "
+                f"{record_id}"
+            )
+        for field in LEGACY_CANDIDATE_FIELDS:
+            updated[field] = previous[field]
+        enriched.append(updated)
+    return enriched
 
 
 def filter_ready(rows: list[dict]) -> list[dict]:
@@ -175,6 +277,7 @@ def main():
 
     # Read inputs
     ingest_rows = read_ingest(ingest_path)
+    ingest_rows = carry_legacy_candidate_fields(pkg, ingest_rows)
     conflicts = read_conflicts(conflicts_path)
 
     # Compute input hashes before any filtering

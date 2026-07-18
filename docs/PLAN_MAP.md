@@ -24,6 +24,8 @@
 | [structured-data-extraction](plans/structured-data-extraction.md) | 已完成 | 全阶段（0-3） | 2026-07-02 | pdf-output-package-layout、coverage-validation-optimization、demo20 输出包 | [阶段 3 完成证据](plans/structured-data-extraction.md#阶段-3-完成证据2026-07-02) |
 | [data-ingestion-pipeline](plans/data-ingestion-pipeline.md) | 已完成 | 阶段 3：入库前批次导出与交付边界 | 2026-07-14 | structured-data-extraction、pdf-output-package-layout、demo20 数据草案、春风250Sr 入库前批次 | [范围确认](plans/data-ingestion-pipeline.md#范围确认2026-07-14)、[阶段 3 完成证据](plans/data-ingestion-pipeline.md#阶段-3-完成证据2026-07-02) |
 | [conflict-context-ingestion-fix](plans/conflict-context-ingestion-fix.md) | 已完成 | 全阶段（0-3） | 2026-07-04 | structured-data-extraction、data-ingestion-pipeline、春风 150AURA 真实样本 | [阶段 3 完成证据](plans/conflict-context-ingestion-fix.md#阶段-3-完成证据2026-07-04) |
+| [parent-context-upstream-enrichment](plans/parent-context-upstream-enrichment.md) | 已完成 | 阶段 4 | 2026-07-18 | structured-data-extraction、data-ingestion-pipeline、semantic-parent-context-pipeline（已废弃） | [阶段 4 完成证据](plans/parent-context-upstream-enrichment.md#阶段-4-完成证据2026-07-18)、Aura parent_key 语义补全报告 |
+| [semantic-parent-context-pipeline](plans/semantic-parent-context-pipeline.md) | 已废弃 | 回滚完成：不启用 parent_key 字段改造 | 2026-07-18 | 原有结构化抽取、审核绑定和入库批次流程 | [回滚记录](plans/semantic-parent-context-pipeline.md#回滚记录2026-07-18) |
 | [coverage-validation-optimization](plans/coverage-validation-optimization.md) | 已完成 | 阶段 5：验证、治理收尾和运行说明同步 | 2026-06-28 | automated-pdf-pipeline、demo20 或等价真实样本、`content_list_v2.json` | [验收记录](plans/coverage-validation-optimization.md#验收记录2026-06-28) |
 | [minimal-automation-runbook](plans/minimal-automation-runbook.md) | 已完成 | 最小人工执行版 | 2026-06-30 | automated-pdf-pipeline | [Step 0 证据](plans/minimal-automation-runbook.md#step-0-证据)、[验证方式](plans/minimal-automation-runbook.md#验证方式) |
 | [marker-feature-absorption](plans/marker-feature-absorption.md) | 已完成 | 全阶段（0-4） | 2026-06-30 | pdf-output-package-layout、automated-pdf-pipeline | [阶段 4 完成证据](plans/marker-feature-absorption.md#阶段-4-完成证据2026-06-30) |
@@ -43,11 +45,13 @@
 | [toc-target-page-coordinate-fix](plans/toc-target-page-coordinate-fix.md) | 已完成 | 全阶段（0-4）已完成，全计划闭环 | 2026-07-13 | toc-page-physical-attribution-fix、pdf-extract-data-table-coverage、pdf-output-package-layout、pdf2md-fix-manual-workflow、阶段 0-4 逐项验收：页码检测/标准化/消费者门禁/真实样本/独立验收通过、310 tests pass、页码专项校验通过 | [阶段 4 再次独立复核](plans/toc-target-page-coordinate-fix.md#阶段-4-再次独立复核2026-07-13通过) |
 | [pdf-table-repair](plans/pdf-table-repair.md) | 已完成 | 阶段 4：独立验收（已完成） | 2026-07-15 | pdf-table-audit、pdf-extract-data、pdf-prepare-ingest、legacy-plan-governance-evidence-remediation | canonical 已从 138 个非空分段完整重建，TOC 120/120；包级策略过滤 29 条纯数字 key 后，抽取 182 行，179 条已确认、3 条拒绝，0 冲突，入库前批次已重生成。业务与治理独立验收通过，全计划关闭 | [阶段 4 独立验收复核](plans/pdf-table-repair.md#阶段-4-独立验收2026-07-15) |
 | [pdf-extract-data-table-coverage](plans/pdf-extract-data-table-coverage.md) | 已完成 | 阶段 1：当前 PDF 的 LLM/人工协作闭环（已完成） | 2026-07-15 | structured-data-extraction、data-ingestion-pipeline、pdf2md-fix-manual-workflow、pdf-table-audit、pdf-table-repair、PyMuPDF；具体 PDF 列语义由包内 JSON 提供，脚本只做通用抽取和校验 | [独立验收](plans/pdf-extract-data-table-coverage.md#独立验收2026-07-15) |
+| [extraction-coverage-reconciliation](plans/extraction-coverage-reconciliation.md) | 实施中 | 阶段 2 | 2026-07-18 | pdf-extract-data-table-coverage、structured-data-extraction、data-ingestion-pipeline、parent-context-upstream-enrichment | 阶段 2 已补齐 Aura 92 条业务源缺口为 105 条 `needs_review/not_ready` 候选；覆盖 gate 已通过，等待审核后再导出 batch |
 | [llm-human-collaboration-migration](plans/llm-human-collaboration-migration.md) | 已完成 | 阶段 5：治理收尾与兼容策略决策已完成 | 2026-07-15 | `pdf2md-fix-manual-workflow`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`cli-only-migration`、ADR 0003 | 用户已批准并完成废弃 `pdf2md-fix`；项目级/用户级兼容 skill 已删除，活动引用已迁移，主 `pdf2md` skill 同步；原有 PDF 产物和 CLI 不变 | [阶段 5 独立验收](plans/llm-human-collaboration-migration.md#阶段-5-独立验收2026-07-15通过) |
 | [llm-first-review-workflow-hardening](plans/llm-first-review-workflow-hardening.md) | 已完成 | 阶段 5：skill、ADR 与真实 PDF 验收（已完成） | 2026-07-16 | `llm-human-collaboration-migration`、`data-ingestion-pipeline`、`pdf-extract-data-table-coverage`、ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1-5 实现和独立验收通过；canonical chunks 契约及 PDF 包根目录 `downstream_delivery.md` 下游交付入口已同步到 ADR、两份 skill 和交付契约，真实 Aura 只读验收通过 | [阶段 5 独立验收](plans/llm-first-review-workflow-hardening.md#阶段-5-独立验收2026-07-16) |
 | [pdf2md-skill-sequential-workflow](plans/pdf2md-skill-sequential-workflow.md) | 已完成 | 阶段 1：顺序入口与阶段门禁改写（已完成） | 2026-07-17 | 已完成的 PDF 解析、人工协作、结构化抽取、入库和下游交付计划；`skills/pdf2md/SKILL.md` | 将已有能力收敛为阶段 0～9 的单一执行入口，不改变 CLI、Schema 或安全边界 | [完成证据](plans/pdf2md-skill-sequential-workflow.md#阶段-1-独立验收证据2026-07-17) |
 | [legacy-plan-governance-evidence-remediation](plans/legacy-plan-governance-evidence-remediation.md) | 已完成 | 阶段 1：历史已完成计划证据补全（已完成） | 2026-07-15 | plan-governance-cli、现有 23 个已完成专项计划 | 23 个历史计划的 Step 0/验证/测试覆盖治理入口已补全；严格治理检查、真实 PDF 包检查和当前回归均通过；未改变代码、PDF 产物、业务状态或历史完成结论 | [独立验收](plans/legacy-plan-governance-evidence-remediation.md#独立验收2026-07-15) |
 | [pdf2md-skill-phase-centric-reorganization](plans/pdf2md-skill-phase-centric-reorganization.md) | 已完成 | 阶段 3：独立可读性验收（已完成） | 2026-07-17 | `pdf2md-skill-sequential-workflow`、已完成的 PDF 解析/修复/抽取/入库/下游交付计划、ADR 0003 | 将现有主题章节迁入阶段正文，避免 LLM 在阶段入口和后部契约之间来回拼接；不改变公共行为 | [完成证据](plans/pdf2md-skill-phase-centric-reorganization.md#阶段-3-完成证据-2026-07-17) |
+| [pdf2md-default-chunks](plans/pdf2md-default-chunks.md) | 已完成 | 阶段 1：默认交付契约同步（已完成） | 2026-07-18 | `pdf2md-skill-phase-centric-reorganization`、`llm-first-review-workflow-hardening`、现有 `scripts/pdf-export-chunks` | 将阶段 9 的 chunks 从可选产物调整为默认交付；不改切块算法或下游数据库边界 | [阶段 1 独立验收复核](plans/pdf2md-default-chunks.md#阶段-1-独立验收复核2026-07-18通过) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -82,6 +86,8 @@
 27. `llm-first-review-workflow-hardening`（LLM 优先审核、升级队列、候选身份、通用抽取修复和 canonical chunks 导出）
 28. `pdf2md-skill-sequential-workflow`（将已完成能力收敛为顺序执行入口和阶段门禁）
 29. `pdf2md-skill-phase-centric-reorganization`（将详细契约归位到对应阶段，消除并行阅读路径）
+30. `parent-context-upstream-enrichment`（审核后补全 `parent_key` 并由上游批次统一交付；下游自理）
+31. `pdf2md-default-chunks`（阶段 9 默认生成 chunks 并更新下游交付入口）
 
 ## 依赖关系
 
@@ -108,6 +114,8 @@
 | conflict-context-ingestion-fix | structured-data-extraction | 需要补齐 `quick_lookup_draft.csv` 的页段和表格上下文字段 |
 | conflict-context-ingestion-fix | data-ingestion-pipeline | 需要修正 `pdf-prepare-ingest` 的冲突 identity 和放行门禁 |
 | conflict-context-ingestion-fix | 春风 150AURA 真实样本 | 35 组冲突误报和 390 条 not_ready 记录是本计划的 Step 0 基线 |
+| parent-context-upstream-enrichment | structured-data-extraction、data-ingestion-pipeline | 复用现有 `parent_key` 字段和审核后入库准备；不改 candidate identity，不修改下游仓库 |
+| semantic-parent-context-pipeline | conflict-context-ingestion-fix、structured-data-extraction、data-ingestion-pipeline | 统一 `parent_key` 的抽取、传递和上游批次交付；正式 Aura 仅在用户确认后更新上游文件，下游仅接收字段说明，本计划不修改下游代码 |
 | marker-feature-absorption | pdf-output-package-layout | 段级汇总、进度输出和幂等验收基于输出包结构 |
 | marker-feature-absorption | automated-pdf-pipeline | 变更集中在 `pdf-auto`，属于流水线主脚本 |
 | minimal-automation-runbook | automated-pdf-pipeline | 执行手册描述流水线当前可用子集 |

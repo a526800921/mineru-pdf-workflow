@@ -367,7 +367,34 @@ def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
             row["key"], row["value"], row["unit"], row["source_row_hash"],
         )
         rows.append(row)
+    disambiguate_source_position_collisions(rows)
     return rows
+
+
+def disambiguate_source_position_collisions(rows: list[dict]) -> None:
+    """仅对有明确 row_index 且业务内容不同的候选身份碰撞做确定性消歧。
+
+    candidate_id 的主身份仍保持原规则；只有同一来源位置生成多个不同
+    key/value 时，追加内容摘要。缺少 row_index 或内容完全相同的碰撞继续
+    暴露给审核队列，不静默猜测来源身份。
+    """
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[row["candidate_id"]].append(row)
+
+    for base_id, group in grouped.items():
+        if len(group) < 2 or any(not row.get("row_index", "").strip() for row in group):
+            continue
+        content_keys = [
+            (row.get("key", ""), row.get("value", ""), row.get("unit", ""),
+             row.get("source_row_hash", ""))
+            for row in group
+        ]
+        if len(set(content_keys)) != len(content_keys):
+            continue
+        for row, content_key in zip(group, content_keys):
+            suffix = sha256("|".join(content_key))[:16]
+            row["candidate_id"] = f"{base_id}-{suffix}"
 
 
 def refresh_candidate_hashes(rows: list[dict]) -> None:
@@ -432,8 +459,13 @@ def apply_review_decisions(rows: list[dict], decisions: dict[str, dict]):
                 f"错误：candidate_hash 已过期，拒绝应用审核决定: {candidate_id}"
             )
 
-        # 旧 review_overrides 若已写入不同状态，必须显式解决冲突。
-        if row.get("review_status") not in {"draft", decision["review_status"]}:
+        # 用户可直接确认 needs_review 候选；LLM 决定仍不能绕过原有状态门禁。
+        # 这样 candidate_id 唯一但 record_id 重复的候选不必借助有歧义的
+        # review_overrides，仍由 candidate_id + candidate_hash 完成审计绑定。
+        allowed_prior_statuses = {"draft", decision["review_status"]}
+        if decision.get("review_actor") == "user":
+            allowed_prior_statuses.add("needs_review")
+        if row.get("review_status") not in allowed_prior_statuses:
             sys.exit(
                 f"错误：review_decisions 与 review_overrides 状态冲突: {candidate_id}"
             )

@@ -89,6 +89,26 @@ def test_numeric_keys_can_be_suppressed_by_package_policy():
     assert colon_rows == []
 
 
+def test_table_key_prefix_keeps_numeric_source_key_reviewable():
+    md = """
+<!-- pages 29-29 -->
+<table>
+  <tr><td>编号</td><td>说明</td></tr>
+  <tr><td>10</td><td>前制动手柄</td></tr>
+</table>
+"""
+    rows = MODULE.extract_html_table_rows(
+        md, [], "sample.pdf", "sample", {1: (29, 29)},
+        MODULE.new_block_counters(), numeric_key_policy="skip",
+        table_overrides={"html_table:1": {
+            "header_rows": 1, "key_column": 0,
+            "value_columns": {"说明": 1}, "key_prefix": "指示灯序号",
+        }},
+    )
+    assert [row["key"] for row in rows] == ["指示灯序号10"]
+    assert rows[0]["key_role"] == "business_key"
+
+
 def test_colon_classification():
     assert MODULE.classify_colon_line("额定功率", "11.8 kW") == "business_candidate"
     assert MODULE.classify_colon_line("注意", "请勿在行驶中操作") == "non_business"

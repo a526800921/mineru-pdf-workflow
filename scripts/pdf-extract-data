@@ -865,6 +865,9 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                 pair_specs = [(0, row[key_idx].strip(), marker, value_str)]
 
             for pair_index, key, marker, value_str in pair_specs:
+                key_prefix = str(override.get("key_prefix", "")).strip() if override else ""
+                if key_prefix and key:
+                    key = f"{key_prefix}{key}"
                 if should_skip_numeric_key(key, numeric_key_policy):
                     continue
                 if not key or not value_str or len(key) > 60:

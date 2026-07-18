@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""在审核完成后为入库候选补全 parent_key。
+
+用法:
+  scripts/pdf-enrich-parent-context <package>
+
+输入:
+  <package>/data/ingest_ready.csv
+  <package>/data/parent_context_overrides.csv（可选）
+
+输出:
+  原子更新 <package>/data/ingest_ready.csv
+  <package>/data/parent-context-enrichment-report.md
+
+该阶段位于 pdf-prepare-ingest 之后、pdf-export-ingest 之前。它只更新
+parent_key，不重新计算或迁移任何候选/审核身份，也不改变审核和入库状态。
+"""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import os
+import sys
+import tempfile
+from collections import Counter
+from pathlib import Path
+
+
+OVERRIDE_FIELDS = {"candidate_id", "record_id", "parent_key", "context_source", "notes"}
+REQUIRED_OVERRIDE_FIELDS = {"parent_key", "context_source", "notes"}
+REQUIRED_INGEST_FIELDS = {"record_id", "parent_key", "key"}
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError(f"CSV 缺少表头: {path}")
+        fieldnames = [name.strip() for name in reader.fieldnames]
+        rows = [
+            {str(key).strip(): (value or "") for key, value in row.items()}
+            for row in reader
+        ]
+    return fieldnames, rows
+
+
+def read_ingest(
+    path: Path,
+    *,
+    reject_duplicate_record_ids: bool = True,
+) -> tuple[list[str], list[dict[str, str]]]:
+    if not path.exists():
+        raise ValueError(f"找不到 ingest_ready.csv: {path}")
+    fieldnames, rows = read_csv(path)
+    missing = sorted(REQUIRED_INGEST_FIELDS - set(fieldnames))
+    if missing:
+        raise ValueError(f"ingest_ready.csv 缺少字段: {', '.join(missing)}")
+
+    record_ids = [row.get("record_id", "").strip() for row in rows]
+    if any(not record_id for record_id in record_ids):
+        raise ValueError("ingest_ready.csv 存在空 record_id")
+    duplicates = sorted(record_id for record_id, count in Counter(record_ids).items()
+                        if count > 1)
+    if duplicates and reject_duplicate_record_ids:
+        raise ValueError(f"ingest_ready.csv 存在重复 record_id: {', '.join(duplicates)}")
+    return fieldnames, rows
+
+
+def read_overrides(
+    path: Path,
+    ingest_rows: list[dict[str, str]],
+) -> dict[str, dict[str, dict[str, str]]]:
+    if not path.exists():
+        return {"candidate_ids": {}, "record_ids": {}}
+    fieldnames, override_rows = read_csv(path)
+    unknown = sorted(set(fieldnames) - OVERRIDE_FIELDS)
+    missing = sorted(REQUIRED_OVERRIDE_FIELDS - set(fieldnames))
+    if unknown:
+        raise ValueError(f"parent_context_overrides.csv 包含未知字段: {', '.join(unknown)}")
+    if missing:
+        raise ValueError(f"parent_context_overrides.csv 缺少字段: {', '.join(missing)}")
+
+    candidate_counts = Counter(row.get("candidate_id", "").strip() for row in ingest_rows)
+    record_counts = Counter(row.get("record_id", "").strip() for row in ingest_rows)
+    known_candidate_ids = {
+        row.get("candidate_id", "").strip()
+        for row in ingest_rows if row.get("candidate_id", "").strip()
+    }
+    known_record_ids = {
+        row.get("record_id", "").strip()
+        for row in ingest_rows if row.get("record_id", "").strip()
+    }
+    overrides: dict[str, dict[str, dict[str, str]]] = {
+        "candidate_ids": {},
+        "record_ids": {},
+    }
+    for row in override_rows:
+        candidate_id = row.get("candidate_id", "").strip()
+        record_id = row.get("record_id", "").strip()
+        parent_key = row.get("parent_key", "").strip()
+        source = row.get("context_source", "").strip()
+        if bool(candidate_id) == bool(record_id):
+            raise ValueError(
+                "parent_context_overrides.csv 每行必须且只能填写一个定位字段: candidate_id 或 record_id"
+            )
+        if candidate_id:
+            if candidate_id not in known_candidate_ids:
+                raise ValueError(
+                    f"覆盖文件中的 candidate_id 未命中 ingest_ready.csv: {candidate_id}"
+                )
+            if candidate_counts[candidate_id] != 1:
+                raise ValueError(
+                    f"覆盖文件中的 candidate_id 在 ingest_ready.csv 中不唯一: {candidate_id}"
+                )
+            locator_type = "candidate_ids"
+            locator = candidate_id
+        else:
+            if record_id not in known_record_ids:
+                raise ValueError(
+                    f"覆盖文件中的 record_id 未命中 ingest_ready.csv: {record_id}"
+                )
+            if record_counts[record_id] != 1:
+                raise ValueError(
+                    f"覆盖文件中的 record_id 在 ingest_ready.csv 中不唯一: {record_id}"
+                )
+            locator_type = "record_ids"
+            locator = record_id
+        if locator in overrides[locator_type]:
+            raise ValueError(
+                f"parent_context_overrides.csv 存在重复 {locator_type[:-1]}: {locator}"
+            )
+        if not parent_key:
+            raise ValueError(f"覆盖文件存在空 parent_key: {locator}")
+        if not source:
+            raise ValueError(f"覆盖文件存在空 context_source: {locator}")
+        overrides[locator_type][locator] = {
+            "candidate_id": candidate_id,
+            "record_id": record_id,
+            "parent_key": parent_key,
+            "context_source": source,
+            "notes": row.get("notes", "").strip(),
+        }
+    return overrides
+
+
+def reorder_fields(fieldnames: list[str]) -> list[str]:
+    """将 parent_key 放到业务 key 前，其他列顺序保持不变。"""
+    if "parent_key" not in fieldnames or "key" not in fieldnames:
+        return fieldnames
+    reordered = [field for field in fieldnames if field not in {"parent_key", "key"}]
+    key_index = fieldnames.index("key")
+    # 以原 key 的位置为锚点，先放 parent_key，再放 key。
+    target_index = sum(1 for field in fieldnames[:key_index]
+                       if field not in {"parent_key", "key"})
+    reordered[target_index:target_index] = ["parent_key", "key"]
+    return reordered
+
+
+def apply_parent_context(
+    fieldnames: list[str],
+    rows: list[dict[str, str]],
+    overrides: dict[str, dict[str, dict[str, str]]],
+) -> tuple[list[str], list[dict[str, str]], dict]:
+    existing = 0
+    filled = 0
+    blank = 0
+    sources: Counter[str] = Counter()
+    blank_rows: list[dict[str, str]] = []
+    changed_rows: list[dict[str, str]] = []
+
+    enriched_rows = []
+    for row in rows:
+        updated = dict(row)
+        candidate_id = row.get("candidate_id", "").strip()
+        record_id = row["record_id"].strip()
+        current = row.get("parent_key", "").strip()
+        override = (
+            overrides["candidate_ids"].get(candidate_id)
+            or overrides["record_ids"].get(record_id)
+        )
+        locator = candidate_id or record_id
+        if current:
+            existing += 1
+            sources["existing"] += 1
+            if override and override["parent_key"] != current:
+                raise ValueError(
+                    f"覆盖文件试图覆盖已有 parent_key: {locator} "
+                    f"（已有={current}，覆盖={override['parent_key']}）"
+                )
+        elif override:
+            updated["parent_key"] = override["parent_key"]
+            filled += 1
+            sources[override["context_source"]] += 1
+            changed_rows.append({
+                "candidate_id": candidate_id,
+                "record_id": record_id,
+                "key": row.get("key", ""),
+                "parent_key": override["parent_key"],
+                "context_source": override["context_source"],
+                "notes": override["notes"],
+            })
+        else:
+            blank += 1
+            sources["blank"] += 1
+            blank_rows.append({
+                "candidate_id": candidate_id,
+                "record_id": record_id,
+                "key": row.get("key", ""),
+                "value": row.get("value", ""),
+                "page_start": row.get("page_start", ""),
+                "page_end": row.get("page_end", ""),
+            })
+        enriched_rows.append(updated)
+
+    return reorder_fields(fieldnames), enriched_rows, {
+        "total": len(rows),
+        "existing": existing,
+        "filled": filled,
+        "blank": blank,
+        "sources": dict(sources),
+        "changed_rows": changed_rows,
+        "blank_rows": blank_rows,
+    }
+
+
+def write_csv_atomic(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore",
+                                    lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def write_report(path: Path, package: Path, input_hash: str, output_hash: str,
+                 overrides_path: Path, stats: dict) -> None:
+    lines = [
+        "# parent_key 上游补全报告",
+        "",
+        f"- package: `{package}`",
+        f"- input: `data/ingest_ready.csv`",
+        f"- override: `{overrides_path.name}`（{'存在' if overrides_path.exists() else '不存在'}）",
+        f"- input hash: `{input_hash}`",
+        f"- output hash: `{output_hash}`",
+        "",
+        "## 统计",
+        "",
+        f"- 总记录：{stats['total']}",
+        f"- 原有非空：{stats['existing']}",
+        f"- 本轮补全：{stats['filled']}",
+        f"- 仍为空：{stats['blank']}",
+        "",
+        "## 来源分布",
+        "",
+    ]
+    for source, count in sorted(stats["sources"].items()):
+        lines.append(f"- `{source}`：{count}")
+
+    lines.extend(["", "## 本轮补全记录", ""])
+    if stats["changed_rows"]:
+        lines.append("| candidate_id | record_id | key | parent_key | context_source | notes |")
+        lines.append("|---|---|---|---|---|---|")
+        for row in stats["changed_rows"]:
+            values = [row[field].replace("|", "\\|") for field in
+                      ("candidate_id", "record_id", "key", "parent_key", "context_source", "notes")]
+            lines.append("| " + " | ".join(values) + " |")
+    else:
+        lines.append("本轮没有新增 parent_key。")
+
+    lines.extend(["", "## 仍为空的记录", ""])
+    if stats["blank_rows"]:
+        lines.append("| candidate_id | record_id | key | value | page_start | page_end |")
+        lines.append("|---|---|---|---|---|---|")
+        for row in stats["blank_rows"]:
+            values = [row[field].replace("|", "\\|") for field in
+                      ("candidate_id", "record_id", "key", "value", "page_start", "page_end")]
+            lines.append("| " + " | ".join(values) + " |")
+    else:
+        lines.append("无。")
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run(package: Path) -> dict:
+    data_dir = package / "data"
+    ingest_path = data_dir / "ingest_ready.csv"
+    overrides_path = data_dir / "parent_context_overrides.csv"
+    report_path = data_dir / "parent-context-enrichment-report.md"
+
+    # 覆盖优先使用 candidate_id；历史包中的重复 record_id 仍可安全保留。
+    # 只有显式使用 record_id 覆盖时，read_overrides 才要求该 record_id 唯一。
+    fieldnames, rows = read_ingest(
+        ingest_path,
+        reject_duplicate_record_ids=False,
+    )
+    input_hash = file_sha256(ingest_path)
+    overrides = read_overrides(overrides_path, rows)
+    output_fields, enriched_rows, stats = apply_parent_context(fieldnames, rows, overrides)
+    write_csv_atomic(ingest_path, output_fields, enriched_rows)
+    output_hash = file_sha256(ingest_path)
+    write_report(report_path, package, input_hash, output_hash, overrides_path, stats)
+    return stats
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        print("用法: scripts/pdf-enrich-parent-context <package>", file=sys.stderr)
+        raise SystemExit(1)
+    package = Path(sys.argv[1]).resolve()
+    try:
+        stats = run(package)
+    except (OSError, ValueError) as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    print("parent_key 上游补全完成")
+    print(f"  总记录: {stats['total']}")
+    print(f"  原有非空: {stats['existing']}")
+    print(f"  本轮补全: {stats['filled']}")
+    print(f"  仍为空: {stats['blank']}")
+
+
+if __name__ == "__main__":
+    main()
