@@ -34,6 +34,45 @@ PHONE_RE = re.compile(r"(?:电话|手机|联系电话)?\s*\d{3,4}[- ]\d{7,8}")
 UNIT_RE = re.compile(r"[\s]*[（(]?([a-zA-Z·/℃²³%]+(?:·[a-zA-Z]+)?)[\s）)]?$")
 DIGIT_RE = re.compile(r"\d+\.?\d*")
 
+# 已知计量单位白名单。只有在此集合中的字符串才会被识别为 unit。
+# 不在白名单中的字母后缀（如 RTI、SOHC、速度等级 L）保留在 value 中。
+KNOWN_UNITS: set[str] = {
+    # 长度
+    "mm", "cm", "m", "km", "in", "ft",
+    # 容量
+    "L", "mL", "ml", "cc",
+    # 质量
+    "g", "kg", "lb", "oz",
+    # 压力
+    "Pa", "kPa", "MPa", "bar", "psi",
+    # 功率
+    "W", "kW", "hp",
+    # 电气
+    "V", "kV", "A", "mA", "Ah",
+    # 转速/速度
+    "r/min", "rpm", "km/h", "mph", "m/s",
+    # 扭矩
+    "N·m",
+    # 温度
+    "℃", "℉", "°C", "°F",
+    # 时间
+    "s", "min", "h", "ms",
+    # 频率
+    "Hz", "kHz", "MHz",
+    # 帧率
+    "FPS",
+    # 角度
+    "°",
+}
+
+# 单字母歧义单位：既是计量单位（L=升, V=伏, A=安, W=瓦），也可能出现在规格编码中
+# （轮胎速度等级 L、型号后缀字母等）。需要额外上下文校验才能拆分。
+_AMBIGUOUS_SINGLE_LETTER_UNITS: set[str] = {"L", "W", "V", "A", "H", "K", "m", "s", "g"}
+
+# 尺寸规格模式：值中含有这类模式的字母后缀通常是规格编码而非计量单位。
+# 例如 110/70-12 47L（轮胎）vs 0.9L（机油容量）。
+_DIMENSION_PATTERN_RE = re.compile(r"\d+[/]\d+|\d+[-]\d+")
+
 # 阶段 1：页段注释和 key_role 分类
 PAGE_COMMENT_RE = re.compile(r"<!--\s*pages?\s*(\d+)\s*[-–—]\s*(\d+)\s*-->")
 # PAGE_ANCHOR_RE 已移除：逐页锚点 <!-- page N --> 已在阶段 4 收敛
@@ -327,16 +366,37 @@ def get_section_path(line_no: int, sections: list, page_start: str,
 
 
 def extract_unit(value: str) -> tuple[str, str]:
-    """从 value 尾部提取单位，返回 (value_without_unit, unit)."""
+    """从 value 尾部提取计量单位，返回 (value_without_unit, unit).
+
+    只有已知计量单位（KNOWN_UNITS）才会被拆分。不在白名单中的字母后缀
+    （火花塞型号 RTI/EI、引擎型式 SOHC、轮胎速度等级 L 等）保留在 value 中。
+
+    对单字母歧义单位（L=升也是速度等级，V=伏也可能是型号后缀），
+    需要同时满足：(a) 值中无尺寸规格模式（如 110/70-12）；(b) 值末尾的
+    「词」以数字结尾（如 0.9、DC 12），否则视为标签/编码不拆分。
+    """
     m = UNIT_RE.search(value)
     if not m:
         return value, ""
     unit = m.group(1)
+    # 门禁 1：必须是已知计量单位
+    if unit not in KNOWN_UNITS:
+        return value, ""
     if len(unit) > 10:
         return value, ""
     clean = value[: m.start()].strip().rstrip(",").strip()
     if not clean or clean == value:
         return value, ""
+    # 门禁 2：单字母歧义单位 — 需额外上下文校验
+    if unit in _AMBIGUOUS_SINGLE_LETTER_UNITS:
+        # (a) 值中含尺寸规格模式 → 编码而非单位（如轮胎 110/70-12 47L）
+        if _DIMENSION_PATTERN_RE.search(clean):
+            return value, ""
+        # (b) 值末尾的「词」必须以数字结尾 → 才是测量值（如 0.9L、DC 12V）
+        #     否则视为标签/型号（如 TRIP A、N•m 被 bullet 拆出的 m）
+        last_word = clean.split()[-1] if clean.split() else clean
+        if not re.search(r"\d$", last_word):
+            return value, ""
     return clean, unit
 
 
