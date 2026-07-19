@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""补充 coverage_supplement 候选的 TOC 章节上下文。
+
+默认只检查；使用 --apply 才会更新 quick_lookup_draft.csv。该命令不读取
+segments 里的合并表号，也不修改 PDF、segments、content_list 或 canonical Markdown。
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.coverage_context import build_toc_section_index, section_path_for_page  # noqa: E402
+
+
+def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError(f"草案缺少 CSV 表头: {path}")
+        return list(reader.fieldnames), list(reader)
+
+
+def atomic_write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    with tempfile.NamedTemporaryFile(
+        mode="w", newline="", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+
+
+def load_context(package: Path) -> list[tuple[int, tuple[str, ...]]]:
+    manifest_path = package / "manifest.json"
+    toc_path = package / "toc_tree.json"
+    if not manifest_path.exists():
+        raise ValueError(f"缺少 manifest.json: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    markdown_rel = manifest.get("files", {}).get("markdown")
+    if not markdown_rel or not (package / markdown_rel).is_file():
+        raise ValueError("manifest.files.markdown 缺失或目标不存在")
+    if not toc_path.exists():
+        raise ValueError(f"缺少 toc_tree.json: {toc_path}")
+    entries = json.loads(toc_path.read_text(encoding="utf-8"))
+    if not isinstance(entries, list):
+        raise ValueError("toc_tree.json 必须是数组")
+    index = build_toc_section_index(entries)
+    if not index:
+        raise ValueError("toc_tree.json 没有可用的 target_page/title/depth 条目")
+    return index
+
+
+def inspect_rows(rows: list[dict[str, str]], index: list[tuple[int, tuple[str, ...]]]):
+    changes = []
+    errors = []
+    for row_number, row in enumerate(rows, 2):
+        if "coverage_supplement" not in row.get("notes", ""):
+            continue
+        missing = [field for field in ("section_path", "page_start", "page_end")
+                   if not row.get(field, "").strip()]
+        if not missing:
+            continue
+        page_start = row.get("page_start", "").strip()
+        page_end = row.get("page_end", "").strip()
+        if not page_start or not page_end:
+            errors.append({"row_number": row_number, "reason": "missing_page_range", "missing": missing})
+            continue
+        try:
+            start = int(page_start)
+            end = int(page_end)
+        except ValueError:
+            errors.append({"row_number": row_number, "reason": "invalid_page_range", "page_start": page_start, "page_end": page_end})
+            continue
+        if start < 1 or end < start:
+            errors.append({"row_number": row_number, "reason": "invalid_page_range", "page_start": page_start, "page_end": page_end})
+            continue
+        section_path = section_path_for_page(index, start)
+        end_path = section_path_for_page(index, end)
+        if not section_path or section_path != end_path:
+            errors.append({"row_number": row_number, "reason": "section_not_unique", "page_start": start, "page_end": end, "start_path": section_path, "end_path": end_path})
+            continue
+        changes.append({
+            "row_number": row_number,
+            "table_id": row.get("table_id", ""),
+            "row_index": row.get("row_index", ""),
+            "page_start": start,
+            "page_end": end,
+            "old_section_path": row.get("section_path", ""),
+            "section_path": section_path,
+        })
+    return changes, errors
+
+
+def run(package: Path, apply: bool) -> dict:
+    draft_path = package / "data" / "quick_lookup_draft.csv"
+    if not draft_path.exists():
+        raise ValueError(f"找不到 quick_lookup_draft.csv: {draft_path}")
+    index = load_context(package)
+    fieldnames, rows = read_rows(draft_path)
+    changes, errors = inspect_rows(rows, index)
+    if errors:
+        raise ValueError(json.dumps({"errors": errors}, ensure_ascii=False))
+    if apply and changes:
+        by_number = {change["row_number"]: change for change in changes}
+        for row_number, row in enumerate(rows, 2):
+            change = by_number.get(row_number)
+            if change:
+                row["section_path"] = change["section_path"]
+        atomic_write_csv(draft_path, fieldnames, rows)
+        report_path = package / "data" / "coverage_context_repair.json"
+        report_path.write_text(json.dumps({"changes": changes}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"supplement_changes": len(changes), "errors": len(errors), "applied": apply}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("package", type=Path)
+    parser.add_argument("--check", action="store_true", help="只检查，不写入（默认行为）")
+    parser.add_argument("--apply", action="store_true", help="写入补齐后的 section_path")
+    args = parser.parse_args()
+    if args.check and args.apply:
+        parser.error("--check 与 --apply 不能同时使用")
+    try:
+        stats = run(args.package.resolve(), apply=args.apply)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    mode = "已应用" if args.apply else "检查通过"
+    print(f"coverage context {mode}: 补充候选 {stats['supplement_changes']} 条")
+
+
+if __name__ == "__main__":
+    main()

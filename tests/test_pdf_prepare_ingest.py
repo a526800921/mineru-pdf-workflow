@@ -272,6 +272,20 @@ def test_user_decision_can_resolve_needs_review_without_record_override():
     assert row["ingest_status"] == "ready"
 
 
+def test_coverage_supplement_without_context_cannot_reach_ready():
+    row = one_row(
+        section_path="",
+        notes="html_table;coverage_supplement",
+        status="needs_review",
+    )
+    apply_and_status([row], {row["candidate_id"]: decision(
+        row, "approved", "user", "user_confirmed",
+    )})
+
+    assert row["ingest_status"] == "not_ready"
+    assert "coverage_supplement_missing_context" in row["notes"]
+
+
 def test_candidate_identity_stable():
     first = one_row(source_block_id="table:1", row_index="2")
     second = one_row(source_block_id="table:1", row_index="2")

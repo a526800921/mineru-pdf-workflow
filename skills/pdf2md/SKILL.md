@@ -302,6 +302,14 @@ allowlist 只能包含包内派生产物；禁止授权 PDF、segments、`conten
 
 该审计逐行对账 canonical Markdown 中的 HTML 表格与 `quick_lookup_draft.csv`，生成 `data/extraction_coverage.csv`、`data/extraction-coverage-report.md` 和 `data/extraction_gap_queue.jsonl`。对账保留 canonical 的原始表号/行号，同时按 `pdf-extract-data` 的计数规则映射候选表号：抽取器跳过只有一行的 HTML 表时，不能把后续候选误报为缺口。每个源行必须有明确处置：`covered`、`non_business`、`full_text_only`、`image_only`、`unparseable` 或 `needs_review`；不能把“没有候选”默认为“没有业务意义”。覆盖 sidecar 不增加候选字段，不参与 `candidate_id` 计算。
 
+coverage 缺口补充候选后必须运行上下文校验：
+
+```bash
+<project>/scripts/pdf-enrich-coverage-context <package> --check
+```
+
+该命令只处理 `notes` 含 `coverage_supplement` 的候选：按 canonical Markdown 的物理页和 `toc_tree.json` 层级反查 `section_path`，不得按合并后不存在于 `segments/` 的 `source_block_id` 或表号猜测章节。补充候选必须保留 `section_path`、`page_start`、`page_end`，并能通过覆盖 sidecar 的源表行和候选行号回溯；无法唯一反查时保持 `needs_review/not_ready`。
+
 支持包内 `pair_groups` 配置；每组用 `key_column` 和 `value_columns` 指定独立 key/value，一行多组拆成子行，默认 `needs_review`，列越界或配置不完整时跳过，不猜列。表级 `key_prefix` 只用于把已确认的数字序号转换为可审核业务 key，不改变包级 `policies.numeric_key`。
 
 冒号行先分类为 `business_candidate`、`non_business` 或 `ambiguous`；明确 URL、电话、警告和脚注过滤，`ambiguous` 保留为待审核候选。`■/▲` 等标记应按配置进入证据/备注，不得未经确认成为业务 key；`policies.numeric_key=skip` 只在包级配置中显式启用。
@@ -329,10 +337,11 @@ LLM 默认审核证据明确的候选；用户只处理真正歧义项。
 LLM 读取 canonical Markdown、PDF 证据和阶段 6 候选；维护 `review_decisions.jsonl`、`escalation_queue.jsonl`，不让通用脚本猜测或自动批准业务语义。
 
 1. 先读取 `extraction-coverage-report.md` 和 `extraction_gap_queue.jsonl`，逐表处理缺口：修正 `extraction_overrides.json`、补充候选、确认 `non_business`，或保留为 `image_only`/待用户确认。
-2. 读取 canonical Markdown、PDF 证据、`review.md`、抽取配置和候选。
-3. 明确 key/value/evidence 一致、来源唯一、无冲突的业务候选，写入 `review_decisions.jsonl` 批准。
-4. 明确页脚、表头、脚注、HTML 残片、地址、电话、邮箱或无业务意义标记，写入决定并拒绝。
-5. 多种合理解释、跨页/合并单元格语义不确定、冲突、证据缺失、候选身份重复或不稳定时，写入 `escalation_queue.jsonl`，交给用户确认。
+2. 补充候选写入草案后，运行 `pdf-enrich-coverage-context --check`；检查失败不得进入审核批准或入库准备。
+3. 读取 canonical Markdown、PDF 证据、`review.md`、抽取配置和候选。
+4. 明确 key/value/evidence 一致、来源唯一、无冲突的业务候选，写入 `review_decisions.jsonl` 批准。
+5. 明确页脚、表头、脚注、HTML 残片、地址、电话、邮箱或无业务意义标记，写入决定并拒绝。
+6. 多种合理解释、跨页/合并单元格语义不确定、冲突、证据缺失、候选身份重复或不稳定时，写入 `escalation_queue.jsonl`，交给用户确认。
 
 LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non_business` 才能拒绝；用户决定使用 `user_confirmed`。不得把 VLM 输出直接作为最终事实。
 
@@ -355,6 +364,7 @@ LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non
 ### 门禁
 
 未处理的升级项、冲突、证据缺失或身份不稳定项保持 `needs_review/not_ready`。只有审核决定完整、候选 hash 一致且用户确认项已处理，才能进入阶段 8。
+任意 `coverage_supplement` 候选缺少 `section_path`、`page_start` 或 `page_end` 时保持 `not_ready`，不得因已有审核决定而放行。
 
 ---
 
@@ -393,6 +403,7 @@ candidate_id,parent_key,context_source,notes
 ### 两道门禁
 
 - `pdf-prepare-ingest` 在状态计算后执行页码门禁；未验证页码时 ready 降级为 `not_ready`，终态 `skipped/superseded/suppressed` 不受影响。
+- `pdf-prepare-ingest` 对 `coverage_supplement` 执行上下文门禁；缺少 `section_path` 或页段时 ready 降级为 `not_ready`。
 - `pdf-export-ingest` 执行最终门禁；`page_numbering.status != verified` 时非零退出，防止旧包中的 ready 记录绕过上游门禁。
 - 只导出 `review_status=approved` 且 `ingest_status=ready` 的记录。
 - `ingest_manifest.json` 必须记录输入 hash、数量、状态和“未写入数据库”说明；下游入库成功由外部系统负责。

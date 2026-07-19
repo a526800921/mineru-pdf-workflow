@@ -761,6 +761,11 @@ def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
             issues.append("missing_key")
         if not r.get("value"):
             issues.append("missing_value")
+        if "coverage_supplement" in r.get("notes", "") and any(
+            not r.get(field, "").strip()
+            for field in ("section_path", "page_start", "page_end")
+        ):
+            issues.append("coverage_supplement_missing_context")
         if r["record_id"] in unresolved_ids:
             issues.append("unresolved_conflict")
         if r["record_id"] in review_context_ids:

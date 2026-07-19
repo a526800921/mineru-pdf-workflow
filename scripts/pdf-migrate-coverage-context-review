@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""迁移 coverage context 修复后受影响候选的审核身份。
+
+section_path 是 candidate/record identity 的组成部分。该命令要求先用
+pdf-prepare-ingest 生成新的 ingest_ready.csv，再依据旧 ingest_ready 快照的
+稳定来源位置迁移审核决定；不会按新 candidate_id 猜测或批量放行。
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+
+STABLE_FIELDS = (
+    "source_pdf", "model", "key", "value", "unit", "evidence_text",
+    "source_block_id", "table_id", "row_index", "page_start", "page_end",
+)
+
+
+def read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def stable_key(row: dict[str, str]) -> tuple[str, ...]:
+    return tuple(row.get(field, "") for field in STABLE_FIELDS)
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def atomic_write_jsonl(path: Path, rows: list[dict]) -> None:
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+
+
+def atomic_write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    with tempfile.NamedTemporaryFile(
+        mode="w", newline="", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+
+
+def build_migration(previous_rows: list[dict], current_rows: list[dict], decisions: list[dict]):
+    previous_by_key = {stable_key(row): row for row in previous_rows}
+    current_by_key = {stable_key(row): row for row in current_rows}
+    if len(previous_by_key) != len(previous_rows) or len(current_by_key) != len(current_rows):
+        raise ValueError("旧/新 ingest_ready 存在重复稳定来源位置，拒绝迁移")
+
+    changed = []
+    for key, old in previous_by_key.items():
+        new = current_by_key.get(key)
+        if not new:
+            continue
+        if (
+            "coverage_supplement" in old.get("notes", "")
+            and not old.get("section_path", "").strip()
+            and new.get("section_path", "").strip()
+        ):
+            changed.append((old, new))
+
+    decisions_by_id = {row.get("candidate_id"): row for row in decisions}
+    if len(decisions_by_id) != len(decisions):
+        raise ValueError("review_decisions.jsonl 存在重复 candidate_id，拒绝迁移")
+
+    migrated = []
+    report = []
+    for old, new in changed:
+        decision = decisions_by_id.get(old.get("candidate_id"))
+        if not decision:
+            raise ValueError(f"找不到旧候选的审核决定: {old.get('candidate_id')}")
+        updated = dict(decision)
+        updated["candidate_id"] = new.get("candidate_id", "")
+        updated["record_id"] = new.get("record_id", "")
+        updated["candidate_hash"] = new.get("candidate_hash", "")
+        updated["reason"] = (
+            f"{decision.get('reason', '')}; coverage_context_migrated: "
+            f"{old.get('section_path', '') or '<empty>'} -> {new.get('section_path', '')}"
+        ).strip("; ")
+        migrated.append((old.get("candidate_id"), updated))
+        report.append({
+            "old_candidate_id": old.get("candidate_id", ""),
+            "new_candidate_id": new.get("candidate_id", ""),
+            "old_record_id": old.get("record_id", ""),
+            "new_record_id": new.get("record_id", ""),
+            "old_candidate_hash": old.get("candidate_hash", ""),
+            "new_candidate_hash": new.get("candidate_hash", ""),
+            "table_id": new.get("table_id", ""),
+            "row_index": new.get("row_index", ""),
+            "section_path": new.get("section_path", ""),
+        })
+
+    return migrated, report
+
+
+def run(package: Path, previous_ingest: Path, apply: bool) -> dict:
+    current_path = package / "data" / "ingest_ready.csv"
+    decisions_path = package / "data" / "review_decisions.jsonl"
+    if not previous_ingest.exists() or not current_path.exists() or not decisions_path.exists():
+        raise ValueError("需要旧 ingest_ready.csv、当前 ingest_ready.csv 和 review_decisions.jsonl")
+    previous_rows = read_csv(previous_ingest)
+    current_rows = read_csv(current_path)
+    decisions = read_jsonl(decisions_path)
+    migrated, report = build_migration(previous_rows, current_rows, decisions)
+    migrated_by_old = {old_id: row for old_id, row in migrated}
+    output = [migrated_by_old.get(row.get("candidate_id"), row) for row in decisions]
+    new_ids = [row.get("candidate_id") for row in output]
+    if len(set(new_ids)) != len(new_ids):
+        raise ValueError("迁移后 review_decisions 存在重复 candidate_id，拒绝写入")
+    if apply:
+        atomic_write_jsonl(decisions_path, output)
+        report_path = package / "data" / "coverage_context_identity_migration.jsonl"
+        atomic_write_jsonl(report_path, report)
+    return {"migrated": len(migrated), "applied": apply}
+
+
+def migrate_parent_overrides(package: Path, apply: bool) -> dict:
+    report_path = package / "data" / "coverage_context_identity_migration.jsonl"
+    overrides_path = package / "data" / "parent_context_overrides.csv"
+    if not report_path.exists() or not overrides_path.exists():
+        raise ValueError("需要 coverage_context_identity_migration.jsonl 和 parent_context_overrides.csv")
+    mapping = {
+        row["old_candidate_id"]: row["new_candidate_id"]
+        for row in read_jsonl(report_path)
+    }
+    with overrides_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or "candidate_id" not in reader.fieldnames:
+            raise ValueError("parent_context_overrides.csv 缺少 candidate_id")
+        rows = list(reader)
+        fieldnames = list(reader.fieldnames)
+    changed = 0
+    for row in rows:
+        new_id = mapping.get(row.get("candidate_id", ""))
+        if new_id:
+            row["candidate_id"] = new_id
+            changed += 1
+    if len({row.get("candidate_id", "") for row in rows}) != len(rows):
+        raise ValueError("parent_context_overrides.csv 迁移后存在重复 candidate_id")
+    if apply and changed:
+        atomic_write_csv(overrides_path, fieldnames, rows)
+    return {"migrated": changed, "applied": apply}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("package", type=Path)
+    parser.add_argument("--previous-ingest", type=Path, required=True)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--parent-overrides", action="store_true", help="仅迁移 parent_context_overrides.csv")
+    args = parser.parse_args()
+    try:
+        if args.parent_overrides:
+            stats = migrate_parent_overrides(args.package.resolve(), args.apply)
+        else:
+            stats = run(args.package.resolve(), args.previous_ingest.resolve(), args.apply)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    print(f"coverage context review migration {'已应用' if args.apply else '检查通过'}: {stats['migrated']} 条")
+
+
+if __name__ == "__main__":
+    main()

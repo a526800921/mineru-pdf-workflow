@@ -5,9 +5,9 @@
 | 字段 | 内容 |
 |---|---|
 | 状态 | 实施中 |
-| 当前阶段 | 阶段 2 |
+| 当前阶段 | 阶段 2：coverage supplement 上下文传递修复 |
 | 计划类型 | 跨阶段抽取完整性、审核门禁和兼容性增强 |
-| 最后更新 | 2026-07-18 |
+| 最后更新 | 2026-07-19 |
 
 本计划承接已完成的[结构化抽取表格覆盖计划](pdf-extract-data-table-coverage.md)，专门解决“源 Markdown 有行，但候选草案中没有行，审核者因此无法发现”的静默漏抽问题。旧计划的完成结论不被覆盖；本计划增加抽取后覆盖对账和审核前缺口展示。
 
@@ -23,6 +23,8 @@
 - 生成包内 sidecar 报告，不修改 `quick_lookup_draft.csv` 的公共字段，不把覆盖审计字段加入候选身份。
 - 对账使用独立的源行定位：PDF 页码、`source_block_id`/`table_id`、原始 HTML 行序号和源文本摘要；不得直接复用会因表头修正而漂移的候选 `row_index`。
 - 对未覆盖源行生成可读的缺口队列，LLM 负责决定配置修复、手工候选、非业务拒绝或保留全文/图片证据。
+- coverage supplement 候选必须从 canonical Markdown 的物理页和 `toc_tree.json` 反查层级 `section_path`；不得依赖合并后不存在于 `segments/` 的表号或 source block ID 推断章节。
+- coverage supplement 候选缺少 `section_path`、`page_start` 或 `page_end` 时，必须在阶段 8 前阻断为 `not_ready`；补充候选必须能回指覆盖 sidecar 的源表行和候选行号。
 - 在入库准备前增加覆盖门禁：未处置的结构化缺口不能进入最终 `ready` 批次。
 
 ## 非目标
@@ -32,6 +34,14 @@
 - 不修改 PDF、`segments/`、`content_list*.json` 或 canonical Markdown。
 - 不改变已有 `candidate_id`、`record_id`、`candidate_hash`、审核决定和候选 CSV 字段顺序。
 - 不把 `parent_key` 推断逻辑并入覆盖审计；父级仍由阶段 8 的独立 enrichment 处理。
+
+## 方案决策：小影响面混合处理（2026-07-19）
+
+- 采用“自动发现与补全、人工/LLM 审核确认”的边界，不追求 coverage supplement 的全自动批准。
+- 自动化范围限定为：覆盖缺口发现、物理页 + TOC 上下文补全、基于已确认表格配置生成候选草案、`needs_review/not_ready` 初始化、覆盖 gate 和身份校验。
+- 语义判断、重复页面是否保留独立来源、key/value 拆分和最终批准继续留在阶段 7。
+- 不修改现有候选 CSV Schema、审核决定契约、阶段 6 主抽取逻辑或数据库接口；后续若自动生成补充草案，也必须是可选的派生产物，并默认不能进入 `ready`。
+- 本次 Aura 的 3 条 p46/p47 缺口作为审核阶段补充候选处理，不将一次性数据修复扩大为全流程重构。
 
 ## Step 0 基线与证据
 
@@ -85,7 +95,7 @@ coverage_status,disposition,action,notes
 |---|---|---|
 | 阶段 0 | 固定真实漏行基线、sidecar 字段、枚举和样本矩阵 | 已完成 |
 | 阶段 1 | 新增覆盖审计 CLI、报告和最小回归 fixture | 已完成 |
-| 阶段 2 | 接入 LLM 缺口队列和覆盖门禁，临时副本验证 | 实施中 |
+| 阶段 2：coverage supplement 上下文传递修复 | 接入 LLM 缺口队列和覆盖门禁，并修复补充候选的章节上下文传递 | 实施中 |
 | 阶段 3 | Aura 真实包验证，确认不改变既有候选身份和审核复用 | 候选 |
 | 阶段 4 | 更新 pdf2md skill、完成独立验收和治理收尾 | 候选 |
 
@@ -118,6 +128,58 @@ coverage_status,disposition,action,notes
 - 正式包追加 105 条候选后，`quick_lookup_draft.csv` 由 386 行变为 491 行；原有 386 行保持不变，`ingest_ready.csv` 新增 105 条 `needs_review/not_ready`。
 - 覆盖 `--gate` 已通过；正式 `ingest_batch.jsonl` 和 `ingest_manifest.json` 未变化，未把新增未审核候选交付下游；旧候选身份、审核状态、内容和 37 条 parent_key 全部保持一致。
 
+## 阶段 2 修复子阶段：coverage supplement 上下文传递（2026-07-19）
+
+### Step 0 基线与证据
+
+基线类型：真实 Aura 已交付包快照 + 最小失败断言 + 物理页/TOC 反查证据。
+
+- `quick_lookup_draft.csv` 共 485 条，其中 104 条带 `coverage_supplement`；5 条的 `section_path` 为空，但 `page_start/page_end` 已存在，页码为 66、67、76、77。
+- 这 5 条已全部进入 `ingest_ready.csv` 和 `ingest_batch.jsonl`，均为 `approved/ready`；因此缺陷从候选草案穿透到最终批次，而不是 `downstream_delivery.md` 单独丢字段。
+- `toc_tree.json` 可唯一反查上下文：66 为 `LCD仪表（根据配置） / 仪表指示灯`，67 为 `LCD仪表（根据配置） / 信息显示`，76/77 为 `TFT仪表（根据配置） / 仪表指示灯`。
+- 合并后的 canonical 表号为 38、39、45、46，但 `segments/` 中不存在这些合并后表号；因此 source block/table ID 不能作为章节解析输入。
+- 可复现失败命令：对 Aura `quick_lookup_draft.csv` 过滤 `notes` 含 `coverage_supplement` 且 `section_path` 为空，必须得到 5 条；修复后必须得到 0 条。
+
+### 当前阶段目标
+
+- 增加确定性的 coverage context 解析命令，按物理页和层级 TOC 补齐补充候选的 `section_path`，并保留可审计的旧/新候选身份映射。
+- 在 `pdf-prepare-ingest` 增加补充候选上下文门禁，缺少章节或页段时不得进入 `ready`。
+- 修复 Aura 5 条记录，重新计算受影响的 `record_id`、`candidate_id`、`candidate_hash`，迁移对应审核决定并重新导出入库批次。
+
+### 样本/fixture 矩阵
+
+| 样本/场景 | 可执行命令 | 预期结果 | 失败判定 | 输出位置 |
+|---|---|---|---|---|
+| TOC 层级解析 | `python3 -m pytest -q tests/test_coverage_context.py` | 66/67/76/77 得到预期章节；未知页返回阻断结果 | 章节为空、兄弟章节串接错误或按 source block ID 猜测 | pytest 输出 |
+| 补充候选上下文门禁 | `python3 -m pytest -q tests/test_pdf_prepare_ingest.py -k coverage_context` | 缺上下文的 supplement 不能 ready；完整字段可正常 ready | 空 `section_path` 进入 ready 或普通候选被误阻断 | pytest 输出 |
+| Aura 失败回归 | `python3 - <<'PY'` 读取 Aura 草案并断言 5 条缺失 | 修复前红、修复后 0 条 | 仍有缺失或修改非目标候选 | 命令输出 |
+| Aura 修复后批次 | `scripts/pdf-prepare-ingest <package>`、`scripts/pdf-enrich-parent-context <package>`、`scripts/pdf-export-ingest <package>` | 5 条新身份均有章节、审核决定和批次记录，ready 数量保持 452 | 旧决定误应用、candidate hash 不匹配、批次漏行或重复 | package/data |
+
+### 验证方式、失败与回滚边界
+
+- 先在合成 fixture 上验证 resolver、身份迁移和 ready 门禁，再处理正式 Aura 包。
+- 只修改输出包内派生产物和项目 CLI/测试/治理文档；PDF、`segments/`、`content_list*.json`、canonical Markdown 保持只读。
+- 章节修复会改变受影响记录的 `record_id`、`candidate_id` 和 `candidate_hash`；旧审核决定不得静默复用，必须通过稳定源位置生成旧/新映射并保留迁移报告。
+- 任一候选身份、审核 hash、批次数量或来源位置校验失败，恢复执行前的草案、审核、入库和批次文件，不交付新批次。
+
+### 当前阶段准入复核
+
+| 字段 | 内容 |
+|---|---|
+| 准入状态 | 待实施 |
+| Step 0 | 已完成：Aura 5 条空 `section_path` 记录、TOC 反查结果、合并表号与 segments 边界均已复现 |
+| 样本矩阵 | resolver、ready 门禁、Aura 5 条回归、身份迁移和批次重导 |
+| 验证方式 | 定向 pytest、Aura 只读失败断言、prepare/enrich/export、全量 pytest、治理检查、`detect_changes()` |
+| 失败/回滚边界 | 只触及派生产物；身份迁移失败整组恢复，不改 PDF、segments、canonical Markdown 或数据库 |
+| 当前阻塞项 | 无；5 条上下文和 3 条第 46–47 页业务源行均已处理并完成用户确认，455 条 approved/ready 已重新导出 |
+| 最新独立准入复核 | 2026-07-19，阶段 2 上下文传递修复，结论“通过：达到待实施标准”，复核者 Codex；证据为上述 Aura 快照、最小失败断言和回滚边界 |
+
+### 实施中追加证据（2026-07-19）
+
+- `pdf-enrich-coverage-context --apply` 已将 Aura 5 条空 `section_path` 补为物理页对应的层级 TOC 路径。
+- 5 条受影响候选的 `candidate_id`、`record_id`、`candidate_hash` 已通过稳定来源位置迁移；3 条对应的 `parent_context_overrides.csv` 身份也已同步迁移。
+- 重新运行 `pdf-audit-extraction-coverage --gate` 暴露 3 条独立缺口：`html_table:23` 第 3/4 行（p46）和 `html_table:25` 第 3 行（p47）。复核确认三行均为真实业务操作，且同文本的前页候选不能替代当前页来源身份；已按 coverage supplement 补齐当前页候选并重跑 gate，通过后重新导出 452 条既有 ready 批次。
+
 ## 当前阶段
 
 ### 阶段准入摘要
@@ -125,21 +187,21 @@ coverage_status,disposition,action,notes
 | 字段 | 内容 |
 |---|---|
 | 准入状态 | 实施中 |
-| Step 0 | 已完成：真实 Aura 漏行复现、sidecar 契约和用户确认的门禁策略已固定 |
-| 样本矩阵 | 无表头 HTML 表格首行、`header_rows=0` 修复、缺口处置保留、Aura 567 源行真实审计 |
-| 验证方式 | 覆盖审计定向测试、全量 pytest、Aura sidecar 统计、覆盖 gate 失败路径、skill 双份同步和治理检查 |
+| Step 0 | 已完成：Aura 5 条 coverage supplement 空上下文记录、TOC 反查结果、身份迁移和回滚边界已固定 |
+| 样本矩阵 | TOC 层级解析、补充候选上下文门禁、Aura 5 条修复、审核身份迁移、覆盖 gate 阻断路径 |
+| 验证方式 | 定向 pytest、全量 pytest、Aura 上下文检查、身份迁移 dry-run/apply、覆盖 gate、skill 双份同步、治理检查和 `detect_changes()` |
 | 失败/回滚边界 | gate 失败时停止在 `pdf-prepare-ingest` 之前；sidecar 可删除，不影响既有候选、审核文件和 batch |
-| 当前阻塞项 | 新增 105 条候选仍为 `needs_review/not_ready`，需要 LLM/用户审核；覆盖 gate 已通过，不能在审核完成前重新导出 batch |
-| 最新独立准入复核 | 阶段 2 实现验证通过；5 个 coverage fixture 通过，正式 Aura gate 通过，等待新增候选审核 |
+| 当前阻塞项 | 无；覆盖 gate 已通过，3 条新增候选已完成用户确认并纳入批次 |
+| 最新独立准入复核 | 通过：达到待实施标准；实施后 3 条业务缺口已补候选、完成用户确认并通过 gate |
 
 ### 最新独立准入复核
 
 | 字段 | 内容 |
 |---|---|
-| 日期 | 2026-07-18 |
-| 阶段 | 阶段 2 |
-| 结论 | 通过；表号映射、语义分流、候选补充和覆盖 gate 已完成，新增候选进入审核等待 |
-| 证据 | 5 个 coverage fixture 通过；Aura 567 个 HTML 源行全部有候选或明确处置；新增 105 条均为 `needs_review/not_ready`；旧 386 条身份和 batch 未变化 |
+| 日期 | 2026-07-19 |
+| 阶段 | 阶段 2：coverage supplement 上下文传递修复 |
+| 结论 | 通过：达到待实施标准；实施后 3 条业务缺口已补候选、完成用户确认并通过 gate |
+| 证据 | 全量 pytest 363 passed；固定回归 133 passed；补充候选上下文检查为 0 缺失；覆盖审计 567 源行、348 covered、未解决缺口 0；prepare 488 行（455 ready、0 not_ready、33 skipped）；export 455 条 |
 | 复核者 | Codex |
 
 ## 独立复核记录
@@ -148,18 +210,22 @@ coverage_status,disposition,action,notes
 |---|---|---|---|---|
 | 2026-07-18 | Codex | 阶段 1 | 通过；sidecar、缺口队列、gate 和回归 fixture 达到阶段完成标准 | 357 pytest passed；3 个覆盖 fixture 通过；Aura 首轮审计报告已生成 |
 | 2026-07-18 | Codex | 阶段 2 | 通过；表号映射、语义分流、候选补充和覆盖 gate 已完成，新增候选进入审核等待 | Aura 567 源行、256 covered、63 个标签型 non_business、125 个 full_text_only；92 条源行补为 105 条 needs_review/not_ready；旧 386 条身份、37 条 parent_key 和既有 batch 未改变 |
+| 2026-07-19 | Codex | 阶段 2：coverage supplement 上下文传递修复 | 通过：达到待实施标准；实施后 3 条业务缺口已补候选、完成用户确认并通过 gate | Step 0、TOC 反查和回滚边界齐备；363 pytest passed、133 项固定回归通过；Aura coverage context 0 缺失，coverage gate 0 未解决缺口，455 条 ready batch 已重导 |
 
 ## 完成条件
 
 - 真实或 fixture 中的源行与候选对账结果可复现，不能静默漏掉第一行或无表头表格。
 - 覆盖报告能用页码、表格、源文本直接定位缺口，不要求用户阅读 candidate_id。
 - 新增候选默认保持 `needs_review/not_ready`，不能通过覆盖审计自动批准。
+- coverage supplement 候选必须具有非空 `section_path`、`page_start`、`page_end`，且能通过 sidecar 源表行和候选行号回溯。
+- 覆盖审计重新运行后发现的其他未处置缺口不能借上下文修复绕过；必须回到阶段 7 处理并重新通过 `--gate`。
 - `--gate` 能阻断未处置缺口，同时允许明确标记为 `non_business` 或 `image_only` 的行按策略通过。
 - 既有候选的 `candidate_id`、`record_id`、`candidate_hash`、审核状态和 batch 集合不发生非预期变化。
 - 全量 pytest、既有 fix 回归、正式包或临时副本验证、skill 双份同步和治理检查通过。
 
 ## 待确认事项
 
-1. 是否把覆盖审计 `--gate` 设为进入阶段 8 的强制门禁；建议设为强制。
+1. 是否把覆盖审计 `--gate` 设为进入阶段 8 的强制门禁；已采用强制门禁。
 2. `non_business` 和 `image_only` 是否允许在用户/LLM 明确处置后通过；建议允许，但必须留在报告中。
 3. 首版是否只覆盖 HTML 表格；建议先覆盖 HTML 表格，再扩展冒号行和图片候选，避免扩大首轮改造范围。
+4. 是否完全自动批准 coverage supplement；不采用。维持小影响面混合模式，自动生成草案但保留阶段 7 人工/LLM 确认。
