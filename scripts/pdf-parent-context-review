@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""生成并应用 ingest_ready 阶段的 parent_key 审核建议。
+
+用法:
+  scripts/pdf-parent-context-review <package> suggest
+  scripts/pdf-parent-context-review <package> apply
+
+suggest 只生成 data/parent_context_suggestions.csv，不修改 ingest_ready.csv。
+审核者可在建议文件中填写 decision=approve/reject；apply 只把 approve 行
+合并到 data/parent_context_overrides.csv，之后仍由 pdf-enrich-parent-context
+更新 ingest_ready.csv。
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import os
+import re
+import sys
+import tempfile
+from collections import Counter
+from pathlib import Path
+
+
+INGEST_REQUIRED = {"record_id", "key", "parent_key"}
+SUGGESTION_FIELDS = [
+    "candidate_id",
+    "record_id",
+    "key",
+    "current_parent_key",
+    "suggested_parent_key",
+    "decision",
+    "confidence",
+    "context_source",
+    "notes",
+]
+SUGGESTION_REQUIRED = {
+    "candidate_id",
+    "record_id",
+    "key",
+    "suggested_parent_key",
+    "decision",
+    "context_source",
+    "notes",
+}
+OVERRIDE_FIELDS = ["candidate_id", "record_id", "parent_key", "context_source", "notes"]
+OVERRIDE_REQUIRED = {"parent_key", "context_source", "notes"}
+PATH_SEPARATOR = re.compile(r"\s*(?:/|>|→)\s*")
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError(f"CSV 缺少表头: {path}")
+        fields = [field.strip() for field in reader.fieldnames]
+        rows = [
+            {str(key).strip(): (value or "") for key, value in row.items()}
+            for row in reader
+        ]
+    return fields, rows
+
+
+def write_csv_atomic(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=fieldnames,
+                extrasaction="ignore",
+                lineterminator="\n",
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def read_ingest(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    if not path.exists():
+        raise ValueError(f"找不到 ingest_ready.csv: {path}")
+    fields, rows = read_csv(path)
+    missing = sorted(INGEST_REQUIRED - set(fields))
+    if missing:
+        raise ValueError(f"ingest_ready.csv 缺少字段: {', '.join(missing)}")
+    if any(not row.get("record_id", "").strip() for row in rows):
+        raise ValueError("ingest_ready.csv 存在空 record_id")
+    return fields, rows
+
+
+def split_section_path(section_path: str) -> list[str]:
+    return [part.strip() for part in PATH_SEPARATOR.split(section_path.strip()) if part.strip()]
+
+
+def section_path_suggestion(row: dict[str, str]) -> tuple[str, str, str]:
+    """返回 parent_key、置信级别和原因；空 parent 表示保留人工审核。"""
+    path = row.get("section_path", "").strip()
+    key = row.get("key", "").strip()
+    if row.get("parent_key", "").strip():
+        return "", "skip", "已有非空 parent_key，不生成覆盖建议"
+    if row.get("ingest_status", "").strip() not in {"", "ready"}:
+        return "", "skip", "记录不是 ready，不生成 parent_key 建议"
+    parts = split_section_path(path)
+    if len(parts) < 2:
+        return "", "manual_review", "section_path 少于两级，缺少明确父级"
+    if not key:
+        return "", "manual_review", "key 为空，无法校验父级关系"
+
+    parent = parts[-1]
+    if parent == key or key in parts:
+        return "", "manual_review", "key 与 section_path 标题相同，禁止自引用"
+    return parent, "low", f"使用 section_path 末级标题作为待确认父级：{parent}"
+
+
+def suggestion_rows(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], Counter[str]]:
+    output: list[dict[str, str]] = []
+    stats: Counter[str] = Counter()
+    for row in rows:
+        if row.get("parent_key", "").strip():
+            stats["existing"] += 1
+            continue
+        parent, confidence, reason = section_path_suggestion(row)
+        source = "section_path_fallback" if parent else "manual_review"
+        stats["suggested" if parent else "manual_review"] += 1
+        output.append({
+            "candidate_id": row.get("candidate_id", "").strip(),
+            "record_id": row.get("record_id", "").strip(),
+            "key": row.get("key", "").strip(),
+            "current_parent_key": row.get("parent_key", "").strip(),
+            "suggested_parent_key": parent,
+            "decision": "",
+            "confidence": confidence,
+            "context_source": source,
+            "notes": reason,
+        })
+    return output, stats
+
+
+def write_suggestion_report(
+    path: Path,
+    package: Path,
+    input_hash: str,
+    output_hash: str,
+    stats: Counter[str],
+) -> None:
+    lines = [
+        "# parent_key 审核建议报告",
+        "",
+        f"- package: `{package}`",
+        f"- input: `data/ingest_ready.csv`",
+        f"- input hash: `{input_hash}`",
+        f"- suggestions hash: `{output_hash}`",
+        "",
+        "## 统计",
+        "",
+        f"- 原有非空 parent_key：{stats['existing']}",
+        f"- 生成待确认建议：{stats['suggested']}",
+        f"- 保留人工审核：{stats['manual_review']}",
+        "",
+        "审核完成后，在 `parent_context_suggestions.csv` 中填写 `decision`：",
+        "`approve` 表示采用或修订 `suggested_parent_key`，`reject` 表示明确不填；",
+        "未填写的记录不会进入 override，也不会阻断原有入库流程。",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_suggest(package: Path) -> dict[str, int]:
+    data = package / "data"
+    ingest_path = data / "ingest_ready.csv"
+    suggestions_path = data / "parent_context_suggestions.csv"
+    report_path = data / "parent-context-review-suggestion-report.md"
+    _, rows = read_ingest(ingest_path)
+    input_hash = file_sha256(ingest_path)
+    suggestions, stats = suggestion_rows(rows)
+    write_csv_atomic(suggestions_path, SUGGESTION_FIELDS, suggestions)
+    write_suggestion_report(
+        report_path,
+        package,
+        input_hash,
+        file_sha256(suggestions_path),
+        stats,
+    )
+    return dict(stats)
+
+
+def locator_for_row(row: dict[str, str], candidate_counts: Counter[str],
+                    record_counts: Counter[str]) -> tuple[str, str]:
+    candidate_id = row.get("candidate_id", "").strip()
+    record_id = row.get("record_id", "").strip()
+    if candidate_id and candidate_counts[candidate_id] == 1:
+        return "candidate_id", candidate_id
+    if record_id and record_counts[record_id] == 1:
+        return "record_id", record_id
+    if candidate_id:
+        raise ValueError(f"candidate_id 不唯一，无法应用 parent_key 建议: {candidate_id}")
+    raise ValueError(f"record_id 不唯一，无法应用 parent_key 建议: {record_id}")
+
+
+def read_existing_overrides(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    fields, rows = read_csv(path)
+    unknown = sorted(set(fields) - set(OVERRIDE_FIELDS))
+    missing = sorted(OVERRIDE_REQUIRED - set(fields))
+    if unknown:
+        raise ValueError(f"parent_context_overrides.csv 包含未知字段: {', '.join(unknown)}")
+    if missing:
+        raise ValueError(f"parent_context_overrides.csv 缺少字段: {', '.join(missing)}")
+    return rows
+
+
+def apply_suggestions(package: Path) -> dict[str, int]:
+    data = package / "data"
+    ingest_path = data / "ingest_ready.csv"
+    suggestions_path = data / "parent_context_suggestions.csv"
+    overrides_path = data / "parent_context_overrides.csv"
+    report_path = data / "parent-context-review-apply-report.md"
+    _, ingest_rows = read_ingest(ingest_path)
+    if not suggestions_path.exists():
+        raise ValueError(f"找不到审核建议文件: {suggestions_path}")
+    fields, suggestions = read_csv(suggestions_path)
+    unknown = sorted(set(fields) - set(SUGGESTION_FIELDS))
+    missing = sorted(SUGGESTION_REQUIRED - set(fields))
+    if unknown:
+        raise ValueError(f"parent_context_suggestions.csv 包含未知字段: {', '.join(unknown)}")
+    if missing:
+        raise ValueError(f"parent_context_suggestions.csv 缺少字段: {', '.join(missing)}")
+
+    candidate_counts = Counter(row.get("candidate_id", "").strip() for row in ingest_rows)
+    record_counts = Counter(row.get("record_id", "").strip() for row in ingest_rows)
+    by_candidate = {row.get("candidate_id", "").strip(): row for row in ingest_rows
+                    if row.get("candidate_id", "").strip()}
+    by_record = {row.get("record_id", "").strip(): row for row in ingest_rows}
+    existing = read_existing_overrides(overrides_path)
+    existing_targets: dict[tuple[str, str], dict[str, str]] = {}
+    for row in existing:
+        kind, locator = locator_for_row(row, candidate_counts, record_counts)
+        target = by_candidate.get(locator) if kind == "candidate_id" else by_record.get(locator)
+        if target is None:
+            raise ValueError(f"现有 override 未命中 ingest_ready.csv: {locator}")
+        target_key = ("candidate_id", target.get("candidate_id", "").strip()) \
+            if target.get("candidate_id", "").strip() else ("record_id", target["record_id"].strip())
+        if target_key in existing_targets:
+            raise ValueError(f"parent_context_overrides.csv 存在重复目标: {locator}")
+        existing_targets[target_key] = row
+
+    approved = 0
+    rejected = 0
+    pending = 0
+    applied = []
+    seen_suggestion_targets: set[tuple[str, str]] = set()
+    for suggestion in suggestions:
+        decision = suggestion.get("decision", "").strip().lower()
+        if decision not in {"", "approve", "reject"}:
+            raise ValueError(f"存在非法 parent_key 审核决定: {decision}")
+        kind, locator = locator_for_row(suggestion, candidate_counts, record_counts)
+        target = by_candidate.get(locator) if kind == "candidate_id" else by_record.get(locator)
+        if target is None or target.get("key", "").strip() != suggestion.get("key", "").strip():
+            raise ValueError(f"建议文件与 ingest_ready.csv 的 key 不一致: {locator}")
+        target_key = ("candidate_id", target.get("candidate_id", "").strip()) \
+            if target.get("candidate_id", "").strip() else ("record_id", target["record_id"].strip())
+        if target_key in seen_suggestion_targets:
+            raise ValueError(f"parent_context_suggestions.csv 存在重复目标: {locator}")
+        seen_suggestion_targets.add(target_key)
+
+        if decision == "":
+            pending += 1
+            continue
+        if decision == "reject":
+            rejected += 1
+            continue
+
+        parent = suggestion.get("suggested_parent_key", "").strip()
+        key = target.get("key", "").strip()
+        if not parent:
+            raise ValueError(f"approve 建议必须填写 suggested_parent_key: {locator}")
+        if parent == key:
+            raise ValueError(f"parent_key 不得与 key 相同: {locator}")
+        if target.get("parent_key", "").strip():
+            raise ValueError(f"建议试图覆盖已有 parent_key: {locator}")
+        source = suggestion.get("context_source", "").strip() or "human_review"
+        notes = suggestion.get("notes", "").strip()
+        new_override = {
+            "candidate_id": target.get("candidate_id", "").strip(),
+            "record_id": "" if target.get("candidate_id", "").strip() else target["record_id"].strip(),
+            "parent_key": parent,
+            "context_source": source,
+            "notes": notes,
+        }
+        previous = existing_targets.get(target_key)
+        if previous:
+            if previous.get("parent_key", "").strip() != parent:
+                raise ValueError(f"新建议与现有 override 冲突: {locator}")
+            continue
+        applied.append(new_override)
+        approved += 1
+
+    merged = list(existing) + applied
+    if applied:
+        write_csv_atomic(overrides_path, OVERRIDE_FIELDS, merged)
+    report_path.write_text(
+        "\n".join([
+            "# parent_key 审核建议应用报告",
+            "",
+            f"- package: `{package}`",
+            f"- suggestions: `{suggestions_path.name}`",
+            f"- 新增 approved override：{approved}",
+            f"- rejected：{rejected}",
+            f"- 待处理：{pending}",
+            f"- override 文件：{'已更新' if applied else '未变化'}",
+            "",
+            "未填写 decision 的建议不会进入 override；后续仍需运行 `pdf-enrich-parent-context` 才会更新 ingest_ready.csv。",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    return {"approved": approved, "rejected": rejected, "pending": pending}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="审核阶段 parent_key 建议与确认")
+    parser.add_argument("package", type=Path)
+    parser.add_argument("command", choices=("suggest", "apply"))
+    args = parser.parse_args()
+    package = args.package.resolve()
+    try:
+        stats = run_suggest(package) if args.command == "suggest" else apply_suggestions(package)
+    except (OSError, ValueError) as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    print(f"parent_key 审核阶段 {args.command} 完成")
+    for key, value in stats.items():
+        print(f"  {key}: {value}")
+
+
+if __name__ == "__main__":
+    main()

@@ -4,8 +4,8 @@
 
 | 字段 | 内容 |
 |---|---|
-| 状态 | 实施中 |
-| 当前阶段 | 阶段 2：coverage supplement 上下文传递修复 |
+| 状态 | 已完成 |
+| 当前阶段 | 阶段 4：更新 pdf2md skill、完成独立验收和治理收尾 |
 | 计划类型 | 跨阶段抽取完整性、审核门禁和兼容性增强 |
 | 最后更新 | 2026-07-19 |
 
@@ -43,7 +43,7 @@
 - 不修改现有候选 CSV Schema、审核决定契约、阶段 6 主抽取逻辑或数据库接口；后续若自动生成补充草案，也必须是可选的派生产物，并默认不能进入 `ready`。
 - 本次 Aura 的 3 条 p46/p47 缺口作为审核阶段补充候选处理，不将一次性数据修复扩大为全流程重构。
 
-## Step 0 基线与证据
+## Step 0 证据
 
 基线类型：真实 Aura 产物、当前抽取代码的最小复现和阶段边界审计。
 
@@ -52,6 +52,15 @@
 - 代码证据：`scripts/pdf-extract-data` 在无包级 override 时执行 `data_rows = table[1:]`；当前 Aura `data/extraction_overrides.json` 没有 `html_table:8` 配置。
 - 可复现命令：只读调用当前 `extract_html_table_rows`，断言 `key=点火控制方式` 的结果数量为 0；同时打印 `html_table:8` 原始第一行为 `['点火控制方式', 'ECU 点火']`。
 - 安全基线：阶段 6.5 首版只写 sidecar 报告和测试 fixture，不重跑正式 Aura，不修改已有审核产物；确认报告契约后再进入真实包验证。
+
+## 验证方式
+
+- 覆盖审计：`scripts/pdf-enrich-coverage-context --check <package>` 和 `scripts/pdf-audit-extraction-coverage --gate <package>`；预期上下文缺失 0、未解决缺口 0。
+- 入库闭环：`scripts/pdf-prepare-ingest <package>`、`scripts/pdf-enrich-parent-context <package>`、`scripts/pdf-export-ingest <package>`；预期候选身份、非 parent 字段、审核状态和 batch 集合不发生非预期变化。
+- 固定回归：`PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q`、`bash tests/test-fix-validate.sh`；预期分别 366 passed、133 passed/0 failed。
+- 正式包边界：先备份 Aura `data/`，重生成只做可回放测试，测试 data 移入备份目录后从原备份恢复，逐文件比较恢复结果。
+- 治理与契约：项目级/用户级 skill `cmp`、`plan-governance-cli check . --strict-readiness`、`--stale-days 10`、`git diff --check`。
+- 失败判定：coverage gate 非零、candidate ID 集合变化、非 parent 字段变化、状态/batch 数量变化、恢复文件差异或任一固定回归失败。
 
 ## 方案与 sidecar 契约
 
@@ -95,9 +104,9 @@ coverage_status,disposition,action,notes
 |---|---|---|
 | 阶段 0 | 固定真实漏行基线、sidecar 字段、枚举和样本矩阵 | 已完成 |
 | 阶段 1 | 新增覆盖审计 CLI、报告和最小回归 fixture | 已完成 |
-| 阶段 2：coverage supplement 上下文传递修复 | 接入 LLM 缺口队列和覆盖门禁，并修复补充候选的章节上下文传递 | 实施中 |
-| 阶段 3 | Aura 真实包验证，确认不改变既有候选身份和审核复用 | 候选 |
-| 阶段 4 | 更新 pdf2md skill、完成独立验收和治理收尾 | 候选 |
+| 阶段 2：coverage supplement 上下文传递修复 | 接入 LLM 缺口队列和覆盖门禁，并修复补充候选的章节上下文传递 | 已完成 |
+| 阶段 3 | Aura 真实包验证，确认不改变既有候选身份和审核复用 | 已完成 |
+| 阶段 4：更新 pdf2md skill、完成独立验收和治理收尾 | 更新 pdf2md skill、完成独立验收和治理收尾 | 已完成 |
 
 ## 阶段 0 准入条件
 
@@ -186,23 +195,53 @@ coverage_status,disposition,action,notes
 
 | 字段 | 内容 |
 |---|---|
-| 准入状态 | 实施中 |
-| Step 0 | 已完成：Aura 5 条 coverage supplement 空上下文记录、TOC 反查结果、身份迁移和回滚边界已固定 |
-| 样本矩阵 | TOC 层级解析、补充候选上下文门禁、Aura 5 条修复、审核身份迁移、覆盖 gate 阻断路径 |
-| 验证方式 | 定向 pytest、全量 pytest、Aura 上下文检查、身份迁移 dry-run/apply、覆盖 gate、skill 双份同步、治理检查和 `detect_changes()` |
-| 失败/回滚边界 | gate 失败时停止在 `pdf-prepare-ingest` 之前；sidecar 可删除，不影响既有候选、审核文件和 batch |
-| 当前阻塞项 | 无；覆盖 gate 已通过，3 条新增候选已完成用户确认并纳入批次 |
-| 最新独立准入复核 | 通过：达到待实施标准；实施后 3 条业务缺口已补候选、完成用户确认并通过 gate |
+| 准入状态 | 已完成 |
+| Step 0 | 已完成：Aura 漏行、coverage supplement 上下文、身份迁移、coverage gate 和正式包可回放备份边界均已固定 |
+| 样本矩阵 | HTML 首行漏抽、表号映射、TOC 上下文、补充候选门禁、Aura 5 条修复、3 条业务补充、正式包备份/重生成/恢复 |
+| 验证方式 | 定向 pytest、全量 pytest、133 项固定回归、Aura coverage check/gate、prepare/enrich/export、备份逐文件恢复、skill 双份同步、治理检查 |
+| 失败/回滚边界 | gate 或身份校验失败时不交付；正式 parent_key 先备份，测试生成的 data 移入备份，恢复后逐文件比对；PDF、segments、canonical Markdown 和数据库未修改 |
+| 当前阻塞项 | 无；正式调整 parent_key 已按用户确认作为业务基线保留，重生成结果仅作为可回放测试并已清理出正式 data/ |
+| 最新独立准入复核 | 通过；阶段 4 已完成，计划关闭 |
 
 ### 最新独立准入复核
 
 | 字段 | 内容 |
 |---|---|
 | 日期 | 2026-07-19 |
-| 阶段 | 阶段 2：coverage supplement 上下文传递修复 |
-| 结论 | 通过：达到待实施标准；实施后 3 条业务缺口已补候选、完成用户确认并通过 gate |
-| 证据 | 全量 pytest 363 passed；固定回归 133 passed；补充候选上下文检查为 0 缺失；覆盖审计 567 源行、348 covered、未解决缺口 0；prepare 488 行（455 ready、0 not_ready、33 skipped）；export 455 条 |
+| 阶段 | 阶段 4：更新 pdf2md skill、完成独立验收和治理收尾 |
+| 结论 | 通过：阶段 4 已完成，计划关闭 |
+| 证据 | 全量 pytest 366 passed；固定回归 133/133；Aura coverage context 0 缺失、gate 0 未解决缺口；正式包重生成测试候选 ID/非 parent 字段/状态/batch 无差异，备份恢复逐文件 0 差异；两份 skill 和严格治理检查通过 |
 | 复核者 | Codex |
+
+## 独立验收发现（2026-07-19，未通过）
+
+- 复核范围：Aura 临时副本执行 `pdf-enrich-coverage-context --check`、`pdf-audit-extraction-coverage --gate`、`pdf-prepare-ingest`、`pdf-enrich-parent-context`、`pdf-export-ingest`。
+- 通过项：coverage context 缺失 0 条；覆盖审计 567 源行、348 covered、未解决缺口 0；临时包 488 行、455 ready、33 skipped、0 not_ready、batch 455；候选 ID 唯一。
+- 未通过项：临时重建后的 ready `parent_key` 为 104 条，正式 batch 为 394 条；当前 `parent_context_overrides.csv` 仅 104 条，正式 `ingest_ready.csv` 另有 315 条非空 parent_key 无法由当前 draft/override 重建。
+- 结论：阶段 2 的 coverage supplement 上下文修复本身有效，但本计划暂不能完成独立验收；需要单独明确这 315 条 parent_key 的事实源或回放策略，不得在本计划中猜测补齐。
+
+## 可回放验证证据（2026-07-19）
+
+- 备份目录：`/Users/jafish/Documents/work/motofind/春风_150_Aura/backup/parent-key-replay-20260719T155439`。
+- 正式基线：`ingest_ready.csv` 488 行、全量 417 条 parent_key、ready 455 条、ready parent_key 394 条、batch 455 条；`ingest_ready.csv` SHA-256 为 `4dd62cb3d19cdbe12a072018f6216c370fe177cca37d36e434bfdad39acc6654`。
+- 测试链路：`pdf-enrich-coverage-context --check`、`pdf-audit-extraction-coverage --gate`、`pdf-prepare-ingest`、`pdf-enrich-parent-context`、`pdf-export-ingest` 全部通过。
+- 测试结果：重生成后 488 行、455 ready、33 skipped、0 not_ready、batch 455；candidate_id 缺失 0、新增 0、非 `parent_key` 字段差异 0；测试 parent_key 为 104 条，符合当前 draft/override 可重建范围。
+- 恢复结果：测试 `data/` 已移入 `backup/.../generated-data` 留档；原始备份恢复后缺失文件 0、额外文件 0、内容差异 0，正式 `ingest_ready.csv` SHA-256 恢复为 `4dd62cb3d19cdbe12a072018f6216c370fe177cca37d36e434bfdad39acc6654`。
+- 结论：正式已调整 parent_key 作为当前业务基线保留；重生成结果仅用于验证，不进入正式交付。
+
+## 阶段 3/4 完成证据（2026-07-19）
+
+- 阶段 3 Aura 正式包可回放验证完成：coverage check、coverage gate、prepare、enrich、export 全部成功；重生成的 488 条候选与正式基线 candidate_id 集合一致，非 `parent_key` 字段差异 0，状态为 455 ready/33 skipped/0 not_ready，batch 455。
+- 阶段 4 skill 与治理收尾完成：项目级/用户级 `pdf2md` skill 一致；`plan-governance-cli check . --strict-readiness`、`--stale-days 10`、`git diff --check` 通过。
+- 全量验证：`PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q` 为 366 passed；`bash tests/test-fix-validate.sh` 为 133 passed、0 failed。
+- 计划范围边界：正式已调整的 parent_key 不从本次 draft/override 重新猜测；其业务基线已备份并恢复，不影响本计划对 coverage context、覆盖 gate、候选身份和批次状态的验收。
+
+### 用户确认的可回放验证边界（2026-07-19）
+
+- 用户确认正式 Aura 当前 `ingest_ready.csv` 中的 `parent_key` 已经过业务调整，应作为本轮对比基线保留。
+- 本轮重生成只用于验证 coverage context、覆盖 gate、prepare/enrich/export 的可执行性和批次状态，不把重生成结果直接视为正式交付。
+- 执行前备份正式包 `data/`；测试结束后将测试生成的 `data/` 移入备份目录留档，再从原始备份恢复正式 `data/`，并逐文件核对恢复结果。
+- 该验证不授权修改 PDF、segments、canonical Markdown、审核决定或下游仓库；测试产物不得替代已确认的正式 parent_key。
 
 ## 独立复核记录
 
@@ -211,6 +250,7 @@ coverage_status,disposition,action,notes
 | 2026-07-18 | Codex | 阶段 1 | 通过；sidecar、缺口队列、gate 和回归 fixture 达到阶段完成标准 | 357 pytest passed；3 个覆盖 fixture 通过；Aura 首轮审计报告已生成 |
 | 2026-07-18 | Codex | 阶段 2 | 通过；表号映射、语义分流、候选补充和覆盖 gate 已完成，新增候选进入审核等待 | Aura 567 源行、256 covered、63 个标签型 non_business、125 个 full_text_only；92 条源行补为 105 条 needs_review/not_ready；旧 386 条身份、37 条 parent_key 和既有 batch 未改变 |
 | 2026-07-19 | Codex | 阶段 2：coverage supplement 上下文传递修复 | 通过：达到待实施标准；实施后 3 条业务缺口已补候选、完成用户确认并通过 gate | Step 0、TOC 反查和回滚边界齐备；363 pytest passed、133 项固定回归通过；Aura coverage context 0 缺失，coverage gate 0 未解决缺口，455 条 ready batch 已重导 |
+| 2026-07-19 | Codex | 阶段 4：更新 pdf2md skill、完成独立验收和治理收尾 | 通过：阶段 4 已完成，计划关闭 | 全量 366 passed；固定回归 133/133；Aura 可回放 e2e、逐文件恢复、skill 同步和严格治理检查通过 |
 
 ## 完成条件
 
@@ -229,3 +269,11 @@ coverage_status,disposition,action,notes
 2. `non_business` 和 `image_only` 是否允许在用户/LLM 明确处置后通过；建议允许，但必须留在报告中。
 3. 首版是否只覆盖 HTML 表格；建议先覆盖 HTML 表格，再扩展冒号行和图片候选，避免扩大首轮改造范围。
 4. 是否完全自动批准 coverage supplement；不采用。维持小影响面混合模式，自动生成草案但保留阶段 7 人工/LLM 确认。
+
+## Test Coverage（测试覆盖率证据）
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q`：366 passed，5 warnings。
+- `bash tests/test-fix-validate.sh`：133 passed，0 failed。
+- Aura 正式包可回放测试：coverage context 0 缺失、coverage gate 0 未解决缺口、488 行、455 ready、33 skipped、0 not_ready、batch 455；candidate ID 缺失/新增 0，非 parent 字段差异 0。
+- 正式 data 恢复：缺失文件 0、额外文件 0、内容差异 0，`ingest_ready.csv` SHA-256 恢复为 `4dd62cb3d19cdbe12a072018f6216c370fe177cca37d36e434bfdad39acc6654`。
+- `plan-governance-cli check . --strict-readiness`、`--stale-days 10`、`git diff --check` 和 skill 双份同步校验：通过。

@@ -376,6 +376,8 @@ LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non
 
 ```bash
 <project>/scripts/pdf-prepare-ingest <package>
+<project>/scripts/pdf-parent-context-review <package> suggest
+<project>/scripts/pdf-parent-context-review <package> apply
 <project>/scripts/pdf-enrich-parent-context <package>
 <project>/scripts/pdf-export-ingest <package>
 ```
@@ -389,6 +391,10 @@ LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non
 只要仍有未处置的 `missing_candidate`、`unparseable` 或 `needs_review`，就停止入库准备；明确处置为 `non_business`、`full_text_only` 或 `image_only` 的源行可以通过，但必须保留在覆盖报告中。
 
 `pdf-prepare-ingest` 写入 `data/ingest_ready.csv`、`conflicts.csv`，读取 `review_decisions.jsonl` 和兼容的 `review_overrides.csv`。审核身份和 ready 状态在这里冻结。
+
+审核阶段可运行 `pdf-parent-context-review <package> suggest`，读取 `data/ingest_ready.csv` 并生成 `data/parent_context_suggestions.csv` 和建议报告；该命令不修改 `ingest_ready.csv`。它只对结构明确、至少两级 `section_path` 且不自引用的空 `parent_key` 提出低风险建议，单级路径、非 ready 记录、章节标题自身和表格细粒度上下文继续保留人工审核，不把所有路径末级标题机械写入字段。
+
+审核者在建议文件中填写 `decision=approve/reject`，需要时修订 `suggested_parent_key`，然后运行 `pdf-parent-context-review <package> apply`。该命令只将 `approve` 行合并到 `data/parent_context_overrides.csv`，未决定和拒绝项不写入，也不修改 `ingest_ready.csv`。建议 sidecar 是审核过程产物，不是新的业务事实源。
 
 随后必须运行 `pdf-enrich-parent-context`，再运行 `pdf-export-ingest`。该上游补全阶段读取审核后的 `data/ingest_ready.csv` 和可选的包内 `data/parent_context_overrides.csv`：
 
@@ -418,7 +424,7 @@ candidate_id,parent_key,context_source,notes
 
 ### 人工确认
 
-阶段 8 不重新审核业务 key/value。若需要人工或 LLM 补充父级，优先通过 `parent_context_overrides.csv` 提交唯一 `candidate_id` 对应的直接父级；只有唯一 `record_id` 才允许兼容定位。不确定的记录保持空值并由报告列出。任何状态异常都回到对应阶段处理。
+阶段 8 不重新审核业务 key/value。若需要人工或 LLM 补充父级，优先通过审核建议 sidecar 确认，或直接通过 `parent_context_overrides.csv` 提交唯一 `candidate_id` 对应的直接父级；只有唯一 `record_id` 才允许兼容定位。不确定的记录保持空值并由报告列出。任何状态异常都回到对应阶段处理。
 
 ---
 
