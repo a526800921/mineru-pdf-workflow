@@ -12,6 +12,8 @@ import os
 import re
 from pathlib import Path
 
+from .page_type import is_image_or_sparse_page
+
 
 # ── 可复用：与 table_eval.py 同源口径 ──
 _SEGMENT_RE = re.compile(r"^p(\d{4,})-(\d{4,})$")
@@ -122,11 +124,7 @@ def _is_image_or_sparse_page(pdf_text: str, cl_page_items: list) -> bool:
     - content_list 包含 "image" 类型元素，或
     - PDF 文本 token < 15（稀疏文本页）
     """
-    cl_types = {item.get("type") for item in (cl_page_items or []) if isinstance(item, dict)}
-    if "image" in cl_types:
-        return True
-    pdf_token_count = len(pdf_text.split())
-    return pdf_token_count < 15
+    return is_image_or_sparse_page(pdf_text, cl_page_items)
 
 
 def detect_image_or_sparse_pages(pdf_path: Path, segments_dir: Path) -> list[int]:

@@ -25,6 +25,7 @@ from lib.vlm_eval import (  # noqa: E402
     write_vlm_jsonl,
     VLM_SCHEMA,
 )
+from lib.page_type import is_toc_page  # noqa: E402
 
 
 class TestIsImageOrSparse(unittest.TestCase):
@@ -57,6 +58,17 @@ class TestIsImageOrSparse(unittest.TestCase):
         cl_page = [{"type": "table"}]
         text = " ".join(["word"] * 30)
         self.assertFalse(_is_image_or_sparse_page(text, cl_page))
+
+    def test_chinese_token_count_matches_pdf_validate(self):
+        """连续中文超过 15 字时，不应因 str.split 只得到一个 token。"""
+        cl_page = [{"type": "paragraph"}]
+        text = "前制动手柄以及车辆配置说明内容丰富"
+        self.assertFalse(_is_image_or_sparse_page(text, cl_page))
+
+    def test_toc_page_matches_pdf_validate(self):
+        """目录页口径可供 fallback 检测复用。"""
+        text = "目录\n" + "\n".join(f"章节{i} ................ {i}" for i in range(1, 4))
+        self.assertTrue(is_toc_page(text, [{"type": "paragraph"}]))
 
 
 class TestValidateVlmResponse(unittest.TestCase):

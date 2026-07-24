@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_this_file="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+_scripts_dir="${_this_file%/*}"
+
 usage() {
   cat <<'EOF'
 用法:
@@ -42,12 +45,15 @@ fi
 threshold="${PDF_VALIDATE_THRESHOLD:-0.82}"
 json_mode="${PDF_VALIDATE_JSON:-0}"
 
-python - "$pdf" "$segments_dir" "$threshold" "$json_mode" <<'PY'
+python - "$pdf" "$segments_dir" "$threshold" "$json_mode" "$_scripts_dir/lib" <<'PY'
 import json
 import re
 import sys
 from collections import Counter
 from pathlib import Path
+
+sys.path.insert(0, sys.argv[5])
+from page_type import is_image_or_sparse_page, is_toc_page, text_tokens
 
 try:
     import fitz
@@ -75,9 +81,7 @@ def normalize(text: str) -> str:
     return text
 
 def tokens(text: str) -> list[str]:
-    normalized = normalize(text)
-    # 连续英文数字作为词；中文按单字统计，适合发现 LCD 这类缺失。
-    return re.findall(r"[a-z0-9]+|[一-鿿]", normalized)
+    return text_tokens(text)
 
 
 def dedup_lines(text: str) -> str:
@@ -173,14 +177,12 @@ def detect_page_type(
     # 2. 目录页检测：PDF 文本包含大量点线+页码模式，或标题含"目录"且元素很少
     cl_types = list_content_types(cl_page[0] if cl_page and isinstance(cl_page, list) and len(cl_page) > 0 else None)
     cl_elem_count = len(cl_page[0]) if cl_page and isinstance(cl_page, list) and len(cl_page) > 0 else 0
-    toc_lines = len(_TOC_PATTERN.findall(pdf_page_text))
-    has_toc_title = "目录" in pdf_page_text or "目錄" in pdf_page_text
-
-    if toc_lines >= 3 or (has_toc_title and cl_elem_count <= 5 and pdf_token_count > 50):
+    cl_items = cl_page[0] if cl_page and isinstance(cl_page, list) and len(cl_page) > 0 else []
+    if is_toc_page(pdf_page_text, cl_items):
         return "toc"
 
     # 3. 图片/稀疏页检测：content_list 含 image 元素，或 PDF token 极少
-    if "image" in cl_types or pdf_token_count < 15:
+    if is_image_or_sparse_page(pdf_page_text, cl_items):
         return "image_or_sparse"
 
     # 4. 表格页检测：content_list 含 table 元素，或 Markdown 含表格语法

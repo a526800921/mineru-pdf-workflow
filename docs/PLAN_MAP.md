@@ -53,6 +53,7 @@
 | [legacy-plan-governance-evidence-remediation](plans/legacy-plan-governance-evidence-remediation.md) | 已完成 | 阶段 1：历史已完成计划证据补全（已完成） | 2026-07-15 | plan-governance-cli、现有 23 个已完成专项计划 | 23 个历史计划的 Step 0/验证/测试覆盖治理入口已补全；严格治理检查、真实 PDF 包检查和当前回归均通过；未改变代码、PDF 产物、业务状态或历史完成结论 | [独立验收](plans/legacy-plan-governance-evidence-remediation.md#独立验收2026-07-15) |
 | [pdf2md-skill-phase-centric-reorganization](plans/pdf2md-skill-phase-centric-reorganization.md) | 已完成 | 阶段 3：独立可读性验收（已完成） | 2026-07-17 | `pdf2md-skill-sequential-workflow`、已完成的 PDF 解析/修复/抽取/入库/下游交付计划、ADR 0003 | 将现有主题章节迁入阶段正文，避免 LLM 在阶段入口和后部契约之间来回拼接；不改变公共行为 | [完成证据](plans/pdf2md-skill-phase-centric-reorganization.md#阶段-3-完成证据-2026-07-17) |
 | [pdf2md-default-chunks](plans/pdf2md-default-chunks.md) | 已完成 | 阶段 1：默认交付契约同步（已完成） | 2026-07-18 | `pdf2md-skill-phase-centric-reorganization`、`llm-first-review-workflow-hardening`、现有 `scripts/pdf-export-chunks` | 将阶段 9 的 chunks 从可选产物调整为默认交付；不改切块算法或下游数据库边界 | [阶段 1 独立验收复核](plans/pdf2md-default-chunks.md#阶段-1-独立验收复核2026-07-18通过) |
+| [pdf2md-quality-performance-optimization](plans/pdf2md-quality-performance-optimization.md) | 设计中 | 阶段 2 | 2026-07-24 | `coverage-validation-optimization`、`pdf-evaluation-suite`、`single-page-segmentation-migration`、`table-text-omission-detection`、`pdf2md-fix-manual-workflow`、`pdf-table-audit`、`pdf-table-repair`、`pdf-extract-data-table-coverage` | 阶段 1 已独立验收完成并关闭；当前进入阶段 2 设计，冻结 VLM sidecar 的按需范围、资源门槛、Schema 失败和人工采纳验证；不自动扩大默认调度 | [阶段 2 当前阶段](plans/pdf2md-quality-performance-optimization.md#当前阶段) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -89,6 +90,7 @@
 29. `pdf2md-skill-phase-centric-reorganization`（将详细契约归位到对应阶段，消除并行阅读路径）
 30. `parent-context-upstream-enrichment`（审核后补全 `parent_key` 并由上游批次统一交付；下游自理）
 31. `pdf2md-default-chunks`（阶段 9 默认生成 chunks 并更新下游交付入口）
+32. `pdf2md-quality-performance-optimization`（先做 ROI 基线，再决定 fallback 分流、VLM sidecar 和跨页表格优化是否分别进入实施）
 
 ## 依赖关系
 
@@ -148,6 +150,7 @@
 | llm-first-review-workflow-hardening | ADR 0003、春风 150 Aura 真实运行报告 | 阶段 1 已修订 ADR 并完成独立验收；阶段 2 处理真实运行报告暴露的重复 `record_id` 兼容风险；报告提供 386 行入库前候选、365 chunks 和重复 `record_id` 基线 |
 | pdf2md-skill-sequential-workflow | 已完成的 PDF 相关专项计划、ADR 0003、PDF 下游交付契约 | 只调整 `pdf2md` skill 的顺序、阶段和门禁说明，不改变现有 CLI、Schema、输出包或安全边界 |
 | pdf2md-skill-phase-centric-reorganization | pdf2md-skill-sequential-workflow、ADR 0003、PDF 下游交付契约 | 只重排 skill 信息架构；阶段正文成为唯一主流程，详细契约不再按主题另起一套平行流程 |
+| pdf2md-quality-performance-optimization | coverage-validation-optimization、pdf-evaluation-suite、single-page-segmentation-migration、table-text-omission-detection | 复用既有页面分流、VLM sidecar、单页 fallback 和表格检测事实源；本计划只承载后续 ROI 评估、阶段准入和新增优化边界 |
 
 ## 替代、合并和废弃
 

@@ -408,6 +408,7 @@ import json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[4])
 from lib.page_quality import assess_page_quality
+from lib.page_type import is_image_or_sparse_page, is_toc_page
 import fitz
 
 segments_dir = Path(sys.argv[1])
@@ -448,6 +449,17 @@ with fitz.open(pdf_path) as doc:
         if not md_files:
             continue
         md_text = md_files[0].read_text(encoding="utf-8", errors="replace")
+        cl_items = []
+        cl_paths = sorted(child.rglob("*_content_list_v2.json"))
+        if cl_paths:
+            try:
+                cl_data = json.loads(cl_paths[0].read_text(encoding="utf-8"))
+                if isinstance(cl_data, list) and cl_data and isinstance(cl_data[0], list):
+                    cl_items = cl_data[0]
+            except (ValueError, OSError):
+                cl_items = []
+        if is_toc_page(pdf_text, cl_items) or is_image_or_sparse_page(pdf_text, cl_items):
+            continue
         result = assess_page_quality(
             md_text, pdf_text,
             pdf_words=pdf_words,
