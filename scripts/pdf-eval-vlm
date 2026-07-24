@@ -35,6 +35,8 @@ usage() {
   VLM_MODEL=qwen3-vl-8b     默认 qwen3-vl-8b
   VLM_DPI=200                渲染 DPI，默认 200
   VLM_KEEP_IMAGES=0          是否保留渲染图片到 data/page_images/
+  PDF_EVAL_VLM_PAGES=13,31   显式指定页码，覆盖 image_or_sparse 自动识别
+  PDF_EVAL_VLM_MAX_PAGES=10  单次 sidecar 最大页数，超过时非零退出
 EOF
 }
 
@@ -82,9 +84,11 @@ fi
 VLM_MODEL="${VLM_MODEL:-qwen3-vl-8b}"
 VLM_DPI="${VLM_DPI:-200}"
 VLM_KEEP_IMAGES="${VLM_KEEP_IMAGES:-0}"
+VLM_PAGES="${PDF_EVAL_VLM_PAGES:-}"
+VLM_MAX_PAGES="${PDF_EVAL_VLM_MAX_PAGES:-10}"
 
 python3 - "$_scripts_dir" "$package_dir" "$VLM_API_BASE" "$VLM_MODEL" \
-         "$VLM_DPI" "$VLM_KEEP_IMAGES" "$json_mode" <<'PY'
+         "$VLM_DPI" "$VLM_KEEP_IMAGES" "$json_mode" "$VLM_PAGES" "$VLM_MAX_PAGES" <<'PY'
 import json, sys, os
 from pathlib import Path
 
@@ -98,14 +102,22 @@ model = sys.argv[4]
 dpi = int(sys.argv[5])
 keep_images = sys.argv[6] == "1"
 json_mode = sys.argv[7] == "1"
+pages_raw = sys.argv[8]
+max_pages_raw = sys.argv[9]
 
 try:
+    from lib.vlm_eval import parse_page_selection
+
+    selected_pages = parse_page_selection(pages_raw)
+    max_pages = int(max_pages_raw)
     rows, out_path = eval_vlm_package(
         package_dir=package_dir,
         api_base=api_base,
         model=model,
         dpi=dpi,
         keep_images=keep_images,
+        selected_pages=selected_pages,
+        max_pages=max_pages,
     )
     status_counts = {}
     for r in rows:
@@ -128,6 +140,14 @@ try:
             summary = (r.get("page_summary") or "")[:50]
             status = r.get("parse_status", "?")
             print(f"  page {r['page']}: [{status}] {summary}")
+except ValueError as e:
+    if json_mode:
+        json.dump({"status": "error", "exit_code": 2, "error": str(e)},
+                  sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"错误：{e}", file=sys.stderr)
+    sys.exit(2)
 except FileNotFoundError as e:
     if json_mode:
         json.dump({"status":"error","exit_code":1,"error":str(e)},

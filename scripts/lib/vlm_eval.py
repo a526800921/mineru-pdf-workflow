@@ -65,6 +65,44 @@ def section_for_page(index: list, page: int) -> str:
 DEFAULT_API_BASE = "http://127.0.0.1:9005"
 DEFAULT_MODEL = "qwen3-vl-8b"
 DEFAULT_DPI = 200
+DEFAULT_MAX_PAGES = 10
+
+
+def parse_page_selection(raw: str | None) -> list[int] | None:
+    """解析 ``PDF_EVAL_VLM_PAGES`` 风格的逗号分隔页码。"""
+    if raw is None or not raw.strip():
+        return None
+
+    pages = []
+    for value in raw.split(","):
+        value = value.strip()
+        if not value.isdigit() or int(value) < 1:
+            raise ValueError(f"页码选择无效：{value!r}（应为正整数逗号列表）")
+        pages.append(int(value))
+    return sorted(set(pages))
+
+
+def select_vlm_pages(
+    pdf_page_count: int,
+    detected_pages: list[int],
+    selected_pages: list[int] | None = None,
+    max_pages: int = DEFAULT_MAX_PAGES,
+) -> list[int]:
+    """应用显式页选择和单批页数上限。"""
+    if max_pages < 1:
+        raise ValueError(f"VLM 单批页数上限必须为正整数：{max_pages}")
+
+    pages = sorted(set(detected_pages if selected_pages is None else selected_pages))
+    invalid = [page for page in pages if page < 1 or page > pdf_page_count]
+    if invalid:
+        raise ValueError(f"VLM 页码超出 PDF 范围 1-{pdf_page_count}：{invalid}")
+    if len(pages) > max_pages:
+        scope = "显式指定" if selected_pages is not None else "自动识别"
+        raise ValueError(
+            f"{scope}的 VLM 页数为 {len(pages)}，超过单批上限 {max_pages}；"
+            "请缩小页选择或分批运行"
+        )
+    return pages
 
 # VLM 响应 Schema 类型定义（用于 validate_vlm_response）
 VLM_SCHEMA = {
@@ -384,6 +422,8 @@ def eval_vlm_package(
     model: str = DEFAULT_MODEL,
     dpi: int = DEFAULT_DPI,
     keep_images: bool = False,
+    selected_pages: list[int] | None = None,
+    max_pages: int = DEFAULT_MAX_PAGES,
 ) -> tuple[list[dict], Path]:
     """完整编排：检测页 → 渲染 → VLM 调用 → 校验 → 写 JSONL。
 
@@ -393,6 +433,8 @@ def eval_vlm_package(
         model: VLM 模型名
         dpi: 渲染 DPI
         keep_images: 是否保留渲染的页面图片
+        selected_pages: 显式页选择；为 None 时使用 image_or_sparse 自动识别
+        max_pages: 单次 sidecar 最大页数
 
     Returns:
         (rows, output_path): 所有页面的结果列表和输出文件路径
@@ -431,8 +473,22 @@ def eval_vlm_package(
     if not segments_dir.is_dir():
         raise FileNotFoundError(f"找不到分段目录: {segments_dir}")
 
-    # 检测 image_or_sparse 页
-    pages = detect_image_or_sparse_pages(pdf_path, segments_dir)
+    import fitz
+
+    pdf_doc = fitz.open(str(pdf_path))
+    try:
+        pdf_page_count = pdf_doc.page_count
+    finally:
+        pdf_doc.close()
+
+    # 默认检测 image_or_sparse 页；显式页选择覆盖自动识别，但仍受上限约束
+    detected_pages = detect_image_or_sparse_pages(pdf_path, segments_dir)
+    pages = select_vlm_pages(
+        pdf_page_count=pdf_page_count,
+        detected_pages=detected_pages,
+        selected_pages=selected_pages,
+        max_pages=max_pages,
+    )
     if not pages:
         # 无 image_or_sparse 页是合法状态，输出空 JSONL
         out_path = package_dir / "data" / "vlm_eval.jsonl"

@@ -23,6 +23,8 @@ from lib.vlm_eval import (  # noqa: E402
     section_for_page,
     render_page,
     write_vlm_jsonl,
+    parse_page_selection,
+    select_vlm_pages,
     VLM_SCHEMA,
 )
 from lib.page_type import is_toc_page  # noqa: E402
@@ -160,6 +162,33 @@ class TestValidateVlmResponse(unittest.TestCase):
         is_valid, errors = validate_vlm_response(data)
         self.assertFalse(is_valid)
         self.assertTrue(any("不是 object" in e for e in errors))
+
+
+class TestVlmPageSelection(unittest.TestCase):
+    """VLM 显式页选择和单批上限。"""
+
+    def test_parse_empty_selection(self):
+        self.assertIsNone(parse_page_selection(None))
+        self.assertIsNone(parse_page_selection("  "))
+
+    def test_parse_deduplicates_and_sorts(self):
+        self.assertEqual(parse_page_selection("31, 13,31"), [13, 31])
+
+    def test_parse_rejects_invalid_page(self):
+        with self.assertRaises(ValueError):
+            parse_page_selection("13,zero")
+
+    def test_explicit_pages_override_detected_pages(self):
+        pages = select_vlm_pages(100, [1, 2, 3], [31, 13], max_pages=10)
+        self.assertEqual(pages, [13, 31])
+
+    def test_page_limit_rejects_over_limit(self):
+        with self.assertRaises(ValueError):
+            select_vlm_pages(100, list(range(1, 12)), max_pages=10)
+
+    def test_page_range_rejects_out_of_range(self):
+        with self.assertRaises(ValueError):
+            select_vlm_pages(10, [11], max_pages=10)
 
 
 class TestNormalizeVlmFields(unittest.TestCase):

@@ -160,7 +160,7 @@ PDF_AUTO_JSON=1 <project>/scripts/pdf-auto <pdf> <package>/segments
 - `pdf-rerun`：只定点重跑异常页；目录不匹配时先全量 `pdf-seg`，不静默删除整包。
 - `pdf-validate`：覆盖率和结构校验由 `pdf-auto` 编排；只把校验结果作为证据，不把低覆盖率直接解释为文字解析失败。
 - `pdf-eval-tables <package>`：只读生成 `data/table_accuracy.csv`。
-- `pdf-eval-vlm <package>`：可选生成 `data/vlm_eval.jsonl`，固定 `qwen3-vl-8b`；默认由 ModelPad 管理服务生命周期。
+- `pdf-eval-vlm <package>`：可选生成 `data/vlm_eval.jsonl`，固定 `qwen3-vl-8b`；默认由 ModelPad 管理服务生命周期。默认只处理共享分类器识别出的 `image_or_sparse` 页，单次最多 10 页；超过上限返回非零，不静默截断。可用 `PDF_EVAL_VLM_PAGES=13,31` 显式指定页（显式页选择覆盖自动识别，仍受上限约束），可用 `PDF_EVAL_VLM_MAX_PAGES=10` 调整上限。失败/Schema 异常只写 sidecar 失败证据，不覆盖 canonical Markdown、page node、chunks、manifest 主状态或入库状态。
 
 ### 自动 fallback 和 review 规则
 
