@@ -53,7 +53,8 @@
 | [legacy-plan-governance-evidence-remediation](plans/legacy-plan-governance-evidence-remediation.md) | 已完成 | 阶段 1：历史已完成计划证据补全（已完成） | 2026-07-15 | plan-governance-cli、现有 23 个已完成专项计划 | 23 个历史计划的 Step 0/验证/测试覆盖治理入口已补全；严格治理检查、真实 PDF 包检查和当前回归均通过；未改变代码、PDF 产物、业务状态或历史完成结论 | [独立验收](plans/legacy-plan-governance-evidence-remediation.md#独立验收2026-07-15) |
 | [pdf2md-skill-phase-centric-reorganization](plans/pdf2md-skill-phase-centric-reorganization.md) | 已完成 | 阶段 3：独立可读性验收（已完成） | 2026-07-17 | `pdf2md-skill-sequential-workflow`、已完成的 PDF 解析/修复/抽取/入库/下游交付计划、ADR 0003 | 将现有主题章节迁入阶段正文，避免 LLM 在阶段入口和后部契约之间来回拼接；不改变公共行为 | [完成证据](plans/pdf2md-skill-phase-centric-reorganization.md#阶段-3-完成证据-2026-07-17) |
 | [pdf2md-default-chunks](plans/pdf2md-default-chunks.md) | 已完成 | 阶段 1：默认交付契约同步（已完成） | 2026-07-18 | `pdf2md-skill-phase-centric-reorganization`、`llm-first-review-workflow-hardening`、现有 `scripts/pdf-export-chunks` | 将阶段 9 的 chunks 从可选产物调整为默认交付；不改切块算法或下游数据库边界 | [阶段 1 独立验收复核](plans/pdf2md-default-chunks.md#阶段-1-独立验收复核2026-07-18通过) |
-| [pdf2md-quality-performance-optimization](plans/pdf2md-quality-performance-optimization.md) | 已完成 | 阶段 2 | 2026-07-24 | `coverage-validation-optimization`、`pdf-evaluation-suite`、`single-page-segmentation-migration`、`table-text-omission-detection`、`pdf2md-fix-manual-workflow`、`pdf-table-audit`、`pdf-table-repair`、`pdf-extract-data-table-coverage` | 阶段 1 已独立验收完成并关闭；阶段 2 已完成实施验收并关闭：视觉页/指定页、单批最多 10 页、失败 review、不覆盖主输出；阶段 3 保持设计中 | [阶段 2 当前阶段](plans/pdf2md-quality-performance-optimization.md#当前阶段) |
+| [pdf2md-quality-performance-optimization](plans/pdf2md-quality-performance-optimization.md) | 设计中 | 阶段 3：跨页表格上下文 Step 0 评估 | 2026-07-25 | `coverage-validation-optimization`、`pdf-evaluation-suite`、`single-page-segmentation-migration`、`table-text-omission-detection`、`pdf2md-fix-manual-workflow`、`pdf-table-audit`、`pdf-table-repair`、`pdf-extract-data-table-coverage` | 阶段 1、2 已独立验收完成；阶段 3 Step 0 复现了 demo60 p42-p48、春风250Sr p85-p94 的连续候选误关联，四包结构化多页行数为 0，未达到 `待实施`，保持候选/只读证据评估 | [阶段 3 准入摘要](plans/pdf2md-quality-performance-optimization.md#阶段-3-准入摘要)、[阶段 3 当前独立结论](plans/pdf2md-quality-performance-optimization.md#阶段-3-当前独立结论2026-07-25) |
+| [page-image-manifest-delivery](plans/page-image-manifest-delivery.md) | 设计中 | 阶段 0：默认产物与入口契约设计 | 2026-07-24 | `pdf-output-package-layout`、`automated-pdf-pipeline`、`pdf2md-skill-sequential-workflow`、`pdf2md-default-chunks`、下游 `image-browser-v2` 页图交付要求、PyMuPDF | 将全量 PDF 物理页整页图片设为默认产物，生成独立页图 manifest，并在根 `manifest.json` 与 `downstream_delivery.md` 登记入口；不并入 pdf2md 全量业务验收链路 | [阶段 0 当前阶段](plans/page-image-manifest-delivery.md#当前阶段阶段-0-默认产物与入口契约设计) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -91,6 +92,7 @@
 30. `parent-context-upstream-enrichment`（审核后补全 `parent_key` 并由上游批次统一交付；下游自理）
 31. `pdf2md-default-chunks`（阶段 9 默认生成 chunks 并更新下游交付入口）
 32. `pdf2md-quality-performance-optimization`（先做 ROI 基线，再决定 fallback 分流、VLM sidecar 和跨页表格优化是否分别进入实施）
+33. `page-image-manifest-delivery`（默认生成全量 PDF 页图、页图 manifest 和下游入口登记；独立于 pdf2md 全量验收）
 
 ## 依赖关系
 
@@ -151,6 +153,7 @@
 | pdf2md-skill-sequential-workflow | 已完成的 PDF 相关专项计划、ADR 0003、PDF 下游交付契约 | 只调整 `pdf2md` skill 的顺序、阶段和门禁说明，不改变现有 CLI、Schema、输出包或安全边界 |
 | pdf2md-skill-phase-centric-reorganization | pdf2md-skill-sequential-workflow、ADR 0003、PDF 下游交付契约 | 只重排 skill 信息架构；阶段正文成为唯一主流程，详细契约不再按主题另起一套平行流程 |
 | pdf2md-quality-performance-optimization | coverage-validation-optimization、pdf-evaluation-suite、single-page-segmentation-migration、table-text-omission-detection | 复用既有页面分流、VLM sidecar、单页 fallback 和表格检测事实源；本计划只承载后续 ROI 评估、阶段准入和新增优化边界 |
+| page-image-manifest-delivery | pdf-output-package-layout、automated-pdf-pipeline、pdf2md-skill-sequential-workflow、pdf2md-default-chunks、下游 `image-browser-v2` 交付要求、PyMuPDF | 复用输出包根目录和现有 fitz 渲染能力；新增 `data/page_images/`、页图 manifest、独立校验器及根 manifest/`downstream_delivery.md` 入口登记，不依赖 Markdown/TOC/表格/VLM/结构化抽取验收 |
 
 ## 替代、合并和废弃
 
@@ -181,6 +184,7 @@
 | `pdf-table-repair` 阶段 4 治理收尾 | canonical 已从 138 个非空分段重建并完成 TOC/表格修复、抽取、人工审核和入库前批次生成；29 条纯数字 key 已由当前包级策略过滤，179 条已确认、3 条拒绝。业务与治理验收通过 | `pdf-table-repair`、legacy-plan-governance-evidence-remediation | 否 | 已解决 |
 | 历史已完成计划缺少 Step 0/测试覆盖证据 | 23 个历史计划的治理入口已补全；严格检查通过，补全未回写业务实现或伪造行覆盖率 | 23 个历史专项计划、治理检查 | 否 | 已解决 |
 | 阶段 4 的 canonical chunks 导出修复 | 阶段 1-3 已独立验收；阶段 4 已按 manifest.files.markdown 固定 canonical 输入，缺失/非法路径明确失败，TOC 误选有回归保护，真实 Aura 只读导出 365 chunks 覆盖 1-191 页 | `scripts/lib/chunk_utils.py`、`tests/test_chunk_utils.py`、`skills/pdf2md/SKILL.md` | 否 | 已解决 |
+| 默认整页图片尚无生产 renderer、页图 manifest 和独立校验入口 | 新专项 `page-image-manifest-delivery` 先完成阶段 0 的 schema、规格、入口字段和 150 AURA 样本准入，再进入实现 | `scripts/pdf-seg`、输出包 `data/page_images/`、根 `manifest.json`、`downstream_delivery.md`、项目级/用户级 `pdf2md` skill | 是 | 设计中 |
 
 ## 完成证据
 
