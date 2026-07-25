@@ -358,6 +358,59 @@ PY
   echo "错误：无法读取 PDF 页数：$pdf_path" >&2
   exit 1
 }
+
+# 页图是阶段 1 的默认产物；阶段 2 只复用并校验，不在此重复渲染，也不以 Markdown 替代。
+pkg_dir="$(dirname "$segments_dir")"
+page_images_dir="$pkg_dir/data/page_images"
+page_images_manifest="$page_images_dir/manifest.json"
+page_images_root_manifest="$pkg_dir/manifest.json"
+page_image_pdf_sha256="$(shasum -a 256 "$pdf_path" | awk '{print $1}')"
+if [[ -f "$page_images_manifest" ]]; then
+  page_image_validation_tmp="$(mktemp)"
+  if "$_scripts_dir/pdf-validate-page-images" \
+      --pdf "$pdf_path" \
+      --manifest "$page_images_manifest" \
+      --validation-output "$page_images_dir/validation.json" >"$page_image_validation_tmp"; then
+    log "✓ 页图复用校验通过"
+  else
+    log "⚠ 页图复用校验失败；Markdown 流程继续，页图交付保持不可用"
+  fi
+  if [[ -f "$page_images_dir/validation.json" ]]; then
+    python3 - "$_scripts_dir" "$page_images_root_manifest" "$page_images_dir" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from lib.page_image_manifest import sync_root_manifest
+report = json.loads((Path(sys.argv[3]) / "validation.json").read_text(encoding="utf-8"))
+sync_root_manifest(Path(sys.argv[2]), Path(sys.argv[3]), report)
+PY
+  else
+    page_image_error="页图 validator 未生成 validation.json"
+    python3 - "$_scripts_dir" "$page_images_root_manifest" "$page_images_dir" "$page_image_pdf_sha256" "$pages" "$page_image_error" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from lib.page_image_manifest import write_page_image_error
+write_page_image_error(
+    Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4], int(sys.argv[5]), sys.argv[6]
+)
+PY
+  fi
+  rm -f "$page_image_validation_tmp"
+else
+  page_image_error="缺少默认页图 manifest：$page_images_manifest"
+  log "⚠ $page_image_error；Markdown 流程继续，页图交付保持不可用"
+  python3 - "$_scripts_dir" "$page_images_root_manifest" "$page_images_dir" "$page_image_pdf_sha256" "$pages" "$page_image_error" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from lib.page_image_manifest import write_page_image_error
+write_page_image_error(
+    Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4], int(sys.argv[5]), sys.argv[6]
+)
+PY
+fi
+
 # 自动检测可用 API 端口
 ensure_pdf_api log
 

@@ -15,6 +15,7 @@
 | 用途 | 主要交付文件 | 消费者 | 是否必需 |
 |---|---|---|---|
 | 原文阅读、页码追溯 | `<stem>.md`、`manifest.json` | 文档检索、审核、结构化关联 | 必需 |
+| 原始 PDF 整页阅读 | `data/page_images/manifest.json`、`data/page_images/validation.json`、`data/page_images/assets/` | 下游原文页浏览 | 需要原始页展示时必需；不能用 Markdown fallback |
 | 目录展示和页码跳转 | `toc.md`、`toc_tree.json` | 前端、目录导航、章节映射 | 按需；机器跳转必须使用 `toc_tree.json` |
 | 向量化前准备 | `data/chunks.jsonl` | embedding/向量索引系统 | 需要向量化时必需 |
 | 入库前批次 | `data/ingest_batch.jsonl`、`data/ingest_manifest.json` | 外部入库系统 | 需要结构化入库时必需 |
@@ -26,7 +27,7 @@
 downstream_delivery.md
 ```
 
-这是下游的首个阅读入口和交付导航，不是新的业务事实源。它必须根据当前包内实际文件、`manifest.json`、`ingest_manifest.json` 和 `chunks.jsonl` 汇总生成；任何文件变更、重新抽取或重新审核后都必须重新生成。
+这是下游的首个阅读入口和交付导航，不是新的业务事实源。它必须根据当前包内实际文件、`manifest.json`、页图 manifest、`validation.json`、`ingest_manifest.json` 和 `chunks.jsonl` 汇总生成；任何文件变更、重新抽取或重新审核后都必须重新生成。
 
 ## 3. 推荐交付包
 
@@ -40,6 +41,10 @@ downstream_delivery.md
 
   downstream_delivery.md      # 下游首个阅读入口
   data/
+    page_images/
+      manifest.json             # 全量 PDF 物理页与图片资源清单
+      validation.json           # 机器可读页图校验结果
+      assets/pdf-0001.jpg       # 稳定 page_id 对应的整页图片
     extraction_overrides.json  # LLM/人工确认的包级抽取配置，可选
     chunks.jsonl               # 向量化前纯文本块，可选
     ingest_ready.csv           # 全量候选及审核/入库状态，不直接导入
@@ -69,20 +74,27 @@ downstream_delivery.md
 - `toc_tree.json`：机器权威目录；`target_page` 是正文物理页，`toc_page` 是目录所在物理页，`depth` 表示层级。
 - 需要页码跳转、章节映射或结构化关联时读取 `toc_tree.json`，不要从 `toc.md` 重新解析页码。
 
-### 4.3 chunks
+### 4.3 原始 PDF 整页图片
+
+- 根 `manifest.json.files.page_images`、`page_images_manifest` 和 `page_images_validation` 是页图机器入口；旧 `files.images` 仍表示 MinerU 提取图片目录，不得混用。
+- 页图 manifest 必须覆盖 PDF 物理页 `1..page_count`，`page_id` 稳定，资源路径相对于页图 manifest；下游按 manifest 加载，不遍历目录猜测文件名。
+- 根 `manifest.json.page_images.status` 必须为 `validated` 才可交付；`error`、缺页、hash/尺寸不一致或校验文件缺失时显示页图不可用，不展示 Markdown 作为原文页替代。
+- 页图详细字段、JPEG 160 DPI/quality 88 默认规格和独立校验规则以[默认整页图片与页图 Manifest 交付计划](../plans/page-image-manifest-delivery.md)为准。
+
+### 4.4 chunks
 
 - `data/chunks.jsonl` 每行一个 JSON chunk，包含 `id`、`content`、`page`、`section`、`token_count`。
 - chunks 已完成 Markdown 清洗、HTML 表格展开、图片占位替换和 token 限制；下游直接使用 `content` 做 embedding。
 - `page` 和 `section` 用于检索结果回链原文；回链正文时读取 canonical Markdown，不读取 `toc.md`。
 
-### 4.4 入库前数据
+### 4.5 入库前数据
 
 - `data/ingest_ready.csv` 是候选和审核门禁产物，包含 ready、not_ready、skipped 等状态，不是直接导入文件。
 - `data/ingest_batch.jsonl` 只包含 `review_status=approved` 且 `ingest_status=ready` 的记录，是外部入库系统的主要输入。
 - `data/ingest_manifest.json` 用于校验批次身份、输入 hash、记录数量、冲突数量和“未写入数据库”状态。
 - 下游必须校验 `ingest_manifest.json` 的 hash 和计数与实际 JSONL 一致；本项目不确认外部系统是否已经入库。
 
-### 4.5 审核和配置
+### 4.6 审核和配置
 
 - `extraction_overrides.json`：LLM/用户确认的表格列语义和包级抽取策略；下游重现抽取时应保留并读取。
 - `review_decisions.jsonl`：记录审核者、决策依据、候选身份、hash 和理由。
@@ -98,7 +110,8 @@ downstream_delivery.md
 3. `review.md` 中仍需用户确认的项目已处理，或明确随包交付并阻止对应记录进入 ready。
 4. `conflicts.csv`、`ingest_ready.csv`、`ingest_batch.jsonl` 的记录集合和状态一致。
 5. `ingest_manifest.json` 的输入 hash、ready 数量和批次状态与实际文件一致。
-6. 未执行数据库写入；外部系统完成入库后由其维护自己的回写状态。
+6. 如果本包声明原始 PDF 页图交付，则 `manifest.json.page_images.status=validated`，且页图 manifest、validation.json 和全部资源均可按入口读取。
+7. 未执行数据库写入；外部系统完成入库后由其维护自己的回写状态。
 
 ## 6. downstream_delivery.md 契约
 
@@ -114,16 +127,17 @@ downstream_delivery.md
 
 1. 本包状态：`markdown_ready`、`review_required`、`ready_for_downstream` 或 `blocked`。
 2. canonical Markdown、`manifest.json`、`toc.md`、`toc_tree.json`、`review.md` 的相对路径和用途。
-3. `data/chunks.jsonl`、`data/ingest_ready.csv`、`data/ingest_batch.jsonl`、`data/ingest_manifest.json` 的存在状态和用途。
-4. ready、skipped、not_ready、冲突和待用户确认项目数量（文件不存在时标记为 `not_generated`，不得猜测为 0）。
-5. chunks 数量、页码范围和最大 token（chunks 未生成时标记为 `not_generated`）。
-6. 入库批次 ID、输入 hash、ready 数量和“未写入数据库”说明（批次未生成时标记为 `not_generated`）。
-7. 交付前门禁结果、剩余异常、推荐下游消费顺序和生成时间。
+3. 页图目录、页图 manifest、validation.json 的存在状态、页数、版本、hash 和 `validated/error` 状态；页图失败必须标记为阻塞/不可用。
+4. `data/chunks.jsonl`、`data/ingest_ready.csv`、`data/ingest_batch.jsonl`、`data/ingest_manifest.json` 的存在状态和用途。
+5. ready、skipped、not_ready、冲突和待用户确认项目数量（文件不存在时标记为 `not_generated`，不得猜测为 0）。
+6. chunks 数量、页码范围和最大 token（chunks 未生成时标记为 `not_generated`）。
+7. 入库批次 ID、输入 hash、ready 数量和“未写入数据库”说明（批次未生成时标记为 `not_generated`）。
+8. 交付前门禁结果、剩余异常、推荐下游消费顺序和生成时间。
 
 ### 6.3 消费规则
 
 - 下游首先读取包根目录的 `downstream_delivery.md`，再按其中的实际路径读取资源。
-- 入口文件只做导航和状态汇总；具体记录以 `manifest.json`、`ingest_manifest.json`、`ingest_batch.jsonl`、`chunks.jsonl` 和审核文件为准。
+- 入口文件只做导航和状态汇总；具体记录以 `manifest.json`、页图 manifest、`validation.json`、`ingest_manifest.json`、`ingest_batch.jsonl`、`chunks.jsonl` 和审核文件为准。
 - 不把入口文件本身、`review.md`、`quick_lookup_draft.csv` 或 `verification.csv` 当作正文、embedding 或入库数据。
 - 如果状态是 `review_required` 或 `blocked`，下游不得把未达门禁的候选当作最终数据；应根据入口文件列出的剩余异常回到 `review.md` 或审核队列。
 

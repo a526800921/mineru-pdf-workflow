@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""生成 PDF 全量物理页图片和同批次页图 manifest。"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from lib.page_image_manifest import (  # noqa: E402
+    DEFAULT_DPI,
+    DEFAULT_QUALITY,
+    PageImageError,
+    render_page_images,
+)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="生成 PDF 全量整页 JPEG 和 page-images manifest")
+    parser.add_argument("--pdf", type=Path, required=True)
+    parser.add_argument("--model-slug", required=True)
+    parser.add_argument("--display-name", required=True)
+    parser.add_argument("--data-version", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--dpi", type=int, default=DEFAULT_DPI)
+    parser.add_argument("--quality", type=int, default=DEFAULT_QUALITY)
+    args = parser.parse_args()
+    try:
+        result = render_page_images(
+            args.pdf.resolve(),
+            args.output_dir,
+            args.model_slug,
+            args.display_name,
+            args.data_version,
+            args.dpi,
+            args.quality,
+        )
+    except (PageImageError, OSError, ValueError) as exc:
+        json.dump({"status": "error", "error": str(exc)}, sys.stdout, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return 1
+    json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

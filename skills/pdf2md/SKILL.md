@@ -85,6 +85,8 @@ description: Use when the user wants to convert a PDF to Markdown, parse a PDF, 
 ### 产物、门禁与失败处理
 
 - `pdf-seg` 默认写入 `<package>/segments/`，并建立 PDF hash、页数、分段配置和关键参数基线。
+- `pdf-seg` 在确认源 PDF 页数和 hash 后默认生成全量整页图片：`<package>/data/page_images/manifest.json`、`validation.json` 和 `assets/pdf-0001.jpg` 等资源。页图元数据必须由调用方通过 `PDF_PAGE_IMAGE_MODEL_SLUG`、`PDF_PAGE_IMAGE_DISPLAY_NAME`、`PDF_PAGE_IMAGE_DATA_VERSION` 显式注入；缺失时页图标记为 `error`，不从 PDF 文件名猜测。
+- 页图生成只依赖原始 PDF 和 PyMuPDF，不经过 Markdown、TOC、表格、VLM、结构化数据或 chunks 验收；页数、资源路径、尺寸、字节数、SHA-256 和源 PDF hash 由独立 validator 校验。
 - 旧格式、旧多页目录、缺页或配置不匹配时，脚本只清理 `segments/` 下的解析生成物并按当前配置重建。
 - G1 要求服务可用、输入基线可建立；未通过时停止，不进入阶段 2。
 - 人工确认：本阶段不需要业务确认；服务、版本或输入基线异常时停止。
@@ -128,9 +130,12 @@ PDF_AUTO_JSON=1 <project>/scripts/pdf-auto <pdf> <package>/segments
   segments/                 # 分页解析候选，含可选 -fallback 页
   images/                   # 预留图片产物
   data/                     # 阶段 6～8 生成的结构化产物
+    page_images/            # 默认全量 PDF 页图、manifest.json、validation.json、assets/
 ```
 
 默认规则：`pdf-auto` 合并到 `<package>/<stem>.md`；人工复核清单为 `<package>/review.md`。`manifest.files.markdown` 是 canonical Markdown 的唯一机器入口。
+
+`pdf-auto` 只复用并校验 `data/page_images/manifest.json`，不重复渲染页图；页图缺失或校验失败时只将根 `manifest.json.page_images.status` 保持为 `error`，不阻断独立 Markdown 流程，也不使用 Markdown 作为页图 fallback。
 
 ### 结果解读和门禁
 
@@ -446,6 +451,7 @@ candidate_id,parent_key,context_source,notes
 
 - 包状态：`markdown_ready`、`review_required`、`ready_for_downstream` 或 `blocked`；
 - canonical Markdown、manifest、TOC、review、chunks 和入库批次的实际路径/状态；
+- 页图目录、页图 manifest、`validation.json` 的实际路径和 `validated/error` 状态；页图失败时交付状态必须明确为阻塞/不可用；
 - ready、skipped、not_ready、冲突和升级项目数量；未生成文件写 `not_generated`，不得猜成 0；
 - chunks 数量、页码范围、最大 token；批次 ID、输入 hash、ready 数量和未写入数据库说明；
 - 交付门禁、剩余异常、生成时间和推荐消费顺序。

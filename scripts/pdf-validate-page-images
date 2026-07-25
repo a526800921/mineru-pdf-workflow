@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""独立校验 PDF 全量页图 manifest 和资源文件。"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from lib.page_image_manifest import validate_page_images  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="校验 PDF 全量整页图片 manifest")
+    parser.add_argument("--pdf", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--validation-output", type=Path)
+    args = parser.parse_args()
+    report = validate_page_images(
+        args.pdf.resolve(),
+        args.manifest.resolve(),
+        args.validation_output.resolve() if args.validation_output else None,
+    )
+    json.dump(report, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+    return 0 if report.get("status") == "passed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
