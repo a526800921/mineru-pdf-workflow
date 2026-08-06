@@ -56,6 +56,7 @@
 | [pdf2md-quality-performance-optimization](plans/pdf2md-quality-performance-optimization.md) | 设计中 | 阶段 3：跨页表格上下文 Step 0 评估 | 2026-07-25 | `coverage-validation-optimization`、`pdf-evaluation-suite`、`single-page-segmentation-migration`、`table-text-omission-detection`、`pdf2md-fix-manual-workflow`、`pdf-table-audit`、`pdf-table-repair`、`pdf-extract-data-table-coverage` | 阶段 1、2 已独立验收完成；阶段 3 Step 0 复现了 demo60 p42-p48、春风250Sr p85-p94 的连续候选误关联，四包结构化多页行数为 0，未达到 `待实施`，保持候选/只读证据评估 | [阶段 3 准入摘要](plans/pdf2md-quality-performance-optimization.md#阶段-3-准入摘要)、[阶段 3 当前独立结论](plans/pdf2md-quality-performance-optimization.md#阶段-3-当前独立结论2026-07-25) |
 | [final-output-quality-gates](plans/final-output-quality-gates.md) | 待实施 | 阶段 1 | 2026-07-25 | `pdf2md-quality-performance-optimization`、`table-text-omission-detection`、`pdf-table-repair`、`pdf-extract-data-table-coverage`、`data-ingestion-pipeline`、`pdf-output-package-layout` | 已复现最终 MD 仍保留异常的根因；用户确认明确损坏/未恢复字段不得继续生成或更新 `ingest_ready.csv`；阶段 1 Step 0、F0-F4 样本、验证和回滚边界已通过独立准入 | [阶段准入摘要](plans/final-output-quality-gates.md#阶段准入摘要)、[Step 0 证据](plans/final-output-quality-gates.md#阶段-0-step-0-证据2026-07-25) |
 | [page-image-manifest-delivery](plans/page-image-manifest-delivery.md) | 已完成 | 阶段 3（已完成） | 2026-07-25 | `pdf-output-package-layout`、`automated-pdf-pipeline`、`pdf2md-skill-sequential-workflow`、`pdf2md-default-chunks`、下游 `image-browser-v2` 页图交付要求、PyMuPDF | 阶段 1 renderer/validator、阶段 2 默认接入/复用校验和阶段 3 150 AURA 正式页图包/阶段 9 交付入口均完成；页图验收独立于 pdf2md 全量业务验收链路 | [阶段 3 完成证据](plans/page-image-manifest-delivery.md#阶段-3-完成证据) |
+| [review-artifact-rebuild-safety](plans/review-artifact-rebuild-safety.md) | 已完成 | 阶段 2 | 2026-08-05 | `data-ingestion-pipeline`、`llm-first-review-workflow-hardening`、`pdf2md-fix-manual-workflow`、`final-output-quality-gates`（仅边界协同）、ADR 0003、150 Aura 运行报告 | 已完成写入前保护、显式 force 边界、最小回归、两份 skill 同步和 Aura 临时副本验收；普通重跑返回码 1 且 draft hash 不变 | [完成验收记录](plans/review-artifact-rebuild-safety.md#最新独立准入复核)、[Step 0 复现记录](reports/review-artifact-rebuild-safety-step0-2026-08-05.md) |
 
 允许状态：`候选`、`设计中`、`待实施`、`实施中`、`已完成`、`已替代`、`已合并`、`已废弃`。
 
@@ -94,6 +95,7 @@
 31. `pdf2md-default-chunks`（阶段 9 默认生成 chunks 并更新下游交付入口）
 32. `pdf2md-quality-performance-optimization`（先做 ROI 基线，再决定 fallback 分流、VLM sidecar 和跨页表格优化是否分别进入实施）
 33. `page-image-manifest-delivery`（默认生成全量 PDF 页图、页图 manifest 和下游入口登记；独立于 pdf2md 全量验收）
+34. `review-artifact-rebuild-safety`（抽取重跑前置保护、LLM 临时副本兜底和真实包回放）
 
 ## 依赖关系
 
@@ -155,6 +157,8 @@
 | pdf2md-skill-phase-centric-reorganization | pdf2md-skill-sequential-workflow、ADR 0003、PDF 下游交付契约 | 只重排 skill 信息架构；阶段正文成为唯一主流程，详细契约不再按主题另起一套平行流程 |
 | pdf2md-quality-performance-optimization | coverage-validation-optimization、pdf-evaluation-suite、single-page-segmentation-migration、table-text-omission-detection | 复用既有页面分流、VLM sidecar、单页 fallback 和表格检测事实源；本计划只承载后续 ROI 评估、阶段准入和新增优化边界 |
 | page-image-manifest-delivery | pdf-output-package-layout、automated-pdf-pipeline、pdf2md-skill-sequential-workflow、pdf2md-default-chunks、下游 `image-browser-v2` 交付要求、PyMuPDF | 复用输出包根目录和现有 fitz 渲染能力；新增 `data/page_images/`、页图 manifest、独立校验器及根 manifest/`downstream_delivery.md` 入口登记，不依赖 Markdown/TOC/表格/VLM/结构化抽取验收 |
+| review-artifact-rebuild-safety | data-ingestion-pipeline、llm-first-review-workflow-hardening、pdf2md-fix-manual-workflow、final-output-quality-gates（仅边界协同）、ADR 0003、150 Aura 运行报告 | 在既有抽取和审核边界上增加重跑前置保护、显式 force 边界和 LLM 临时副本说明；不新增自动合并、公共 Schema、数据库边界或 MCP |
+| review-artifact-rebuild-safety | final-output-quality-gates | 仅共享少量抽取/测试文件；最终 Markdown 质量门禁仍由 `final-output-quality-gates` 负责，本计划不继承其阈值或完成条件 |
 
 ## 替代、合并和废弃
 
@@ -186,6 +190,7 @@
 | 历史已完成计划缺少 Step 0/测试覆盖证据 | 23 个历史计划的治理入口已补全；严格检查通过，补全未回写业务实现或伪造行覆盖率 | 23 个历史专项计划、治理检查 | 否 | 已解决 |
 | 阶段 4 的 canonical chunks 导出修复 | 阶段 1-3 已独立验收；阶段 4 已按 manifest.files.markdown 固定 canonical 输入，缺失/非法路径明确失败，TOC 误选有回归保护，真实 Aura 只读导出 365 chunks 覆盖 1-191 页 | `scripts/lib/chunk_utils.py`、`tests/test_chunk_utils.py`、`skills/pdf2md/SKILL.md` | 否 | 已解决 |
 | 默认整页图片尚无生产 renderer、页图 manifest 和独立校验入口 | `page-image-manifest-delivery` 阶段 1、2、3 已完成；150 AURA 正式包已登记页图和阶段 9 交付入口 | `scripts/pdf-seg`、输出包 `data/page_images/`、根 `manifest.json`、`downstream_delivery.md`、项目级/用户级 `pdf2md` skill | 否 | 已解决 |
+| 审核草案重跑可覆盖已完成成果 | 已完成 `pdf-extract-data` 写入前保护、最小回归、两份 skill 同步和 Aura 临时副本验收 | `pdf-extract-data`、最小回归测试、两份 `pdf2md` skill | 否 | 已解决 |
 
 ## 完成证据
 
@@ -208,3 +213,4 @@
 | pdf-auto-repair-before-merge | 阶段 0（Step 0 基线） | 详见 [专项计划阶段 0 完成条件](plans/pdf-auto-repair-before-merge.md#阶段-0固定-step-0-基线) |
 | pdf-auto-repair-before-merge | 阶段 1（修复—合并契约） | 详见 [专项计划阶段 1 契约](plans/pdf-auto-repair-before-merge.md#阶段-1固化修复合并顺序和状态契约) |
 | pdf-auto-repair-before-merge | 阶段 2（实现流程调整） | 详见 [专项计划阶段 2 再次验收](plans/pdf-auto-repair-before-merge.md#阶段-2-再次验收记录2026-07-11) |
+| review-artifact-rebuild-safety | 阶段 1-2 | 详见 [结构化审核产物重跑安全修复计划最新验收复核](plans/review-artifact-rebuild-safety.md#最新独立准入复核) |

@@ -289,6 +289,18 @@ allowlist 只能包含包内派生产物；禁止授权 PDF、segments、`conten
 <project>/scripts/pdf-extract-data <package>
 ```
 
+### 重跑保护
+
+`pdf-extract-data` 会在写入任何抽取产物前检查输出包是否已有 `review.md`、`manual_fixes.jsonl`、`review_decisions.jsonl`、`review_overrides.csv`、`parent_context_overrides.csv`、`ingest_ready.csv`、`ingest_batch.jsonl`、`ingest_manifest.json`、`chunks.jsonl` 或 `downstream_delivery.md`。发现任一文件时，普通重跑非零退出且不修改原包，保护已经审核、确认、人工修正或交付的成果。
+
+被阻断后，LLM 应复制输出包到临时目录，在临时副本中执行局部修正和后续阶段验证；不要为了重抽而直接覆盖正式包。只有在已备份或明确为临时副本时，才可显式运行：
+
+```bash
+<project>/scripts/pdf-extract-data --force-rebuild <package>
+```
+
+`--force-rebuild` 只解除前置保护，不自动迁移或应用旧审核决定；完成后仍必须经过现有 hash、审核、入库和下游交付门禁。少量身份更新、表格修正或运行瑕疵优先由 LLM 在临时副本中编排现有 CLI，不为一次性问题新增通用自动合并逻辑。
+
 脚本只做通用 HTML 网格展开、来源定位、候选生成和状态计算；LLM/人工负责业务列语义。具体 PDF 的列规则只能写入 `<package>/data/extraction_overrides.json`，不能硬编码到通用脚本。
 
 ### 人工确认

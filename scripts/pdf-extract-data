@@ -88,6 +88,21 @@ STATE_LABELS = {
     "菜单", "返回", "确认", "取消", "音量", "静音", "语音",
 }
 
+# 这些文件表明输出包已经进入审核、人工修复或下游交付阶段。
+# 普通重跑不得覆盖它们关联的 quick_lookup_draft.csv。
+PROTECTED_REBUILD_ARTIFACTS = (
+    "review.md",
+    "manual_fixes.jsonl",
+    "review_decisions.jsonl",
+    "review_overrides.csv",
+    "parent_context_overrides.csv",
+    "ingest_ready.csv",
+    "ingest_batch.jsonl",
+    "ingest_manifest.json",
+    "chunks.jsonl",
+    "downstream_delivery.md",
+)
+
 
 def parse_page_comments(md_text: str) -> dict:
     """返回 {line_no: (page_start, page_end)} — 段级锚点 `<!-- pages N-M -->`。
@@ -223,6 +238,59 @@ def read_manifest(pkg: Path) -> dict:
         sys.exit(f"错误：找不到 manifest.json: {manifest_path}")
     with open(manifest_path) as f:
         return json.load(f)
+
+
+def protected_rebuild_artifacts(pkg: Path) -> list[Path]:
+    """返回表明输出包已有审核/修复/交付成果的文件。"""
+    data_dir = pkg / "data"
+    protected: list[Path] = []
+    for name in PROTECTED_REBUILD_ARTIFACTS:
+        for candidate in (pkg / name, data_dir / name):
+            if candidate.exists() and candidate not in protected:
+                protected.append(candidate)
+    return protected
+
+
+def parse_cli_args() -> tuple[Path, bool]:
+    """解析包路径和显式重建旁路。"""
+    positional: list[str] = []
+    force_rebuild = False
+    for arg in sys.argv[1:]:
+        if arg in {"-h", "--help"}:
+            print("用法: scripts/pdf-extract-data [--force-rebuild] <package>")
+            sys.exit(0)
+        if arg == "--force-rebuild":
+            force_rebuild = True
+            continue
+        if arg.startswith("-"):
+            sys.exit(f"错误：未知参数: {arg}")
+        positional.append(arg)
+
+    if len(positional) != 1:
+        print("用法: scripts/pdf-extract-data [--force-rebuild] <package>", file=sys.stderr)
+        print("示例: scripts/pdf-extract-data pdf/demo20", file=sys.stderr)
+        sys.exit(1)
+    return Path(positional[0]).resolve(), force_rebuild
+
+
+def ensure_rebuild_allowed(pkg: Path, force_rebuild: bool) -> None:
+    """在任何输出写入前保护已有审核/人工修正成果。"""
+    protected = protected_rebuild_artifacts(pkg)
+    if not protected:
+        return
+    names = ", ".join(path.name for path in protected)
+    if force_rebuild:
+        print(
+            "警告：已显式使用 --force-rebuild，将允许重建；"
+            f"检测到既有产物: {names}。请确认当前包已备份或为临时副本。",
+            file=sys.stderr,
+        )
+        return
+    raise SystemExit(
+        "错误：检测到已审核/已修正/已交付产物，普通重跑已阻断，未写入任何文件: "
+        f"{names}。请复制输出包到临时目录后由 LLM 执行局部修正；"
+        "如确需全量重建，请在已备份副本中显式使用 --force-rebuild。"
+    )
 
 
 def read_markdown(pkg: Path, manifest: dict) -> str | None:
@@ -1153,14 +1221,12 @@ def write_fixtures(pkg: Path, manifest: dict, draft_rows: list, verification: li
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("用法: scripts/pdf-extract-data <package>", file=sys.stderr)
-        print("示例: scripts/pdf-extract-data pdf/demo20", file=sys.stderr)
-        sys.exit(1)
-
-    pkg = Path(sys.argv[1]).resolve()
+    pkg, force_rebuild = parse_cli_args()
     if not pkg.is_dir():
         sys.exit(f"错误：不是目录: {pkg}")
+
+    # 必须早于 manifest/Markdown 解析和所有 CSV/Markdown 写入。
+    ensure_rebuild_allowed(pkg, force_rebuild)
 
     manifest = read_manifest(pkg)
     md_text = read_markdown(pkg, manifest)
