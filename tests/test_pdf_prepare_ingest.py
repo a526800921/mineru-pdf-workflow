@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "pdf-prepare-ingest"
+SOURCE_PDF_SHA256 = "a" * 64
 LOADER = SourceFileLoader("pdf_prepare_ingest", str(SCRIPT))
 SPEC = importlib.util.spec_from_loader("pdf_prepare_ingest", LOADER)
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -43,6 +44,24 @@ def draft_row(**overrides):
 
 def one_row(**overrides):
     return MODULE.generate_ingest_rows([draft_row(**overrides)])[0]
+
+
+def v2_rows(rows):
+    return MODULE.generate_ingest_rows(
+        rows,
+        candidate_identity_version=2,
+        source_pdf_sha256=SOURCE_PDF_SHA256,
+    )
+
+
+def v2_row(**overrides):
+    defaults = {
+        "source_block_id": "html_table:7",
+        "table_id": "html_table:7",
+        "row_index": "2.1",
+    }
+    defaults.update(overrides)
+    return v2_rows([draft_row(**defaults)])[0]
 
 
 def decision(row, status, actor, basis, reason="证据与候选一致"):
@@ -295,6 +314,74 @@ def test_candidate_identity_stable():
     assert first["record_id"] == second["record_id"]
 
 
+def test_candidate_v2_context_fields_do_not_change_identity_or_review_hash():
+    first = v2_row()
+    second = v2_row(
+        model="revised-model",
+        section_path="参数 / 传动",
+        page_start="99",
+        page_end="99",
+        parent_key="发动机",
+        key_role="local_label",
+    )
+
+    assert first["candidate_id"] == second["candidate_id"]
+    assert first["candidate_hash"] == second["candidate_hash"]
+    assert first["record_id"] != second["record_id"]
+
+
+def test_candidate_v2_source_anchor_distinguishes_raw_table_row_and_pair_slot():
+    rows = v2_rows([
+        draft_row(source_block_id="html_table:7", table_id="html_table:7", row_index="2.1"),
+        draft_row(source_block_id="html_table:7", table_id="html_table:7", row_index="2.2"),
+        draft_row(source_block_id="html_table:8", table_id="html_table:8", row_index="2.1"),
+    ])
+
+    assert len({row["candidate_id"] for row in rows}) == 3
+
+
+def test_candidate_v2_collision_is_not_disambiguated_by_business_content():
+    rows = v2_rows([
+        draft_row(key="M5 螺栓", value="5±1", source_block_id="html_table:117",
+                  table_id="html_table:117", row_index="2.0"),
+        draft_row(key="M5 螺钉", value="6±1", source_block_id="html_table:117",
+                  table_id="html_table:117", row_index="2.0"),
+    ])
+
+    assert rows[0]["candidate_id"] == rows[1]["candidate_id"]
+    assert "-" not in rows[0]["candidate_id"]
+    assert rows[0]["candidate_hash"] != rows[1]["candidate_hash"]
+
+    for row in rows:
+        row["review_status"] = "approved"
+    MODULE.compute_ingest_status(rows, [])
+    assert all(row["ingest_status"] == "not_ready" for row in rows)
+    assert all("duplicate_candidate_identity" in row["notes"] for row in rows)
+
+
+def test_candidate_v2_decision_uses_identity_and_hash_not_record_id_snapshot():
+    original = v2_row()
+    recorded = decision(original, "approved", "llm", "evidence_exact")
+    revised = v2_row(section_path="参数 / 传动")
+
+    assert revised["candidate_id"] == original["candidate_id"]
+    assert revised["candidate_hash"] == original["candidate_hash"]
+    assert revised["record_id"] != original["record_id"]
+
+    MODULE.apply_review_decisions(
+        [revised], {recorded["candidate_id"]: recorded}
+    )
+    assert revised["review_status"] == "approved"
+
+
+def test_candidate_v2_requires_source_pdf_sha256():
+    with pytest.raises(ValueError, match="source PDF SHA-256"):
+        MODULE.generate_ingest_rows(
+            [draft_row(source_block_id="html_table:1", table_id="html_table:1", row_index="2")],
+            candidate_identity_version=2,
+        )
+
+
 def test_duplicate_candidate_identity_is_escalated():
     rows = MODULE.generate_ingest_rows([
         draft_row(key="同一来源 A", value="1"),
@@ -360,3 +447,47 @@ def test_prepare_main_writes_audit_fields_and_empty_escalation_queue(tmp_path: P
     assert output[0]["review_actor"] == "llm"
     assert output[0]["candidate_id"] == prepared["candidate_id"]
     assert (data / "escalation_queue.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_prepare_main_reads_v2_manifest_contract(tmp_path: Path):
+    package = tmp_path / "package"
+    data = package / "data"
+    data.mkdir(parents=True)
+    source = draft_row(
+        source_block_id="html_table:1", table_id="html_table:1", row_index="2",
+    )
+    with (data / "quick_lookup_draft.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(source))
+        writer.writeheader()
+        writer.writerow(source)
+    (package / "manifest.json").write_text(
+        json.dumps({
+            "model": "sample",
+            "hash": {"sha256": SOURCE_PDF_SHA256},
+            "data_contract": {"candidate_identity_version": 2},
+            "page_numbering": {"status": "verified"},
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    prepared = v2_row(
+        source_block_id="html_table:1", table_id="html_table:1", row_index="2",
+    )
+    (data / "review_decisions.jsonl").write_text(
+        json.dumps(decision(prepared, "approved", "llm", "evidence_exact"), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), str(package)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    with (data / "ingest_ready.csv").open(newline="", encoding="utf-8") as f:
+        output = list(csv.DictReader(f))
+    assert output[0]["candidate_id"] == prepared["candidate_id"]
+    assert output[0]["candidate_hash"] == prepared["candidate_hash"]
+    assert output[0]["ingest_status"] == "ready"

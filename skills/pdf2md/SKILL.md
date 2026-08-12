@@ -264,7 +264,7 @@ allowlist 只能包含包内派生产物；禁止授权 PDF、segments、`conten
 
 - `doc.md`/`<stem>.md`：正文事实源，保留 `<!-- pages N-M -->` 和逐页锚点；锚点使用 PDF 物理页码。
 - `toc.md`：无锚点连续展示列表，只用于人工阅读/前端渲染；展示印刷页码但不重新猜测页码。
-- `toc_tree.json`：机器权威目录；每条含 `title`、`target_page`、`toc_page`、`depth`，可选 `printed_page`。`target_page` 必须是正文物理页码，结构化抽取用它做 section 映射。
+- `toc_tree.json`：机器权威目录；每条含 `title`、`target_page`、`toc_page`、`depth`，可选 `printed_page`。`target_page` 必须是正文物理页码，结构化抽取用它做 section 映射；同一页有多个条目时不得用最后一项覆盖整页，应保留 canonical Markdown 标题行归属。
 - 目录只按条目原生文本实际出现的物理目录页归属；短标题不能命中更长词；无法唯一归属时进入 review，不静默猜测。内置大纲只用于解决重复标题，不把字母索引当伪目录。
 
 `manifest.page_numbering` 至少记录：`physical_page_basis=pdf_1_based`、`mapping_type`、`status`、必要的 offset 和 evidence。`status=verified` 才安全；`proposed`、`needs_review` 或旧包缺失该块都阻断 ready/导出。
@@ -299,7 +299,7 @@ allowlist 只能包含包内派生产物；禁止授权 PDF、segments、`conten
 <project>/scripts/pdf-extract-data --force-rebuild <package>
 ```
 
-`--force-rebuild` 只解除前置保护，不自动迁移或应用旧审核决定；完成后仍必须经过现有 hash、审核、入库和下游交付门禁。少量身份更新、表格修正或运行瑕疵优先由 LLM 在临时副本中编排现有 CLI，不为一次性问题新增通用自动合并逻辑。
+`--force-rebuild` 只解除前置保护，不自动迁移或应用旧审核决定；完成后仍必须经过现有 hash、审核、入库和下游交付门禁。未受保护的新包首次抽取写入 `manifest.data_contract.candidate_identity_version=2`；缺失该标记的历史完成包即使显式重建也保持 v1，不补写版本标记。少量身份更新、表格修正或运行瑕疵优先由 LLM 在临时副本中编排现有 CLI，不为一次性问题新增通用自动合并逻辑。
 
 脚本只做通用 HTML 网格展开、来源定位、候选生成和状态计算；LLM/人工负责业务列语义。具体 PDF 的列规则只能写入 `<package>/data/extraction_overrides.json`，不能硬编码到通用脚本。
 
@@ -317,7 +317,7 @@ allowlist 只能包含包内派生产物；禁止授权 PDF、segments、`conten
 <project>/scripts/pdf-audit-extraction-coverage <package>
 ```
 
-该审计逐行对账 canonical Markdown 中的 HTML 表格与 `quick_lookup_draft.csv`，生成 `data/extraction_coverage.csv`、`data/extraction-coverage-report.md` 和 `data/extraction_gap_queue.jsonl`。对账保留 canonical 的原始表号/行号，同时按 `pdf-extract-data` 的计数规则映射候选表号：抽取器跳过只有一行的 HTML 表时，不能把后续候选误报为缺口。每个源行必须有明确处置：`covered`、`non_business`、`full_text_only`、`image_only`、`unparseable` 或 `needs_review`；不能把“没有候选”默认为“没有业务意义”。覆盖 sidecar 不增加候选字段，不参与 `candidate_id` 计算。
+该审计逐行对账 canonical Markdown 中的 HTML 表格与 `quick_lookup_draft.csv`，生成 `data/extraction_coverage.csv`、`data/extraction-coverage-report.md` 和 `data/extraction_gap_queue.jsonl`。v2 直接使用 canonical 原始 `<table>`/`<tr>` 序号对账，包含单行/不可抽取表；缺失版本标记的 v1 包继续按既有计数规则映射候选表号，避免跳过单行表后误报后续候选缺口。每个源行必须有明确处置：`covered`、`non_business`、`full_text_only`、`image_only`、`unparseable` 或 `needs_review`；不能把“没有候选”默认为“没有业务意义”。覆盖 sidecar 不增加候选字段，不参与 `candidate_id` 计算。
 
 coverage 缺口补充候选后必须运行上下文校验：
 
@@ -331,7 +331,7 @@ coverage 缺口补充候选后必须运行上下文校验：
 
 冒号行先分类为 `business_candidate`、`non_business` 或 `ambiguous`；明确 URL、电话、警告和脚注过滤，`ambiguous` 保留为待审核候选。`■/▲` 等标记应按配置进入证据/备注，不得未经确认成为业务 key；`policies.numeric_key=skip` 只在包级配置中显式启用。
 
-`key_role=marker/spec_value` 不参与冲突检测；`local_label` 必须有表格或块上下文；冲突 identity 使用 model、section、页段、块、表格、行、父 key 和 key。上下文不足的候选标记 `needs_review_context`。
+`key_role=marker/spec_value` 不参与业务冲突检测；`local_label` 必须有表格或块上下文。上下文不足的候选标记 `needs_review_context`；审核候选身份遵从阶段 7 的版本化来源锚点契约。
 
 ### 产物
 
@@ -366,11 +366,11 @@ LLM 只有 `decision_basis=evidence_exact` 才能批准，只有 `rule_based_non
 
 `review_decisions.jsonl` 每条至少含 `candidate_id`、`record_id`、`review_status`、`review_actor`、`decision_basis`、`review_rule_version`、`candidate_hash`、`reason`、`reviewed_at`。`review_actor=user` 的用户确认可以直接把 `needs_review` 候选推进为 `approved/rejected`，仍必须通过唯一 `candidate_id` 和 `candidate_hash` 校验；LLM 决定不能绕过原有状态门禁。
 
-若同一来源位置的不同业务 `key/value` 产生重复 `candidate_id`，上游只在 `row_index` 明确且内容摘要可唯一消歧时追加确定性内容摘要；来源位置不完整或内容完全相同时继续升级人工，不静默放行。
+v2 由 `manifest.data_contract.candidate_identity_version=2` 标识，只用于后续新建解析包；缺失标记的历史完成包保持 v1，不迁移或改写。v2 同一来源锚点出现多个候选时，禁止追加 key/value 内容摘要消歧：标记 `source_anchor_collision`，保持 `needs_review/not_ready` 并升级人工；不得静默放行。v1 继续使用其既有审核兼容逻辑。
 
 `escalation_queue.jsonl` 至少含候选身份、页段、证据、当前候选、歧义类型、选项和推荐动作。用户确认后由 LLM 写入正式决定；用户不需要运行脚本或手工维护 hash。
 
-候选身份应能区分来源位置和拆分子候选；默认可由 `source_pdf_hash + source_block_id + table_id + row_index + pair_index + page_start + page_end` 生成稳定 hash。候选 hash 变化、candidate_id 不唯一或 record_id 不匹配时拒绝应用决定。旧 `review_overrides.csv` 只兼容唯一 `record_id`，不补写虚假的审核审计字段；重复 record_id 必须升级到 candidate_id。
+v2 来源锚点为 `source_pdf_sha256 + source_kind + raw_block_ordinal + raw_row_ordinal + pair_slot`，`candidate_id = sha256("candidate-v2|" + source_anchor)`，`candidate_hash = sha256("candidate-review-v2|" + candidate_id + key + value + unit + evidence_text)`。section、父级、角色、页码、模型和业务 key/value 不参与 v2 `candidate_id`；`record_id` 算法和下游角色不变，仅作审核展示快照。v2 决定以匹配的 `candidate_id + candidate_hash` 应用，单独的 `record_id` 快照变化不拒绝；hash 过期、candidate_id 不唯一或 `source_anchor_collision` 仍拒绝。v1 继续沿用既有 `record_id` 校验。旧 `review_overrides.csv` 只兼容唯一 `record_id`，不补写虚假的审核审计字段；重复 record_id 必须升级到 candidate_id。
 
 ### 产物
 

@@ -21,6 +21,7 @@
 import csv
 import hashlib
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -86,6 +87,8 @@ STATUS_MAP = {
     "needs_review": ("needs_review", "not_ready"),
     "rejected": ("rejected", "skipped"),
 }
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
+SOURCE_BLOCK_RE = re.compile(r"^(html_table|md_table|paragraph):(\d+)$")
 
 
 def sha256(s: str) -> str:
@@ -108,13 +111,56 @@ def compute_record_id(source_pdf: str, model: str, section_path: str,
     return sha256(raw)
 
 
-def compute_candidate_id(row: dict, source_row_hash: str) -> str:
+def _v2_source_anchor(row: dict, source_pdf_sha256: str) -> str:
+    """把已规范化的来源字段转换成 v2 的唯一来源锚点。"""
+    if not SHA256_RE.fullmatch(source_pdf_sha256 or ""):
+        raise ValueError("candidate v2 需要有效的 source PDF SHA-256")
+
+    source_block_id = str(row.get("source_block_id", "")).strip()
+    table_id = str(row.get("table_id", "")).strip()
+    source_ref = table_id or source_block_id
+    match = SOURCE_BLOCK_RE.fullmatch(source_ref)
+    if not match:
+        raise ValueError("candidate v2 缺少可解析的 canonical 来源位置")
+    if table_id and source_block_id and table_id != source_block_id:
+        raise ValueError("candidate v2 的 source_block_id 与 table_id 必须一致")
+
+    source_kind, raw_block_ordinal = match.groups()
+    row_index = str(row.get("row_index", "")).strip()
+    if source_kind == "paragraph":
+        if row_index not in {"", "0"}:
+            raise ValueError("candidate v2 的 paragraph row_index 必须为 0")
+        raw_row_ordinal, pair_slot = "0", "0"
+    else:
+        raw_row_ordinal, dot, pair_slot = row_index.partition(".")
+        if not raw_row_ordinal.isdigit() or int(raw_row_ordinal) < 1:
+            raise ValueError("candidate v2 缺少有效的原始表格行号")
+        if dot:
+            if not pair_slot.isdigit() or int(pair_slot) < 0:
+                raise ValueError("candidate v2 的 pair_slot 必须是非负整数")
+        else:
+            pair_slot = "0"
+
+    return "|".join([
+        source_pdf_sha256.lower(), source_kind, raw_block_ordinal,
+        raw_row_ordinal, pair_slot,
+    ])
+
+
+def compute_candidate_id(row: dict, source_row_hash: str,
+                         candidate_identity_version: int = 1,
+                         source_pdf_sha256: str = "") -> str:
     """按来源位置生成候选身份，不把 key/value 纳入主身份。
 
     这样同一来源位置在内容修正后仍能关联到原候选；内容变化由
     candidate_hash 另行阻断过期审核决定。缺少来源位置时退回 source_row_hash，
     并由 duplicate candidate identity 检查阻止静默批量应用。
     """
+    if candidate_identity_version == 2:
+        return sha256("candidate-v2|" + _v2_source_anchor(row, source_pdf_sha256))
+    if candidate_identity_version != 1:
+        raise ValueError("candidate_identity_version 仅支持 1 或 2")
+
     location = [
         row.get("source_pdf", ""),
         row.get("model", ""),
@@ -133,8 +179,18 @@ def compute_candidate_id(row: dict, source_row_hash: str) -> str:
     return sha256("candidate-v1|" + "|".join(str(part) for part in location))
 
 
-def compute_candidate_hash(row: dict, source_row_hash: str) -> str:
+def compute_candidate_hash(row: dict, source_row_hash: str,
+                           candidate_identity_version: int = 1) -> str:
     """计算审核决定绑定的候选内容 hash。"""
+    if candidate_identity_version == 2:
+        content = "|".join([
+            row.get("candidate_id", ""), row.get("key", ""),
+            row.get("value", ""), row.get("unit", ""),
+            row.get("evidence_text", ""),
+        ])
+        return sha256("candidate-review-v2|" + content)
+    if candidate_identity_version != 1:
+        raise ValueError("candidate_identity_version 仅支持 1 或 2")
     content = "|".join([
         row.get("source_pdf", ""), row.get("model", ""),
         row.get("section_path", ""), row.get("key", ""),
@@ -149,6 +205,25 @@ def read_draft(path: Path) -> list[dict]:
         sys.exit(f"错误：找不到草案文件: {path}")
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def read_candidate_identity_config(pkg: Path) -> tuple[int, str]:
+    """读取包级版本边界；没有标记的历史包保持 v1。"""
+    manifest_path = pkg / "manifest.json"
+    if not manifest_path.exists():
+        return 1, ""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"无法读取 manifest.json: {exc}") from exc
+    contract = manifest.get("data_contract", {})
+    if not isinstance(contract, dict):
+        raise ValueError("manifest.data_contract 必须是对象")
+    version = contract.get("candidate_identity_version", 1)
+    if version not in {1, 2}:
+        raise ValueError("manifest.data_contract.candidate_identity_version 仅支持 1 或 2")
+    source_pdf_sha256 = str(manifest.get("hash", {}).get("sha256", "")).strip()
+    return version, source_pdf_sha256
 
 
 def read_overrides(path: Path) -> dict[str, dict]:
@@ -327,7 +402,8 @@ def _check_page_numbering_gate(pkg: Path, rows: list[dict]) -> list[dict]:
     return rows
 
 
-def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
+def generate_ingest_rows(draft_rows: list[dict], *, candidate_identity_version: int = 1,
+                         source_pdf_sha256: str = "") -> list[dict]:
     rows = []
     for dr in draft_rows:
         source_row_hash = compute_source_row_hash(dr)
@@ -356,8 +432,13 @@ def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
             "created_at": "",
             "notes": dr.get("notes", ""),
         }
-        row["candidate_id"] = compute_candidate_id(row, source_row_hash)
-        row["candidate_hash"] = compute_candidate_hash(row, source_row_hash)
+        row["_candidate_identity_version"] = candidate_identity_version
+        row["candidate_id"] = compute_candidate_id(
+            row, source_row_hash, candidate_identity_version, source_pdf_sha256,
+        )
+        row["candidate_hash"] = compute_candidate_hash(
+            row, source_row_hash, candidate_identity_version,
+        )
         row["review_actor"] = ""
         row["decision_basis"] = ""
         row["review_rule_version"] = ""
@@ -367,11 +448,12 @@ def generate_ingest_rows(draft_rows: list[dict]) -> list[dict]:
             row["key"], row["value"], row["unit"], row["source_row_hash"],
         )
         rows.append(row)
-    disambiguate_source_position_collisions(rows)
+    disambiguate_source_position_collisions(rows, candidate_identity_version)
     return rows
 
 
-def disambiguate_source_position_collisions(rows: list[dict]) -> None:
+def disambiguate_source_position_collisions(rows: list[dict],
+                                            candidate_identity_version: int = 1) -> None:
     """仅对有明确 row_index 且业务内容不同的候选身份碰撞做确定性消歧。
 
     candidate_id 的主身份仍保持原规则；只有同一来源位置生成多个不同
@@ -381,6 +463,20 @@ def disambiguate_source_position_collisions(rows: list[dict]) -> None:
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         grouped[row["candidate_id"]].append(row)
+
+    if candidate_identity_version == 2:
+        for group in grouped.values():
+            if len(group) < 2:
+                continue
+            for row in group:
+                row["_source_anchor_collision"] = True
+                row["review_status"] = "needs_review"
+                row["ingest_status"] = "not_ready"
+                existing = row.get("notes", "")
+                marker = "source_anchor_collision"
+                if marker not in existing.split(";"):
+                    row["notes"] = (existing + ";" if existing else "") + marker
+        return
 
     for base_id, group in grouped.items():
         if len(group) < 2 or any(not row.get("row_index", "").strip() for row in group):
@@ -400,7 +496,9 @@ def disambiguate_source_position_collisions(rows: list[dict]) -> None:
 def refresh_candidate_hashes(rows: list[dict]) -> None:
     """在 fix_data 修正后重新计算内容 hash，阻断过期审核决定。"""
     for row in rows:
-        row["candidate_hash"] = compute_candidate_hash(row, row["source_row_hash"])
+        row["candidate_hash"] = compute_candidate_hash(
+            row, row["source_row_hash"], row.get("_candidate_identity_version", 1),
+        )
 
 
 def apply_overrides(rows: list[dict], overrides: dict[str, dict]):
@@ -450,7 +548,8 @@ def apply_review_decisions(rows: list[dict], decisions: dict[str, dict]):
 
         row = matches[0]
         supplied_record_id = decision.get("record_id", "")
-        if supplied_record_id and supplied_record_id != row["record_id"]:
+        if (row.get("_candidate_identity_version", 1) != 2
+                and supplied_record_id and supplied_record_id != row["record_id"]):
             sys.exit(
                 f"错误：candidate_id 与 record_id 不匹配: {candidate_id}"
             )
@@ -770,6 +869,8 @@ def compute_ingest_status(rows: list[dict], conflicts: list[dict]):
             issues.append("unresolved_conflict")
         if r["record_id"] in review_context_ids:
             issues.append("needs_review_context")
+        if r.get("_source_anchor_collision"):
+            issues.append("duplicate_candidate_identity")
 
         if issues:
             r["ingest_status"] = "not_ready"
@@ -915,7 +1016,12 @@ def main():
     escalation_path = pkg / "data" / "escalation_queue.jsonl"
 
     draft_rows = read_draft(draft_path)
-    ingest_rows = generate_ingest_rows(draft_rows)
+    candidate_identity_version, source_pdf_sha256 = read_candidate_identity_config(pkg)
+    ingest_rows = generate_ingest_rows(
+        draft_rows,
+        candidate_identity_version=candidate_identity_version,
+        source_pdf_sha256=source_pdf_sha256,
+    )
 
     # 阶段 3：加载并应用 fix_data 修正
     fix_entries = load_fix_data_entries(pkg)

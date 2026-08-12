@@ -77,7 +77,7 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         ]
 
 
-def read_package_inputs(package: Path) -> tuple[str, str, list[dict[str, str]], dict[str, dict]]:
+def read_package_inputs(package: Path) -> tuple[str, str, list[dict[str, str]], dict[str, dict], int]:
     data_dir = package / "data"
     manifest_path = package / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
@@ -101,7 +101,19 @@ def read_package_inputs(package: Path) -> tuple[str, str, list[dict[str, str]], 
         if isinstance(tables, dict):
             overrides = {str(key): value for key, value in tables.items() if isinstance(value, dict)}
     source_pdf = manifest.get("files", {}).get("pdf", "") or package.name + ".pdf"
-    return markdown_path.read_text(encoding="utf-8", errors="replace"), source_pdf, draft_rows, overrides
+    data_contract = manifest.get("data_contract", {})
+    if not isinstance(data_contract, dict):
+        raise ValueError("manifest.data_contract 必须是对象")
+    candidate_identity_version = data_contract.get("candidate_identity_version", 1)
+    if candidate_identity_version not in {1, 2}:
+        raise ValueError("manifest.data_contract.candidate_identity_version 仅支持 1 或 2")
+    return (
+        markdown_path.read_text(encoding="utf-8", errors="replace"),
+        source_pdf,
+        draft_rows,
+        overrides,
+        candidate_identity_version,
+    )
 
 
 def page_at_line(line_no: int, page_markers: list[tuple[int, int, int]]) -> tuple[str, str]:
@@ -166,10 +178,13 @@ def parse_source_rows(markdown: str) -> list[dict[str, str]]:
     return source_rows
 
 
-def candidate_raw_index(row: dict[str, str], override: dict) -> str | None:
+def candidate_raw_index(row: dict[str, str], override: dict,
+                        candidate_identity_version: int = 1) -> str | None:
     raw_row = str(row.get("row_index", "")).strip().split(".", 1)[0]
     if not raw_row.isdigit() or int(raw_row) < 0:
         return None
+    if candidate_identity_version == 2:
+        return raw_row
     try:
         header_rows = int(override.get("header_rows", 1))
     except (TypeError, ValueError):
@@ -177,14 +192,19 @@ def candidate_raw_index(row: dict[str, str], override: dict) -> str | None:
     return str(header_rows + int(raw_row))
 
 
-def source_to_candidate_table_ids(markdown: str) -> dict[str, str]:
+def source_to_candidate_table_ids(markdown: str,
+                                  candidate_identity_version: int = 1) -> dict[str, str]:
     """映射覆盖审计的原始表号到抽取器的候选表号。
 
-    `pdf-extract-data` 对只有一行的 HTML 表直接跳过且不递增计数器，
+    v2 已将候选 `table_id` 固定为 canonical Markdown 的原始表号，直接使用
+    来源表号；v1 保留旧行为。旧 `pdf-extract-data` 对只有一行的 HTML 表直接跳过且不递增计数器，
     因此 canonical Markdown 的原始表号在遇到这类表后会与 candidate
     `table_id` 错位。覆盖审计必须复用这一计数规则，否则会把已有候选
     误报为缺口。
     """
+    if candidate_identity_version == 2:
+        return {}
+
     mapping = {}
     candidate_index = 0
     for source_index, table_match in enumerate(TABLE_RE.finditer(markdown), 1):
@@ -208,17 +228,20 @@ def classify_source_row(row: dict[str, str], header_rows: int, header_is_explici
 
 
 def build_rows(markdown: str, source_pdf: str, draft_rows: list[dict[str, str]],
-               overrides: dict[str, dict], previous: dict[str, dict[str, str]]) -> list[dict[str, str]]:
+               overrides: dict[str, dict], previous: dict[str, dict[str, str]],
+               candidate_identity_version: int = 1) -> list[dict[str, str]]:
     global source_pdf_placeholder
     source_pdf_placeholder = source_pdf
     source_rows = parse_source_rows(markdown)
-    source_table_mapping = source_to_candidate_table_ids(markdown)
+    source_table_mapping = source_to_candidate_table_ids(markdown, candidate_identity_version)
     candidates: defaultdict[tuple[str, str], list[str]] = defaultdict(list)
     for draft in draft_rows:
         table_id = draft.get("table_id", "").strip() or draft.get("source_block_id", "").strip()
         if not table_id:
             continue
-        raw_index = candidate_raw_index(draft, overrides.get(table_id, {}))
+        raw_index = candidate_raw_index(
+            draft, overrides.get(table_id, {}), candidate_identity_version,
+        )
         if raw_index is not None:
             candidates[(table_id, raw_index)].append(draft.get("row_index", "").strip())
 
@@ -329,10 +352,12 @@ def write_gap_queue(path: Path, rows: list[dict[str, str]]) -> None:
 
 
 def run(package: Path, gate: bool) -> dict[str, int]:
-    markdown, source_pdf, draft_rows, overrides = read_package_inputs(package)
+    markdown, source_pdf, draft_rows, overrides, candidate_identity_version = read_package_inputs(package)
     coverage_path = package / "data" / "extraction_coverage.csv"
     previous = {row.get("coverage_id", ""): row for row in read_csv(coverage_path) if row.get("coverage_id")}
-    rows = build_rows(markdown, source_pdf, draft_rows, overrides, previous)
+    rows = build_rows(
+        markdown, source_pdf, draft_rows, overrides, previous, candidate_identity_version,
+    )
     write_csv_atomic(coverage_path, rows)
     write_report(package / "data" / "extraction-coverage-report.md", package, rows)
     write_gap_queue(package / "data" / "extraction_gap_queue.jsonl", rows)

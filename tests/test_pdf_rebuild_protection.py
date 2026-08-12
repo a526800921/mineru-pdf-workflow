@@ -78,6 +78,8 @@ def test_first_extraction_without_review_artifacts_still_runs(tmp_path: Path) ->
         newline="", encoding="utf-8"
     ) as handle:
         assert list(csv.DictReader(handle)) == []
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["data_contract"]["candidate_identity_version"] == 2
 
 
 def test_force_rebuild_is_explicit(tmp_path: Path) -> None:
@@ -88,3 +90,5 @@ def test_force_rebuild_is_explicit(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "--force-rebuild" in result.stderr
     assert (package / "data" / "verification.csv").exists()
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+    assert "candidate_identity_version" not in manifest.get("data_contract", {})

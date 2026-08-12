@@ -134,7 +134,19 @@ def test_colon_ambiguous_is_retained_for_review():
     assert "colon_class=business_candidate" in rows[1]["notes"]
 
 
-def test_pair_groups_expand_multiple_pairs():
+def test_colon_candidate_uses_canonical_line_as_source_anchor():
+    md = "<!-- pages 12-12 -->\n额定功率：11.8 kW\n"
+
+    row = MODULE.extract_colon_rows(
+        md, [], "sample.pdf", "sample", {1: (12, 12)}, MODULE.new_block_counters(),
+        candidate_identity_version=2,
+    )[0]
+
+    assert row["source_block_id"] == "paragraph:2"
+    assert row["row_index"] == "0"
+
+
+def test_pair_groups_use_canonical_raw_row_index():
     md = """
 <!-- pages 20-20 -->
 <table>
@@ -151,11 +163,11 @@ def test_pair_groups_expand_multiple_pairs():
     }
     rows = MODULE.extract_html_table_rows(
         md, [], "sample.pdf", "sample", {1: (20, 20)}, MODULE.new_block_counters(),
-        table_overrides={"html_table:1": override},
+        table_overrides={"html_table:1": override}, candidate_identity_version=2,
     )
 
     assert [row["key"] for row in rows] == ["前制动", "后制动"]
-    assert [row["row_index"] for row in rows] == ["1.1", "1.2"]
+    assert [row["row_index"] for row in rows] == ["2.1", "2.2"]
     assert [row["value"] for row in rows] == ["说明=手柄", "说明=踏板"]
     assert all(row["status"] == "needs_review" for row in rows)
     assert all("pair_group=" in row["notes"] for row in rows)
@@ -171,7 +183,41 @@ def test_pair_groups_out_of_range_columns_are_skipped():
     }
     rows = MODULE.extract_html_table_rows(
         md, [], "sample.pdf", "sample", {}, MODULE.new_block_counters(),
+        candidate_identity_version=2,
         table_overrides={"html_table:1": override},
     )
 
     assert rows == []
+
+
+def test_html_table_id_uses_canonical_ordinal_including_single_row_tables():
+    md = """
+<table><tr><td colspan="2">章节说明</td></tr></table>
+<table>
+  <tr><th>项目</th><th>值</th></tr>
+  <tr><td>点火控制方式</td><td>ECU 点火</td></tr>
+</table>
+"""
+
+    rows = MODULE.extract_html_table_rows(
+        md, [], "sample.pdf", "sample", {}, MODULE.new_block_counters(),
+        candidate_identity_version=2,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["source_block_id"] == "html_table:2"
+    assert rows[0]["table_id"] == "html_table:2"
+    assert rows[0]["row_index"] == "2"
+
+
+def test_same_page_toc_entries_fall_back_to_canonical_heading():
+    page_map = MODULE.build_page_section_map([
+        {"depth": 1, "title": "发动机", "target_page": 128},
+        {"depth": 2, "title": "火花塞", "target_page": 129},
+        {"depth": 2, "title": "怠速", "target_page": 129},
+        {"depth": 1, "title": "传动", "target_page": 130},
+    ])
+
+    assert 129 not in page_map
+    assert page_map[130] == "传动"
+    assert MODULE.get_section_path(1, [(1, 1, "火花塞")], "129", page_map) == "火花塞"

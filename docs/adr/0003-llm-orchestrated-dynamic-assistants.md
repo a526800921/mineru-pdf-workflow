@@ -53,10 +53,19 @@
 
 - `review_decisions.jsonl` 是新的富结构审核输入，记录 `candidate_id`、`record_id`、`review_status`、`review_actor`、`decision_basis`、`review_rule_version`、`candidate_hash` 和理由；
 - LLM 只有在 `decision_basis=evidence_exact` 时才能批准，只有在 `rule_based_non_business` 时才能拒绝；用户的批准/拒绝必须使用 `user_confirmed`；
-- `pdf-prepare-ingest` 只校验并应用外部决定，不能根据文本自行生成 approved；hash 过期、候选不唯一、record_id 不匹配或存在冲突时拒绝放行；
+- v1 `pdf-prepare-ingest` 只校验并应用外部决定，不能根据文本自行生成 approved；hash 过期、候选不唯一、`record_id` 校验失败或存在冲突时拒绝放行；v2 的审核绑定以本 ADR 后续增量修订为准；
 - `escalation_queue.jsonl` 保存待用户确认的歧义、冲突、证据缺失和身份不稳定项；未处理项保持 `not_ready`；
 - 旧 `review_overrides.csv` 保持兼容，但只允许按唯一 `record_id` 应用；重复 `record_id` 必须拒绝并改用 `candidate_id`，不被补写虚假的 LLM/用户审计信息；新增审核字段追加到 `ingest_ready.csv` 末尾，保持既有字段顺序；
 - 该修订仍保持入库前边界，不执行数据库导入。
+
+## 候选身份 v2 增量修订（2026-08-12）
+
+后续新建解析包在首次结构化抽取时写入 `manifest.data_contract.candidate_identity_version=2`；缺失该标记的历史完成包继续按 v1 处理，不迁移、不重写，也不复用到 v2 审核轮次。
+
+- v2 `candidate_id` 只由 `source_pdf_sha256 + source_kind + raw_block_ordinal + raw_row_ordinal + pair_slot` 组成的来源锚点生成：`sha256("candidate-v2|" + source_anchor)`；section、父级、角色、页码、模型和业务 key/value 不参与来源身份。
+- v2 `candidate_hash` 为 `sha256("candidate-review-v2|" + candidate_id + key + value + unit + evidence_text)`。审核决定以 `candidate_id + candidate_hash` 绑定；`record_id` 保留为审计展示快照，快照变化本身不拒绝已匹配的 v2 决定。v1 继续沿用既有 `record_id` 校验行为。
+- v2 同一来源锚点出现多个候选时，不再追加 key/value 内容摘要消歧；必须标记 `source_anchor_collision`，保持 `needs_review/not_ready` 并进入既有升级队列。候选不唯一、hash 过期或碰撞仍不得放行。
+- v2 HTML 表号和行号采用 canonical 原始 `<table>`/`<tr>` 序号；同页存在多个 TOC 条目时，不以最后一项覆盖整页 section，保留 canonical 标题行归属。覆盖审计据此直接对账；v1 继续保留旧表号映射兼容规则。
 
 ## 为什么当前不需要 MCP
 

@@ -240,6 +240,33 @@ def read_manifest(pkg: Path) -> dict:
         return json.load(f)
 
 
+def ensure_candidate_identity_contract(pkg: Path, manifest: dict,
+                                       has_protected_artifacts: bool) -> int:
+    """为新包声明候选身份契约；已有或受保护包绝不静默升级。"""
+    contract = manifest.get("data_contract")
+    if contract is None:
+        if has_protected_artifacts:
+            return 1
+        contract = {}
+        manifest["data_contract"] = contract
+    if not isinstance(contract, dict):
+        sys.exit("错误：manifest.data_contract 必须是对象")
+
+    version = contract.get("candidate_identity_version")
+    if version is None:
+        if has_protected_artifacts:
+            return 1
+        version = 2
+        contract["candidate_identity_version"] = version
+        (pkg / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if version not in {1, 2}:
+        sys.exit("错误：manifest.data_contract.candidate_identity_version 仅支持 1 或 2")
+    return version
+
+
 def protected_rebuild_artifacts(pkg: Path) -> list[Path]:
     """返回表明输出包已有审核/修复/交付成果的文件。"""
     data_dir = pkg / "data"
@@ -390,6 +417,8 @@ def build_page_section_map(toc_tree: list) -> dict[int, str]:
     """构建 {page_num: section_path} 映射。
 
     每个 TOC 条目覆盖从指向页(target_page) 到下一条目 target_page-1 的页面范围。
+    同一物理页有多个 TOC 条目时无法由页级信息判定行级边界，因此不写入该页，
+    由调用方保留 canonical Markdown 标题路径。
     """
     if not toc_tree:
         return {}
@@ -410,9 +439,15 @@ def build_page_section_map(toc_tree: list) -> dict[int, str]:
         full_path = " / ".join(t for _, t in depth_stack)
         paths.append((page, full_path))
 
+    page_counts = Counter(page for page, _ in paths)
     page_map = {}
     for i, (page, path) in enumerate(paths):
-        next_page = paths[i + 1][0] if i + 1 < len(paths) else 999999
+        if page_counts[page] > 1:
+            continue
+        next_page = next(
+            (later_page for later_page, _ in paths[i + 1:] if later_page > page),
+            999999,
+        )
         for p in range(page, next_page):
             page_map[p] = path
 
@@ -490,6 +525,7 @@ def classify_colon_line(key: str, value: str) -> str:
 def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str,
                        page_map: dict, counters: dict,
                        page_section_map: dict | None = None,
+                       candidate_identity_version: int = 1,
                        numeric_key_policy: str = "keep") -> list:
     rows = []
     for line_idx, line in enumerate(md_text.split("\n")):
@@ -511,7 +547,13 @@ def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str
         line_no = line_idx + 1
         sec_path = build_section_path(line_no, sections)
         pg_start, pg_end = get_page_range(line_no, page_map)
-        counters["paragraph"] += 1
+        if candidate_identity_version == 2:
+            source_block_id = f"paragraph:{line_no}"
+            row_index = "0"
+        else:
+            counters["paragraph"] += 1
+            source_block_id = f"paragraph:{counters['paragraph']}"
+            row_index = ""
         rows.append({
             "source_pdf": source_pdf, "model": model, "section_path": sec_path,
             "key": key, "value": clean_val, "unit": unit,
@@ -520,9 +562,9 @@ def extract_colon_rows(md_text: str, sections: list, source_pdf: str, model: str
             "confidence": "medium" if colon_class == "business_candidate" and has_digit and unit else "low",
             "status": "draft" if colon_class == "business_candidate" else "needs_review",
             "notes": "colon_line;colon_class=" + colon_class + ("+unit" if unit else ""),
-            "source_block_id": f"paragraph:{counters['paragraph']}",
+            "source_block_id": source_block_id,
             "table_id": "",
-            "row_index": "",
+            "row_index": row_index,
             "parent_key": "",
             "key_role": classify_key_role(key),
         })
@@ -870,6 +912,7 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                            page_map: dict, counters: dict,
                            page_section_map: dict | None = None,
                            table_overrides: dict[str, dict] | None = None,
+                           candidate_identity_version: int = 1,
                            numeric_key_policy: str = "keep") -> list:
     rows = []
     tables = parse_html_tables(md_text)
@@ -881,7 +924,11 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
     for table_idx, table in enumerate(tables):
         if len(table) < 2:
             continue
-        table_id = f"html_table:{counters['html_table'] + 1}"
+        table_id = (
+            f"html_table:{table_idx + 1}"
+            if candidate_identity_version == 2
+            else f"html_table:{counters['html_table'] + 1}"
+        )
         override = (table_overrides or {}).get(table_id)
         if override and table_idx < len(expanded_tables):
             table = expanded_tables[table_idx]
@@ -895,10 +942,12 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
             )
         else:
             headers = table[0]
+            header_rows = 1
             data_rows = table[1:]
             key_idx = guess_key_col_idx(headers, data_rows)
             val_idx = guess_value_col_idx(headers, data_rows)
-        counters["html_table"] += 1
+        if candidate_identity_version == 1:
+            counters["html_table"] += 1
         current_category = ""
 
         # rowspan 父级映射（来自 build_html_parent_maps）
@@ -943,9 +992,10 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
 
                 clean_val, unit = extract_unit(value_str)
 
-                # 按 HTML 行号表获取行号，跳过表头 (row_idx+1 因为第 0 个 <tr> 是表头)
-                if table_idx < len(html_row_lines) and row_idx + 1 < len(html_row_lines[table_idx]):
-                    line_no = html_row_lines[table_idx][row_idx + 1]
+                raw_row_index = header_rows + row_idx + 1
+                line_lookup_index = raw_row_index - 1 if candidate_identity_version == 2 else row_idx + 1
+                if table_idx < len(html_row_lines) and line_lookup_index < len(html_row_lines[table_idx]):
+                    line_no = html_row_lines[table_idx][line_lookup_index]
                 else:
                     line_no = 0
 
@@ -977,7 +1027,7 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                     notes += f";extraction_override={table_id}"
                     if marker:
                         notes += f";marker={marker}"
-                row_index = str(row_idx + 1)
+                row_index = str(raw_row_index if candidate_identity_version == 2 else row_idx + 1)
                 if pair_groups:
                     row_index = f"{row_index}.{pair_index}"
                     notes += f";pair_group={pair_index}"
@@ -988,7 +1038,7 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
                     "evidence_text": f"{evidence_key}: {value_str}"[:200],
                     "confidence": confidence, "status": status,
                     "notes": notes,
-                    "source_block_id": f"html_table:{counters['html_table']}",
+                    "source_block_id": table_id if candidate_identity_version == 2 else f"html_table:{counters['html_table']}",
                     "table_id": table_id,
                     "row_index": row_index,
                     "parent_key": parent_key,
@@ -1001,6 +1051,7 @@ def extract_html_table_rows(md_text: str, sections: list, source_pdf: str, model
 def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: str,
                          page_map: dict, counters: dict,
                          page_section_map: dict | None = None,
+                         candidate_identity_version: int = 1,
                          numeric_key_policy: str = "keep") -> list:
     rows = []
     lines = md_text.split("\n")
@@ -1015,10 +1066,12 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
                 header_cells = [c.strip() for c in stripped.split("|")[1:-1]]
                 i += 2
                 row_idx = 0
+                raw_row_index = 1
                 while i < len(lines) and lines[i].strip().startswith("|"):
                     if MD_TABLE_SEP.match(lines[i].strip()):
                         i += 1
                         continue
+                    raw_row_index += 1
                     cells = [c.strip() for c in lines[i].strip().split("|")[1:-1]]
                     if len(cells) >= 2:
                         key = cells[0]
@@ -1045,7 +1098,7 @@ def extract_md_table_rows(md_text: str, sections: list, source_pdf: str, model: 
                             "notes": "md_table",
                             "source_block_id": f"md_table:{counters['md_table']}",
                             "table_id": table_id,
-                            "row_index": str(row_idx),
+                            "row_index": str(raw_row_index if candidate_identity_version == 2 else row_idx),
                             "parent_key": parent_key,
                             "key_role": classify_key_role(key),
                         })
@@ -1226,9 +1279,13 @@ def main():
         sys.exit(f"错误：不是目录: {pkg}")
 
     # 必须早于 manifest/Markdown 解析和所有 CSV/Markdown 写入。
+    has_protected_artifacts = bool(protected_rebuild_artifacts(pkg))
     ensure_rebuild_allowed(pkg, force_rebuild)
 
     manifest = read_manifest(pkg)
+    candidate_identity_version = ensure_candidate_identity_contract(
+        pkg, manifest, has_protected_artifacts,
+    )
     md_text = read_markdown(pkg, manifest)
     cl_data = read_content_lists(pkg)
 
@@ -1277,15 +1334,18 @@ def main():
 
     md_table_rows = extract_md_table_rows(
         md_text, sections, source_pdf, model, page_map, counters,
+        candidate_identity_version=candidate_identity_version,
         numeric_key_policy=numeric_key_policy,
     )
     html_table_rows = extract_html_table_rows(
         md_text, sections, source_pdf, model, page_map, counters,
         table_overrides=table_overrides,
+        candidate_identity_version=candidate_identity_version,
         numeric_key_policy=numeric_key_policy,
     )
     colon_rows = extract_colon_rows(
         md_text, sections, source_pdf, model, page_map, counters,
+        candidate_identity_version=candidate_identity_version,
         numeric_key_policy=numeric_key_policy,
     )
     draft_rows = md_table_rows + html_table_rows + colon_rows
