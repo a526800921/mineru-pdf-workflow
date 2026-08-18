@@ -7,6 +7,8 @@ description: Use when the user wants to convert a PDF to Markdown, parse a PDF, 
 
 本 skill 是项目级 PDF 工作流事实源，用户只需与 `pdf2md` 协作；项目执行层使用 CLI，不新增 MCP Server 或兼容层。
 
+**变量声明**：`<project>` = `/Users/jafish/Documents/work/mineru-pdf-workflow`
+
 同步目标：`/Users/jafish/.claude/skills/pdf2md/SKILL.md`。涉及本文件契约时，先更新项目级文件，再同步用户级文件；无法同步时不得宣称完成，并在计划风险中记录原因。
 
 ## 使用规则
@@ -45,7 +47,7 @@ description: Use when the user wants to convert a PDF to Markdown, parse a PDF, 
 ### 操作与 tool
 
 1. 读取用户目标，选择交付等级。
-2. 定位 `<project>`：优先使用 `PDF2MD_PROJECT_ROOT`；否则从当前目录向上查找同时包含 `scripts/pdf-auto` 和本文件的目录；再校验登记路径 `/Users/jafish/Documents/work/mineru-pdf-workflow`。`git rev-parse --show-toplevel` 只能作为候选，不能单独作为项目根目录。
+2. `<project>` 使用上方声明的固定路径。验证 `<project>/scripts/pdf-auto` 存在，否则停止并报告。
 3. 确认 PDF 是绝对路径且可读；将 `<package>` 固定为 PDF 所在目录。
 4. 记录输入 PDF hash、绝对路径和本轮交付目标。
 
